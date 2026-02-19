@@ -105,6 +105,40 @@ O relatório Markdown é otimizado para colar direto num chat com LLM. Inclui se
 - Tabelas pequenas (< 1.000 rows) em formato compacto pra economizar context window
 - Alertas automáticos: `optimizer_index_cost_adj` fora do padrão, parse calls excessivos, buffer gets/row alto
 
+## MCP Server
+
+O `sql-tuner` inclui um MCP Server que permite integração direta com IDEs como Kiro, Claude Desktop, etc. A IA chama as tools do sql-tuner automaticamente, sem o dev precisar rodar comandos no terminal.
+
+### Tools disponíveis
+
+| Tool | Descrição |
+|------|-----------|
+| `list_connections` | Lista profiles de conexão Oracle configurados |
+| `test_connection` | Testa se um profile funciona (retorna versão e schema) |
+| `parse_sql` | Parse offline — extrai tabelas, colunas, joins sem conectar |
+| `analyze_sql` | Análise completa: conecta no Oracle, coleta contexto, retorna relatório |
+
+### Configuração manual (mcp.json)
+
+```json
+{
+  "mcpServers": {
+    "sql-tuner": {
+      "command": "sql-tuner-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+Pré-requisito: `pip install -e .` para registrar o entry point `sql-tuner-mcp`.
+
+### Kiro Power
+
+Para times que usam Kiro, o Power em `powers/sql-tuner/` empacota o MCP Server + documentação + metodologia de análise. Instale via Powers UI → "Add Custom Power" → Local Directory → caminho absoluto de `powers/sql-tuner`.
+
+O Power inclui um steering file (`analysis.md`) com a metodologia completa de análise de DBA sênior Oracle, carregado sob demanda quando a IA vai analisar um relatório.
+
 ## Estrutura do Projeto
 
 ```
@@ -114,9 +148,16 @@ sql-tuner/
 ├── scripts/
 │   └── oracle_create_user.sql
 ├── reports/                    # Relatórios gerados
+├── powers/
+│   └── sql-tuner/              # Kiro Power (MCP + docs + steering)
+│       ├── POWER.md
+│       ├── mcp.json
+│       └── steering/
+│           └── analysis.md     # Metodologia de análise Oracle
 └── src/sql_tuner/
     ├── __init__.py
-    ├── cli.py                  # Entry point Typer
+    ├── cli.py                  # Entry point CLI (sql-tuner)
+    ├── mcp_server.py           # Entry point MCP (sql-tuner-mcp)
     ├── parser.py               # Parse SQL → tabelas/colunas (sqlglot + regex)
     ├── connector.py            # CRUD de conexões (~/.sql-tuner/connections.yaml)
     ├── collector.py            # Coleta metadata Oracle
@@ -129,7 +170,7 @@ sql-tuner/
 ## Roadmap
 
 - [ ] Suporte MariaDB
-- [ ] Flag `--ask` para enviar direto pra LLM
-- [ ] MCP Server pra integração com Claude Desktop/Kiro
+- [x] MCP Server pra integração com Kiro/Claude Desktop
+- [x] Kiro Power com metodologia de análise embutida
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
 - [ ] Cache de metadata (evita re-coletar pra mesmas tabelas)

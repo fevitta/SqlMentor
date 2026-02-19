@@ -13,10 +13,12 @@ dependencies = [
     "oracledb>=2.0.0",
     "pyyaml>=6.0",
     "rich>=13.0.0",
+    "mcp[cli]>=1.0.0",
 ]
 
 [project.scripts]
 sql-tuner = "sql_tuner.cli:app"
+sql-tuner-mcp = "sql_tuner.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

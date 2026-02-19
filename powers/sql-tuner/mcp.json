@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "sql-tuner": {
+      "command": "sql-tuner-mcp",
+      "args": [],
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

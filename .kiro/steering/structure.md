@@ -2,13 +2,20 @@
 
 ```
 sql-tuner/
-├── pyproject.toml              # Build config, dependências, entry point
+├── pyproject.toml              # Build config, dependências, entry points (sql-tuner + sql-tuner-mcp)
 ├── connections.example.yaml    # Exemplo de config de conexões
 ├── scripts/
 │   └── oracle_create_user.sql  # Script DBA para criar user read-only
+├── powers/
+│   └── sql-tuner/              # Kiro Power (distribuição pro time)
+│       ├── POWER.md            # Frontmatter + overview + workflow + troubleshooting
+│       ├── mcp.json            # Config MCP apontando pro sql-tuner-mcp
+│       └── steering/
+│           └── analysis.md     # Metodologia de análise Oracle (DBA sênior)
 └── src/sql_tuner/
     ├── __init__.py             # Versão do pacote
-    ├── cli.py                  # Entry point Typer (comandos: analyze, parse, config)
+    ├── cli.py                  # Entry point CLI Typer (comandos: analyze, parse, config)
+    ├── mcp_server.py           # Entry point MCP Server (tools: list_connections, test_connection, parse_sql, analyze_sql)
     ├── parser.py               # Parse SQL → tabelas/colunas via sqlglot + fallback regex para PL/SQL
     ├── connector.py            # CRUD de conexões Oracle (~/.sql-tuner/connections.yaml)
     ├── collector.py            # Orquestra coleta de metadata Oracle (dataclasses: TableContext, CollectedContext)
@@ -18,16 +25,23 @@ sql-tuner/
         └── oracle.py           # Re-export de queries/__init__ por conveniência
 ```
 
-## Fluxo principal
+## Entry points
 
-1. `cli.py` lê o arquivo SQL e resolve o schema
-2. `parser.py` extrai tabelas e colunas (sqlglot para DML, regex para PL/SQL)
-3. `connector.py` abre conexão Oracle via profile salvo
-4. `collector.py` coleta metadata de cada tabela (DDL, stats, índices, constraints, explain plan)
-5. `report.py` formata tudo em Markdown ou JSON
+- `sql-tuner` → `cli.py:app` (CLI Typer)
+- `sql-tuner-mcp` → `mcp_server.py:main` (MCP Server via stdio)
+
+## Fluxo principal (compartilhado entre CLI e MCP)
+
+1. `parser.py` extrai tabelas e colunas (sqlglot para DML, regex para PL/SQL)
+2. `connector.py` abre conexão Oracle via profile salvo
+3. `collector.py` coleta metadata de cada tabela (DDL, stats, índices, constraints, explain plan)
+4. `report.py` formata tudo em Markdown ou JSON
+
+A CLI (`cli.py`) e o MCP Server (`mcp_server.py`) são apenas interfaces diferentes sobre o mesmo core.
 
 ## Padrões
 
 - Novos bancos de dados devem seguir o padrão de `queries/` — um módulo com funções que retornam `(sql, params)`.
 - Dataclasses em `collector.py` são o contrato entre coleta e relatório.
-- CLI usa lazy imports para não carregar oracledb no startup.
+- CLI e MCP Server usam lazy imports para não carregar oracledb no startup.
+- Mudanças em flags/parâmetros do `analyze` devem ser replicadas em `cli.py`, `mcp_server.py`, e `powers/sql-tuner/POWER.md`.
