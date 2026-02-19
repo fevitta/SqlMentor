@@ -104,6 +104,9 @@ def analyze(
     execute: bool = typer.Option(
         False, "--execute", "-x", help="Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime."
     ),
+    bind: list[str] = typer.Option(
+        [], "--bind", "-b", help="Bind variables no formato nome=valor (ex: -b idDesconto=123). Repetível."
+    ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     from sql_tuner.collector import collect_context
@@ -139,6 +142,65 @@ def analyze(
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
 
+    # Parseia bind variables (nome=valor → dict)
+    bind_params: dict[str, str] = {}
+    for b in bind:
+        if "=" not in b:
+            console.print(f"[red]Bind inválido:[/red] '{b}' — use formato nome=valor")
+            raise typer.Exit(1)
+        key, val = b.split("=", 1)
+        bind_params[key.strip()] = val.strip()
+
+    # Detecta binds no SQL e reconcilia nomes (case-insensitive)
+    import re
+    # Captura :param mas ignora ::cast e strings entre aspas
+    sql_bind_names = re.findall(r'(?<!:):([A-Za-z_]\w*)', sql_text)
+    # Deduplica preservando o case original do SQL (primeiro encontrado)
+    seen_upper: set[str] = set()
+    unique_sql_binds: list[str] = []
+    for name in sql_bind_names:
+        if name.upper() not in seen_upper:
+            seen_upper.add(name.upper())
+            unique_sql_binds.append(name)
+
+    # Remapeia bind_params pro case exato do SQL (Oracle é case-sensitive nos binds)
+    if bind_params and unique_sql_binds:
+        provided_upper = {k.upper(): v for k, v in bind_params.items()}
+        remapped: dict[str, str | int | float] = {}
+        for sql_name in unique_sql_binds:
+            if sql_name.upper() in provided_upper:
+                raw_val = provided_upper[sql_name.upper()]
+                # Converte pra número se possível (evita ORA-01790 em UNION ALL)
+                try:
+                    remapped[sql_name] = int(raw_val)
+                except ValueError:
+                    try:
+                        remapped[sql_name] = float(raw_val)
+                    except ValueError:
+                        remapped[sql_name] = raw_val
+        bind_params = remapped
+
+    # Avisa se faltam binds (só relevante com --execute)
+    if execute and unique_sql_binds:
+        sql_binds_upper = {b.upper() for b in unique_sql_binds}
+        provided_upper = {k.upper() for k in bind_params}
+        missing = sql_binds_upper - provided_upper
+        if missing:
+            # Monta comando sugerido com placeholders
+            src_arg = str(sql_file) if sql_file else f'--sql "{sql_text[:60]}..."'
+            bind_flags = " ".join(
+                f"-b {name}=<valor>" if name.upper() in missing
+                else f"-b {name}={bind_params.get(name, '')}"
+                for name in unique_sql_binds
+            )
+            suggested = f"sql-tuner analyze {src_arg} --conn {conn} -x {bind_flags}"
+            console.print(
+                f"[yellow]⚠ Binds não informados:[/yellow] {', '.join(sorted(missing))}\n"
+                f"  Execução real desabilitada. Preencha os valores e re-execute:\n"
+                f"  [dim]{suggested}[/dim]"
+            )
+            execute = False
+
     # Coleta
     console.print("[cyan]Coletando contexto...[/cyan]")
     try:
@@ -150,6 +212,7 @@ def analyze(
             expand_views=expand_views,
             expand_functions=expand_functions,
             execute=execute,
+            bind_params=bind_params or None,
         )
     except Exception as e:
         console.print(f"[red]Erro na coleta:[/red] {e}")

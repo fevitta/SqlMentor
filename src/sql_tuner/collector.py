@@ -96,6 +96,7 @@ def collect_context(
     expand_views: bool = False,
     expand_functions: bool = False,
     execute: bool = False,
+    bind_params: dict[str, str] | None = None,
 ) -> CollectedContext:
     """
     Coleta todo o contexto necessário para análise de SQL.
@@ -121,10 +122,10 @@ def collect_context(
     if parsed.sql_type in ("SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"):
         if execute and parsed.sql_type == "SELECT":
             # Executa a query real com GATHER_PLAN_STATISTICS e coleta plano + stats
-            _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx)
+            _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx, bind_params)
         else:
             # Plano estimado via EXPLAIN PLAN
-            ctx.execution_plan = _collect_explain_plan(cursor, parsed.raw_sql, ctx)
+            ctx.execution_plan = _collect_explain_plan(cursor, parsed.raw_sql, ctx, bind_params)
     elif parsed.sql_type in ("PROCEDURE", "TRIGGER", "FUNCTION", "PACKAGE"):
         # Pra PL/SQL, tenta extrair SELECTs internos e rodar explain de cada
         # (v2 - por ora só coleta metadata das tabelas)
@@ -330,14 +331,17 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
 
 
 def _collect_explain_plan(
-    cursor: oracledb.Cursor, sql_text: str, ctx: CollectedContext
+    cursor: oracledb.Cursor, sql_text: str, ctx: CollectedContext,
+    bind_params: dict[str, str] | None = None,
 ) -> list[str] | None:
     """Coleta o plano de execução."""
     try:
         steps = explain_plan(sql_text)
 
         # Step 1: EXPLAIN PLAN FOR ...
+        # EXPLAIN PLAN FOR aceita binds — Oracle resolve como literals no plano
         sql, params = steps[0]
+        params.update(bind_params or {})
         cursor.execute(sql, params)
 
         # Step 2: Busca resultado
@@ -360,6 +364,7 @@ def _collect_runtime_execution(
     conn: oracledb.Connection,
     sql_text: str,
     ctx: CollectedContext,
+    bind_params: dict[str, str] | None = None,
 ) -> None:
     """
     Executa a query com GATHER_PLAN_STATISTICS e coleta plano real + métricas.
@@ -379,7 +384,7 @@ def _collect_runtime_execution(
         sid = row[0] if row else None
 
         # Executa a query real (descarta resultado)
-        cursor.execute(sql_text)
+        cursor.execute(sql_text, bind_params or {})
         cursor.fetchall()
 
         # Pega sql_id da query que acabou de rodar (prev_sql_id = a anterior à atual)
@@ -392,7 +397,7 @@ def _collect_runtime_execution(
 
         if not sql_id:
             ctx.errors.append("Não foi possível obter sql_id da query executada")
-            ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx)
+            ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx, bind_params)
             return
 
         # Plano real com ALLSTATS LAST usando sql_id explícito
@@ -416,7 +421,7 @@ def _collect_runtime_execution(
     except Exception as e:
         ctx.errors.append(f"Erro na execução runtime: {e}")
         # Fallback pro plano estimado
-        ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx)
+        ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx, bind_params)
 
 
 def _collect_ddl(

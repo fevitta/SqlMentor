@@ -2,6 +2,7 @@
 Gerenciador de conexões Oracle.
 
 Salva profiles em ~/.sql-tuner/connections.yaml.
+Usa oracledb em modo thin (sem Oracle Instant Client).
 """
 
 import logging
@@ -15,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / ".sql-tuner"
 CONNECTIONS_FILE = CONFIG_DIR / "connections.yaml"
-
-_thick_mode_initialized = False
 
 
 def _ensure_config_dir() -> None:
@@ -35,24 +34,6 @@ def _save_connections(connections: dict[str, dict]) -> None:
     _ensure_config_dir()
     with open(CONNECTIONS_FILE, "w") as f:
         yaml.dump(connections, f, default_flow_style=False, allow_unicode=True)
-
-
-def _init_thick_mode() -> None:
-    """Inicializa modo thick do oracledb (requer Oracle Instant Client)."""
-    global _thick_mode_initialized
-    if _thick_mode_initialized:
-        return
-    try:
-        oracledb.init_oracle_client()
-        _thick_mode_initialized = True
-        logger.info("oracledb: modo thick ativado via Oracle Instant Client")
-    except oracledb.ProgrammingError as e:
-        raise RuntimeError(
-            "Oracle Instant Client não encontrado. "
-            "Instale o Instant Client e adicione ao PATH.\n"
-            "Download: https://www.oracle.com/database/technologies/instant-client.html\n"
-            f"Detalhe: {e}"
-        ) from e
 
 
 def add_connection(
@@ -105,13 +86,41 @@ def get_connection_config(name: str) -> dict[str, Any]:
         raise ValueError(f"Conexão '{name}' não encontrada. Use 'sql-tuner config list'.")
     return connections[name]
 
+_thick_mode_initialized = False
+
+
+def _init_thick_mode_if_available() -> None:
+    """
+    Tenta ativar thick mode se o Oracle Instant Client estiver disponível.
+
+    Não explode se não encontrar — apenas re-raise o erro original
+    com uma mensagem útil sobre como resolver.
+    """
+    global _thick_mode_initialized
+    if _thick_mode_initialized:
+        return
+    try:
+        oracledb.init_oracle_client()
+        _thick_mode_initialized = True
+        logger.info("oracledb: thick mode ativado via Oracle Instant Client")
+    except oracledb.ProgrammingError:
+        raise RuntimeError(
+            "Este banco Oracle é antigo demais para o modo thin do oracledb.\n"
+            "Opções:\n"
+            "  1. Instale o Oracle Instant Client e adicione ao PATH\n"
+            "     https://www.oracle.com/database/technologies/instant-client.html\n"
+            "  2. Atualize o banco para Oracle 12c+ (suporta thin mode nativo)"
+        )
+
+
 
 def connect(name: str) -> oracledb.Connection:
     """
     Abre uma conexão Oracle a partir de um profile salvo.
 
-    Tenta modo thin primeiro. Se falhar com DPY-3010 (versão antiga do Oracle),
-    tenta modo thick automaticamente (requer Oracle Instant Client).
+    Tenta modo thin primeiro (zero dependências externas).
+    Se o banco for muito antigo (DPY-3010), tenta thick mode
+    automaticamente caso o Oracle Instant Client esteja no PATH.
     """
     cfg = get_connection_config(name)
     dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
@@ -123,15 +132,17 @@ def connect(name: str) -> oracledb.Connection:
             dsn=dsn,
         )
     except oracledb.DatabaseError as e:
-        if "DPY-3010" in str(e):
-            logger.info("Thin mode falhou (Oracle antigo), tentando thick mode...")
-            _init_thick_mode()
-            return oracledb.connect(
-                user=cfg["user"],
-                password=cfg["password"],
-                dsn=dsn,
-            )
-        raise
+        if "DPY-3010" not in str(e):
+            raise
+
+        logger.info("Thin mode não suportado por este banco, tentando thick mode...")
+        _init_thick_mode_if_available()
+
+        return oracledb.connect(
+            user=cfg["user"],
+            password=cfg["password"],
+            dsn=dsn,
+        )
 
 
 def test_connection(name: str) -> dict[str, str]:
