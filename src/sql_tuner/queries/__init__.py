@@ -321,3 +321,42 @@ def table_partitions(owner: str, table_name: str) -> tuple[str, dict]:
         """,
         {"owner": owner.upper(), "table_name": table_name.upper()},
     )
+
+def dangerous_privileges() -> tuple[str, dict]:
+    """Privilégios de sistema perigosos (escrita/DDL) que o user do sqlmentor NÃO deveria ter."""
+    return (
+        """
+        SELECT privilege
+        FROM session_privs
+        WHERE privilege IN (
+            'INSERT ANY TABLE', 'UPDATE ANY TABLE', 'DELETE ANY TABLE',
+            'ALTER ANY TABLE', 'DROP ANY TABLE', 'CREATE ANY TABLE',
+            'ALTER ANY INDEX', 'DROP ANY INDEX', 'CREATE ANY INDEX',
+            'GRANT ANY PRIVILEGE', 'GRANT ANY ROLE',
+            'ALTER DATABASE', 'ALTER SYSTEM',
+            'DROP USER', 'CREATE USER', 'ALTER USER',
+            'SYSDBA', 'SYSOPER',
+            'EXECUTE ANY PROCEDURE',
+            'ALTER ANY PROCEDURE', 'DROP ANY PROCEDURE', 'CREATE ANY PROCEDURE',
+            'CREATE ANY TRIGGER', 'ALTER ANY TRIGGER', 'DROP ANY TRIGGER'
+        )
+        """,
+        {},
+    )
+
+
+def dangerous_roles() -> tuple[str, dict]:
+    """Roles perigosas que o user do sqlmentor NÃO deveria ter."""
+    return (
+        """
+        SELECT role
+        FROM session_roles
+        WHERE role IN (
+            'DBA', 'IMP_FULL_DATABASE', 'EXP_FULL_DATABASE',
+            'DATAPUMP_IMP_FULL_DATABASE', 'EXECUTE_CATALOG_ROLE',
+            'DELETE_CATALOG_ROLE', 'RESOURCE'
+        )
+        """,
+        {},
+    )
+

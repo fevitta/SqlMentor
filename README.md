@@ -1,4 +1,4 @@
-# OraSqlMentor
+# SqlMentor
 
 CLI para coleta de contexto Oracle 11g+, otimizado para tuning de SQL assistido por IA.
 
@@ -135,21 +135,21 @@ Pré-requisito: `pip install -e .` para registrar o entry point `sqlmentor-mcp`.
 
 ### Kiro Power
 
-Para times que usam Kiro, o Power em `powers/sql-tuner/` empacota o MCP Server + documentação + metodologia de análise. Instale via Powers UI → "Add Custom Power" → Local Directory → caminho absoluto de `powers/sql-tuner`.
+Para times que usam Kiro, o Power em `powers/sqlmentor/` empacota o MCP Server + documentação + metodologia de análise. Instale via Powers UI → "Add Custom Power" → Local Directory → caminho absoluto de `powers/sqlmentor`.
 
 O Power inclui um steering file (`analysis.md`) com a metodologia completa de análise de DBA sênior Oracle, carregado sob demanda quando a IA vai analisar um relatório.
 
 ## Estrutura do Projeto
 
 ```
-sql-tuner/
+sqlmentor/
 ├── pyproject.toml
 ├── connections.example.yaml
 ├── scripts/
 │   └── oracle_create_user.sql
 ├── reports/                    # Relatórios gerados
 ├── powers/
-│   └── sql-tuner/              # Kiro Power (MCP + docs + steering)
+│   └── sqlmentor/              # Kiro Power (MCP + docs + steering)
 │       ├── POWER.md
 │       ├── mcp.json
 │       └── steering/

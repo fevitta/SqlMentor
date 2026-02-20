@@ -1,16 +1,16 @@
 ---
 name: "sqlmentor"
-displayName: "OraSqlMentor — Oracle Performance Analysis"
+displayName: "SqlMentor — Oracle Performance Analysis"
 description: "Coleta contexto Oracle (plano de execução, DDLs, índices, estatísticas, constraints) e analisa SQL para tuning assistido por IA. Gera relatórios estruturados otimizados para consumo por LLMs."
 keywords: ["sqlmentor", "oracle", "tuning", "performance", "dba", "explain-plan"]
 author: "Felipe"
 ---
 
-# OraSqlMentor — Oracle Performance Analysis
+# SqlMentor — SQL Performance Analysis
 
 ## Overview
 
-OraSqlMentor é uma CLI Python que conecta em bancos Oracle 11g+ e coleta toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
+SqlMentor é uma CLI Python que conecta em bancos Oracle 11g+ e coleta toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
 
 O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que uma IA possa analisar e sugerir otimizações com base em evidência concreta extraída do banco.
 

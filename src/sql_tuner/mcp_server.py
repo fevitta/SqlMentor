@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "sqlmentor",
-    description="Coleta contexto Oracle (plano de execução, DDLs, índices, stats) para tuning de SQL assistido por IA.",
+    instructions="Coleta contexto Oracle (plano de execução, DDLs, índices, stats) para tuning de SQL assistido por IA.",
 )
 
 
@@ -271,121 +271,6 @@ def inspect_sql(
                 "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
             })
         sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])
-    except Exception as e:
-        oracle_conn.close()
-        return json.dumps({"error": f"Erro ao buscar SQL: {e}"})
-
-    # Parse
-    parsed = _parse(sql_text, default_schema=effective_schema)
-
-    # Plano real via sql_id
-    runtime_plan_lines = None
-    try:
-        sql_query, params = runtime_plan(sql_id)
-        cursor.execute(sql_query, params)
-        runtime_plan_lines = [r[0] for r in cursor]
-    except Exception:
-        pass
-
-    # Métricas V$SQL
-    runtime_stats_data = None
-    try:
-        sql_query, params = sql_runtime_stats(sql_id)
-        cursor.execute(sql_query, params)
-        columns = [col[0].lower() for col in cursor.description or []]
-        row = cursor.fetchone()
-        runtime_stats_data = dict(zip(columns, row)) if row else None
-    except Exception:
-        pass
-
-    cursor.close()
-
-    # Coleta metadata das tabelas
-    try:
-        ctx = collect_context(
-            parsed=parsed,
-            conn=oracle_conn,
-            default_schema=effective_schema,
-            deep=deep,
-            expand_views=expand_views,
-            expand_functions=expand_functions,
-            execute=False,
-        )
-    except Exception as e:
-        oracle_conn.close()
-        return json.dumps({"error": f"Erro na coleta: {e}"})
-    finally:
-        try:
-            oracle_conn.close()
-        except Exception:
-            pass
-
-    # Injeta plano real e métricas
-    if runtime_plan_lines:
-        ctx.runtime_plan = runtime_plan_lines
-    if runtime_stats_data:
-        ctx.runtime_stats = runtime_stats_data
-
-    if output_format.lower() == "json":
-        return to_json(ctx)
-    return to_markdown(ctx)
-
-
-
-@mcp.tool()
-def inspect_sql(
-    sql_id: str,
-    conn: str,
-    schema: str = "",
-    deep: bool = False,
-    expand_views: bool = False,
-    expand_functions: bool = False,
-    output_format: str = "markdown",
-    timeout: int = 0,
-) -> str:
-    """Coleta contexto de um SQL já executado via sql_id, sem re-executar a query.
-
-    Útil para queries longas que já rodaram (pelo dev, pelo sistema, etc.).
-    Puxa o plano real e métricas do shared pool Oracle via V$SQL e DBMS_XPLAN.
-
-    Args:
-        sql_id: SQL_ID da query no shared pool Oracle (ex: "abc123def").
-        conn: Nome do profile de conexão Oracle.
-        schema: Schema padrão (sobrescreve o do profile). Opcional.
-        deep: Se True, coleta histogramas e partições.
-        expand_views: Se True, coleta DDL e colunas de views.
-        expand_functions: Se True, coleta DDL de funções PL/SQL.
-        output_format: "markdown" (padrão) ou "json".
-        timeout: Timeout em segundos. 0 = usa default do profile (180s).
-    """
-    from sql_tuner.collector import collect_context
-    from sql_tuner.connector import connect, get_connection_config
-    from sql_tuner.parser import parse_sql as _parse
-    from sql_tuner.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
-    from sql_tuner.report import to_json, to_markdown
-
-    cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
-
-    try:
-        oracle_conn = connect(conn, timeout=timeout if timeout > 0 else None)
-    except Exception as e:
-        return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
-
-    cursor = oracle_conn.cursor()
-
-    # Recupera SQL original do shared pool
-    try:
-        sql_query, params = sql_text_by_id(sql_id)
-        cursor.execute(sql_query, params)
-        row = cursor.fetchone()
-        if not row or not row[0]:
-            oracle_conn.close()
-            return json.dumps({
-                "error": f"SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).",
-                "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
-            })
-        sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         oracle_conn.close()
         return json.dumps({"error": f"Erro ao buscar SQL: {e}"})

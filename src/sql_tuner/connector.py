@@ -29,6 +29,46 @@ def _load_connections() -> dict[str, dict]:
         data = yaml.safe_load(f)
     return data or {}
 
+def validate_privileges(conn: oracledb.Connection) -> None:
+    """
+    Verifica se o user conectado tem apenas privilégios de leitura.
+
+    Consulta SESSION_PRIVS e SESSION_ROLES e rejeita se encontrar
+    qualquer privilégio de escrita/DDL ou role perigosa.
+
+    Raises:
+        PermissionError: Se o user tiver privilégios além de leitura.
+    """
+    from sql_tuner.queries import dangerous_privileges, dangerous_roles
+
+    cursor = conn.cursor()
+    problems: list[str] = []
+
+    try:
+        sql, params = dangerous_privileges()
+        cursor.execute(sql, params)
+        bad_privs = [row[0] for row in cursor]
+        if bad_privs:
+            problems.append(f"Privilégios perigosos: {', '.join(bad_privs)}")
+
+        sql, params = dangerous_roles()
+        cursor.execute(sql, params)
+        bad_roles = [row[0] for row in cursor]
+        if bad_roles:
+            problems.append(f"Roles perigosas: {', '.join(bad_roles)}")
+    finally:
+        cursor.close()
+
+    if problems:
+        user = conn.username or "desconhecido"
+        raise PermissionError(
+            f"Usuário '{user}' tem permissões além de leitura. "
+            f"O sqlmentor recusa conexão por segurança.\n"
+            f"  {'; '.join(problems)}\n"
+            f"Use um usuário read-only (veja scripts/oracle_create_user.sql)."
+        )
+
+
 
 def _save_connections(connections: dict[str, dict]) -> None:
     _ensure_config_dir()
@@ -158,6 +198,13 @@ def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
     # Seta call_timeout (em milissegundos, 0 = sem timeout)
     if effective_timeout > 0:
         conn.call_timeout = effective_timeout * 1000
+
+    # Valida que o user não tem privilégios além de leitura
+    try:
+        validate_privileges(conn)
+    except PermissionError:
+        conn.close()
+        raise
 
     return conn
 

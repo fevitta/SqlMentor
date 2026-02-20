@@ -1,5 +1,5 @@
 -- =============================================================================
--- OraSqlMentor: Script de criação de usuário Oracle 11g
+-- SqlMentor: Script de criação de usuário Oracle 11g
 -- =============================================================================
 --
 -- Cria um usuário read-only para o sqlmentor coletar metadata e planos

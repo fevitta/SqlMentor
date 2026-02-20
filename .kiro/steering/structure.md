@@ -1,21 +1,21 @@
 # Estrutura do Projeto
 
 ```
-sql-tuner/
+sqlmentor/
 ├── pyproject.toml              # Build config, dependências, entry points (sqlmentor + sqlmentor-mcp)
 ├── connections.example.yaml    # Exemplo de config de conexões
 ├── scripts/
 │   └── oracle_create_user.sql  # Script DBA para criar user read-only
 ├── powers/
-│   └── sql-tuner/              # Kiro Power (distribuição pro time)
+│   └── sqlmentor/              # Kiro Power (distribuição pro time)
 │       ├── POWER.md            # Frontmatter + overview + workflow + troubleshooting
 │       ├── mcp.json            # Config MCP apontando pro sqlmentor-mcp
 │       └── steering/
 │           └── analysis.md     # Metodologia de análise Oracle (DBA sênior)
 └── src/sql_tuner/
     ├── __init__.py             # Versão do pacote
-    ├── cli.py                  # Entry point CLI Typer (comandos: analyze, parse, config)
-    ├── mcp_server.py           # Entry point MCP Server (tools: list_connections, test_connection, parse_sql, analyze_sql)
+    ├── cli.py                  # Entry point CLI Typer (comandos: analyze, inspect, parse, config)
+    ├── mcp_server.py           # Entry point MCP Server (tools: list_connections, test_connection, parse_sql, analyze_sql, inspect_sql)
     ├── parser.py               # Parse SQL → tabelas/colunas via sqlglot + fallback regex para PL/SQL
     ├── connector.py            # CRUD de conexões Oracle (~/.sqlmentor/connections.yaml)
     ├── collector.py            # Orquestra coleta de metadata Oracle (dataclasses: TableContext, CollectedContext)
@@ -44,4 +44,4 @@ A CLI (`cli.py`) e o MCP Server (`mcp_server.py`) são apenas interfaces diferen
 - Novos bancos de dados devem seguir o padrão de `queries/` — um módulo com funções que retornam `(sql, params)`.
 - Dataclasses em `collector.py` são o contrato entre coleta e relatório.
 - CLI e MCP Server usam lazy imports para não carregar oracledb no startup.
-- Mudanças em flags/parâmetros do `analyze` devem ser replicadas em `cli.py`, `mcp_server.py`, e `powers/sql-tuner/POWER.md`.
+- Mudanças em flags/parâmetros do `analyze`/`inspect` devem ser replicadas em `cli.py`, `mcp_server.py`, e `powers/sqlmentor/POWER.md`.
