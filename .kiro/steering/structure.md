@@ -2,14 +2,14 @@
 
 ```
 sql-tuner/
-├── pyproject.toml              # Build config, dependências, entry points (sql-tuner + sql-tuner-mcp)
+├── pyproject.toml              # Build config, dependências, entry points (sqlmentor + sqlmentor-mcp)
 ├── connections.example.yaml    # Exemplo de config de conexões
 ├── scripts/
 │   └── oracle_create_user.sql  # Script DBA para criar user read-only
 ├── powers/
 │   └── sql-tuner/              # Kiro Power (distribuição pro time)
 │       ├── POWER.md            # Frontmatter + overview + workflow + troubleshooting
-│       ├── mcp.json            # Config MCP apontando pro sql-tuner-mcp
+│       ├── mcp.json            # Config MCP apontando pro sqlmentor-mcp
 │       └── steering/
 │           └── analysis.md     # Metodologia de análise Oracle (DBA sênior)
 └── src/sql_tuner/
@@ -17,7 +17,7 @@ sql-tuner/
     ├── cli.py                  # Entry point CLI Typer (comandos: analyze, parse, config)
     ├── mcp_server.py           # Entry point MCP Server (tools: list_connections, test_connection, parse_sql, analyze_sql)
     ├── parser.py               # Parse SQL → tabelas/colunas via sqlglot + fallback regex para PL/SQL
-    ├── connector.py            # CRUD de conexões Oracle (~/.sql-tuner/connections.yaml)
+    ├── connector.py            # CRUD de conexões Oracle (~/.sqlmentor/connections.yaml)
     ├── collector.py            # Orquestra coleta de metadata Oracle (dataclasses: TableContext, CollectedContext)
     ├── report.py               # Gera Markdown/JSON a partir de CollectedContext
     └── queries/
@@ -27,8 +27,8 @@ sql-tuner/
 
 ## Entry points
 
-- `sql-tuner` → `cli.py:app` (CLI Typer)
-- `sql-tuner-mcp` → `mcp_server.py:main` (MCP Server via stdio)
+- `sqlmentor` → `cli.py:app` (CLI Typer)
+- `sqlmentor-mcp` → `mcp_server.py:main` (MCP Server via stdio)
 
 ## Fluxo principal (compartilhado entre CLI e MCP)
 

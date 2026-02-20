@@ -50,7 +50,7 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
     Returns:
         ParsedSQL com tabelas, colunas e metadata extraídos.
     """
-    result = ParsedSQL(raw_sql=sql_text.strip(), sql_type="UNKNOWN")
+    result = ParsedSQL(raw_sql=sql_text.strip().rstrip(";").strip(), sql_type="UNKNOWN")
 
     # Limpa SQL — remove terminadores e comentários de header comuns
     cleaned = sql_text.strip().rstrip(";").strip()

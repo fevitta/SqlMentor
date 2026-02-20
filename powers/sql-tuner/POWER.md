@@ -1,28 +1,28 @@
 ---
-name: "sql-tuner"
-displayName: "SQL Tuner — Oracle Performance Analysis"
+name: "sqlmentor"
+displayName: "OraSqlMentor — Oracle Performance Analysis"
 description: "Coleta contexto Oracle (plano de execução, DDLs, índices, estatísticas, constraints) e analisa SQL para tuning assistido por IA. Gera relatórios estruturados otimizados para consumo por LLMs."
-keywords: ["sql-tuner", "oracle", "tuning", "performance", "dba", "explain-plan"]
+keywords: ["sqlmentor", "oracle", "tuning", "performance", "dba", "explain-plan"]
 author: "Felipe"
 ---
 
-# SQL Tuner — Oracle Performance Analysis
+# OraSqlMentor — Oracle Performance Analysis
 
 ## Overview
 
-SQL Tuner é uma CLI Python que conecta em bancos Oracle 11g+ e coleta toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
+OraSqlMentor é uma CLI Python que conecta em bancos Oracle 11g+ e coleta toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
 
 O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que uma IA possa analisar e sugerir otimizações com base em evidência concreta extraída do banco.
 
 ## Available Steering Files
 
-- **analysis** — Prompt completo de análise SQL com metodologia de DBA sênior Oracle. Carregue este steering SEMPRE que for analisar um relatório gerado pelo sql-tuner. Contém: ordem de análise, critérios de evidência, formato de resposta, e regras críticas.
+- **analysis** — Prompt completo de análise SQL com metodologia de DBA sênior Oracle. Carregue este steering SEMPRE que for analisar um relatório gerado pelo sqlmentor. Contém: ordem de análise, critérios de evidência, formato de resposta, e regras críticas.
 
 ## Pré-requisitos
 
 - Python 3.9+
-- `sql-tuner` instalado (`pip install -e .` no repo do projeto)
-- Pelo menos um profile de conexão Oracle configurado via `sql-tuner config add`
+- `sqlmentor` instalado (`pip install -e .` no repo do projeto)
+- Pelo menos um profile de conexão Oracle configurado via `sqlmentor config add`
 - O usuário Oracle precisa de permissões de leitura em `ALL_*` views e `DBMS_XPLAN`
 
 ## Tools Disponíveis
@@ -47,6 +47,15 @@ Parâmetros importantes:
 - `expand_functions`: Coleta DDL de funções PL/SQL
 - `execute`: Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
 - `binds`: Bind variables no formato "nome=valor,nome2=valor2"
+- `timeout`: Timeout em segundos para operações no banco (0 = usa default do profile, 180s)
+
+### inspect_sql
+Coleta contexto de um SQL já executado via sql_id, sem re-executar. Puxa plano real e métricas do shared pool Oracle. Ideal para queries longas que já rodaram.
+
+Parâmetros importantes:
+- `sql_id`: SQL_ID da query no shared pool Oracle
+- `conn`: Nome do profile de conexão
+- `deep`, `expand_views`, `expand_functions`, `timeout`: mesmos do analyze_sql
 
 ## Workflow Recomendado
 
@@ -58,9 +67,10 @@ Parâmetros importantes:
    - Se precisar de plano real: adicione `execute=True` com os binds necessários
    - Se a query referencia views: adicione `expand_views=True`
    - Se a query usa funções PL/SQL no WHERE: adicione `expand_functions=True`
-4. Carregue o steering `analysis` para obter as instruções de análise
-5. Analise o relatório seguindo a metodologia do steering
-6. Se faltam dados, chame `analyze_sql` novamente com flags adicionais
+4. Se a query já foi executada (pelo dev, pelo sistema), use `inspect_sql` com o `sql_id` em vez de re-executar
+5. Carregue o steering `analysis` para obter as instruções de análise
+6. Analise o relatório seguindo a metodologia do steering
+7. Se faltam dados, chame `analyze_sql` ou `inspect_sql` novamente com flags adicionais
 
 ## Troubleshooting
 

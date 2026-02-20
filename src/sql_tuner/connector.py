@@ -1,7 +1,7 @@
 """
 Gerenciador de conexões Oracle.
 
-Salva profiles em ~/.sql-tuner/connections.yaml.
+Salva profiles em ~/.sqlmentor/connections.yaml.
 Usa oracledb em modo thin (sem Oracle Instant Client).
 """
 
@@ -14,7 +14,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path.home() / ".sql-tuner"
+CONFIG_DIR = Path.home() / ".sqlmentor"
 CONNECTIONS_FILE = CONFIG_DIR / "connections.yaml"
 
 
@@ -44,6 +44,7 @@ def add_connection(
     user: str,
     password: str,
     schema: str | None = None,
+    timeout: int | None = None,
 ) -> None:
     """Adiciona ou atualiza um profile de conexão."""
     connections = _load_connections()
@@ -55,6 +56,7 @@ def add_connection(
         "user": user,
         "password": password,
         "schema": schema or user.upper(),
+        "timeout": timeout if timeout is not None else 180,
     }
     _save_connections(connections)
 
@@ -83,7 +85,7 @@ def get_connection_config(name: str) -> dict[str, Any]:
     """Retorna config completa de um profile."""
     connections = _load_connections()
     if name not in connections:
-        raise ValueError(f"Conexão '{name}' não encontrada. Use 'sql-tuner config list'.")
+        raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
     return connections[name]
 
 _thick_mode_initialized = False
@@ -114,19 +116,28 @@ def _init_thick_mode_if_available() -> None:
 
 
 
-def connect(name: str) -> oracledb.Connection:
+def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
     """
     Abre uma conexão Oracle a partir de um profile salvo.
 
     Tenta modo thin primeiro (zero dependências externas).
     Se o banco for muito antigo (DPY-3010), tenta thick mode
     automaticamente caso o Oracle Instant Client esteja no PATH.
+
+    Args:
+        name: Nome do profile de conexão.
+        timeout: Timeout em segundos para operações no banco.
+                 Se None, usa o valor do profile (default 180s).
+                 Se 0, sem timeout.
     """
     cfg = get_connection_config(name)
     dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
 
+    # Resolve timeout: parâmetro explícito > config do profile > 180s
+    effective_timeout = timeout if timeout is not None else cfg.get("timeout", 180)
+
     try:
-        return oracledb.connect(
+        conn = oracledb.connect(
             user=cfg["user"],
             password=cfg["password"],
             dsn=dsn,
@@ -138,11 +149,17 @@ def connect(name: str) -> oracledb.Connection:
         logger.info("Thin mode não suportado por este banco, tentando thick mode...")
         _init_thick_mode_if_available()
 
-        return oracledb.connect(
+        conn = oracledb.connect(
             user=cfg["user"],
             password=cfg["password"],
             dsn=dsn,
         )
+
+    # Seta call_timeout (em milissegundos, 0 = sem timeout)
+    if effective_timeout > 0:
+        conn.call_timeout = effective_timeout * 1000
+
+    return conn
 
 
 def test_connection(name: str) -> dict[str, str]:

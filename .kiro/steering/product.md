@@ -1,4 +1,4 @@
-# sql-tuner
+# OraSqlMentor
 
 CLI + MCP Server Python que conecta em bancos Oracle 11g+, extrai metadata de SQL (plano de execução, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera relatórios estruturados (Markdown/JSON) otimizados para consumo por LLMs em fluxos de tuning assistido por IA.
 
@@ -8,6 +8,6 @@ Projeto em estágio inicial (v0.1.0). Suporta apenas Oracle por enquanto. Roadma
 
 ## Interfaces
 
-- **CLI** (`sql-tuner`): uso direto no terminal, relatórios salvos em `reports/`
-- **MCP Server** (`sql-tuner-mcp`): integração com IDEs via Model Context Protocol (stdio)
+- **CLI** (`sqlmentor`): uso direto no terminal, relatórios salvos em `reports/`
+- **MCP Server** (`sqlmentor-mcp`): integração com IDEs via Model Context Protocol (stdio)
 - **Kiro Power** (`powers/sql-tuner/`): empacota MCP + documentação + metodologia de análise para times que usam Kiro

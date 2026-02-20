@@ -6,7 +6,7 @@
 - **MCP Server:** FastMCP (mcp SDK Python) via stdio
 - **SQL parsing:** sqlglot (dialeto Oracle)
 - **DB driver:** oracledb (modo thin, sem Oracle Client)
-- **Config:** PyYAML (conexões em ~/.sql-tuner/connections.yaml)
+- **Config:** PyYAML (conexões em ~/.sqlmentor/connections.yaml)
 - **Testes:** nenhum framework configurado ainda
 
 ## Comandos
@@ -16,13 +16,13 @@
 pip install -e .
 
 # CLI
-sql-tuner --help
-sql-tuner analyze <arquivo.sql> --conn <profile>
-sql-tuner parse <arquivo.sql> --schema <SCHEMA>
-sql-tuner config add|list|test|remove
+sqlmentor --help
+sqlmentor analyze <arquivo.sql> --conn <profile>
+sqlmentor parse <arquivo.sql> --schema <SCHEMA>
+sqlmentor config add|list|test|remove
 
 # MCP Server (normalmente iniciado pelo IDE, não manualmente)
-sql-tuner-mcp
+sqlmentor-mcp
 ```
 
 ## Convenções

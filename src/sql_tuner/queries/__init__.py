@@ -8,7 +8,7 @@ Cada função retorna uma tuple (sql, params) pronta pra executar.
 def explain_plan(sql_text: str) -> list[tuple[str, dict]]:
     """Gera EXPLAIN PLAN e recupera o resultado."""
     # EXPLAIN PLAN não aceita bind variables no STATEMENT_ID — usa literal.
-    stmt_id = "SQL_TUNER_PLAN"
+    stmt_id = "SQLMENTOR_PLAN"
     return [
         (
             f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql_text}",
@@ -60,6 +60,19 @@ def sql_runtime_stats(sql_id: str) -> tuple[str, dict]:
         """,
         {"sql_id": sql_id},
     )
+
+def sql_text_by_id(sql_id: str) -> tuple[str, dict]:
+    """Recupera o texto completo do SQL a partir do sql_id via V$SQL."""
+    return (
+        """
+        SELECT sql_fulltext
+        FROM v$sql
+        WHERE sql_id = :sql_id
+        AND ROWNUM = 1
+        """,
+        {"sql_id": sql_id},
+    )
+
 
 
 def session_wait_events(sid: int) -> tuple[str, dict]:

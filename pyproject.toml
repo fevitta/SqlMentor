@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sql-tuner"
+name = "sqlmentor"
 version = "0.1.0"
-description = "CLI para coleta de contexto de SQL/procedures para tuning assistido por IA"
+description = "OraSqlMentor — CLI para coleta de contexto Oracle para tuning de SQL assistido por IA"
 requires-python = ">=3.9"
 dependencies = [
     "typer[all]>=0.9.0",
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-sql-tuner = "sql_tuner.cli:app"
-sql-tuner-mcp = "sql_tuner.mcp_server:main"
+sqlmentor = "sql_tuner.cli:app"
+sqlmentor-mcp = "sql_tuner.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

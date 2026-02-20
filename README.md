@@ -1,8 +1,8 @@
-# sql-tuner
+# OraSqlMentor
 
 CLI para coleta de contexto Oracle 11g+, otimizado para tuning de SQL assistido por IA.
 
-Dado um arquivo SQL (query, procedure, trigger, function), o `sql-tuner` conecta no banco Oracle, extrai automaticamente todo o metadata relevante (plano de execução real, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
+Dado um arquivo SQL (query, procedure, trigger, function), o `sqlmentor` conecta no banco Oracle, extrai automaticamente todo o metadata relevante (plano de execução real, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
 
 ## Instalação
 
@@ -20,7 +20,7 @@ pip install -e .
 ### 1. Configurar conexão
 
 ```bash
-sql-tuner config add \
+sqlmentor config add \
   --name producao \
   --host 10.0.1.50 \
   --port 1521 \
@@ -34,36 +34,36 @@ sql-tuner config add \
 
 ```bash
 # Relatório salvo em reports/ automaticamente
-sql-tuner analyze minha_query.sql --conn producao
+sqlmentor analyze minha_query.sql --conn producao
 
 # Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
-sql-tuner analyze minha_query.sql --conn producao --execute
+sqlmentor analyze minha_query.sql --conn producao --execute
 
 # Detalha views (DDL, colunas internas)
-sql-tuner analyze minha_query.sql --conn producao --expand-views
+sqlmentor analyze minha_query.sql --conn producao --expand-views
 
 # Análise profunda (histogramas e partições)
-sql-tuner analyze minha_query.sql --conn producao --deep
+sqlmentor analyze minha_query.sql --conn producao --deep
 
 # Formato JSON
-sql-tuner analyze minha_query.sql --conn producao --format json
+sqlmentor analyze minha_query.sql --conn producao --format json
 
 # Saída customizada
-sql-tuner analyze minha_query.sql --conn producao --output meu_relatorio.md
+sqlmentor analyze minha_query.sql --conn producao --output meu_relatorio.md
 ```
 
 ### 3. Parse offline (sem conexão)
 
 ```bash
-sql-tuner parse minha_query.sql --schema TELTELECOM
+sqlmentor parse minha_query.sql --schema TELTELECOM
 ```
 
 ### 4. Gerenciar conexões
 
 ```bash
-sql-tuner config list
-sql-tuner config test --name producao
-sql-tuner config remove --name producao
+sqlmentor config list
+sqlmentor config test --name producao
+sqlmentor config remove --name producao
 ```
 
 ## O que é coletado
@@ -107,7 +107,7 @@ O relatório Markdown é otimizado para colar direto num chat com LLM. Inclui se
 
 ## MCP Server
 
-O `sql-tuner` inclui um MCP Server que permite integração direta com IDEs como Kiro, Claude Desktop, etc. A IA chama as tools do sql-tuner automaticamente, sem o dev precisar rodar comandos no terminal.
+O `sqlmentor` inclui um MCP Server que permite integração direta com IDEs como Kiro, Claude Desktop, etc. A IA chama as tools do sqlmentor automaticamente, sem o dev precisar rodar comandos no terminal.
 
 ### Tools disponíveis
 
@@ -123,15 +123,15 @@ O `sql-tuner` inclui um MCP Server que permite integração direta com IDEs como
 ```json
 {
   "mcpServers": {
-    "sql-tuner": {
-      "command": "sql-tuner-mcp",
+    "sqlmentor": {
+      "command": "sqlmentor-mcp",
       "args": []
     }
   }
 }
 ```
 
-Pré-requisito: `pip install -e .` para registrar o entry point `sql-tuner-mcp`.
+Pré-requisito: `pip install -e .` para registrar o entry point `sqlmentor-mcp`.
 
 ### Kiro Power
 
@@ -156,10 +156,10 @@ sql-tuner/
 │           └── analysis.md     # Metodologia de análise Oracle
 └── src/sql_tuner/
     ├── __init__.py
-    ├── cli.py                  # Entry point CLI (sql-tuner)
-    ├── mcp_server.py           # Entry point MCP (sql-tuner-mcp)
+    ├── cli.py                  # Entry point CLI (sqlmentor)
+    ├── mcp_server.py           # Entry point MCP (sqlmentor-mcp)
     ├── parser.py               # Parse SQL → tabelas/colunas (sqlglot + regex)
-    ├── connector.py            # CRUD de conexões (~/.sql-tuner/connections.yaml)
+    ├── connector.py            # CRUD de conexões (~/.sqlmentor/connections.yaml)
     ├── collector.py            # Coleta metadata Oracle
     ├── report.py               # Gera Markdown/JSON
     └── queries/

@@ -1,8 +1,8 @@
 -- =============================================================================
--- SQL-TUNER: Script de criação de usuário Oracle 11g
+-- OraSqlMentor: Script de criação de usuário Oracle 11g
 -- =============================================================================
 --
--- Cria um usuário read-only para o sql-tuner coletar metadata e planos
+-- Cria um usuário read-only para o sqlmentor coletar metadata e planos
 -- de execução.
 --
 -- Uso:
@@ -78,7 +78,7 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE('============================================');
     DBMS_OUTPUT.PUT_LINE('');
     DBMS_OUTPUT.PUT_LINE('Configurar no cli:');
-    DBMS_OUTPUT.PUT_LINE('  sql-tuner config add \');
+    DBMS_OUTPUT.PUT_LINE('  sqlmentor config add \');
     DBMS_OUTPUT.PUT_LINE('    --name prod \');
     DBMS_OUTPUT.PUT_LINE('    --host <HOST> --port 1521 \');
     DBMS_OUTPUT.PUT_LINE('    --service <SERVICE> \');

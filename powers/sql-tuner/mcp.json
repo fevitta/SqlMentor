@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "sql-tuner": {
-      "command": "sql-tuner-mcp",
+    "sqlmentor": {
+      "command": "sqlmentor-mcp",
       "args": [],
       "disabled": false,
       "autoApprove": []

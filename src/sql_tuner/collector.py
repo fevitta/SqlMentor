@@ -115,6 +115,10 @@ def collect_context(
     ctx = CollectedContext(parsed_sql=parsed)
     cursor = conn.cursor()
 
+    # Remove terminador SQL*Plus (;) — Oracle não aceita via cursor.execute()
+    if parsed.raw_sql.endswith(";"):
+        parsed.raw_sql = parsed.raw_sql.rstrip(";").strip()
+
     # 0. Versão do banco
     ctx.db_version = _collect_db_version(cursor, ctx)
 

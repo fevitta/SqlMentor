@@ -1,15 +1,15 @@
 """
-SQL Tuner CLI — Coleta de contexto para tuning de SQL assistido por IA.
+OraSqlMentor CLI — Coleta de contexto para tuning de SQL assistido por IA.
 
 Uso:
-    sql-tuner analyze <arquivo.sql> --conn <profile>
-    sql-tuner analyze --sql "SELECT ..." --conn <profile>
-    sql-tuner parse <arquivo.sql> --schema <SCHEMA>
-    sql-tuner parse --sql "SELECT ..." --schema <SCHEMA>
-    sql-tuner config add --name prod --host ... --port 1521 --service ORCL --user ...
-    sql-tuner config list
-    sql-tuner config test --name prod
-    sql-tuner config remove --name prod
+    sqlmentor analyze <arquivo.sql> --conn <profile>
+    sqlmentor analyze --sql "SELECT ..." --conn <profile>
+    sqlmentor parse <arquivo.sql> --schema <SCHEMA>
+    sqlmentor parse --sql "SELECT ..." --schema <SCHEMA>
+    sqlmentor config add --name prod --host ... --port 1521 --service ORCL --user ...
+    sqlmentor config list
+    sqlmentor config test --name prod
+    sqlmentor config remove --name prod
 """
 
 import hashlib
@@ -23,8 +23,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 app = typer.Typer(
-    name="sql-tuner",
-    help="Coleta contexto Oracle para tuning de SQL assistido por IA.",
+    name="sqlmentor",
+    help="OraSqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA.",
     no_args_is_help=True,
 )
 config_app = typer.Typer(help="Gerencia conexões Oracle.")
@@ -107,11 +107,163 @@ def analyze(
     bind: list[str] = typer.Option(
         [], "--bind", "-b", help="Bind variables no formato nome=valor (ex: -b idDesconto=123). Repetível."
     ),
+    timeout: int = typer.Option(
+        None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile, default: 180)."
+    ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     from sql_tuner.collector import collect_context
     from sql_tuner.connector import connect, get_connection_config
     from sql_tuner.parser import parse_sql
+
+    @app.command()
+    def inspect(
+        sql_id: str = typer.Argument(
+            ..., help="SQL_ID da query no shared pool Oracle."
+        ),
+        conn: str = typer.Option(
+            ..., "--conn", "-c", help="Nome do profile de conexão."
+        ),
+        output: Path = typer.Option(
+            None, "--output", "-o", help="Arquivo de saída."
+        ),
+        format: str = typer.Option(
+            "markdown", "--format", "-f", help="Formato: markdown ou json."
+        ),
+        schema: str = typer.Option(
+            None, "--schema", "-s", help="Schema padrão (sobrescreve o do profile)."
+        ),
+        deep: bool = typer.Option(
+            False, "--deep", "-d", help="Coleta extra: histogramas e partições."
+        ),
+        expand_views: bool = typer.Option(
+            False, "--expand-views", help="Detalha views (DDL, colunas)."
+        ),
+        expand_functions: bool = typer.Option(
+            False, "--expand-functions", help="Coleta DDL de funções PL/SQL referenciadas."
+        ),
+        timeout: int = typer.Option(
+            None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile)."
+        ),
+    ) -> None:
+        """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
+        import hashlib
+        from datetime import datetime
+
+        from sql_tuner.collector import collect_context
+        from sql_tuner.connector import connect, get_connection_config
+        from sql_tuner.parser import parse_sql
+        from sql_tuner.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
+        from sql_tuner.report import to_json, to_markdown
+
+        # Resolve schema
+        cfg = get_connection_config(conn)
+        effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+
+        # Conecta
+        console.print(f"[cyan]Conectando:[/cyan] {conn}")
+        try:
+            oracle_conn = connect(conn, timeout=timeout)
+        except Exception as e:
+            console.print(f"[red]Erro de conexão:[/red] {e}")
+            raise typer.Exit(1)
+
+        cursor = oracle_conn.cursor()
+
+        # Recupera SQL original do shared pool
+        console.print(f"[cyan]Buscando SQL_ID:[/cyan] {sql_id}")
+        try:
+            sql_query, params = sql_text_by_id(sql_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                console.print(f"[red]Erro:[/red] SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).")
+                console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
+                oracle_conn.close()
+                raise typer.Exit(1)
+            sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])
+        except Exception as e:
+            if "não encontrado" in str(e) or "Exit" in type(e).__name__:
+                raise
+            console.print(f"[red]Erro ao buscar SQL:[/red] {e}")
+            oracle_conn.close()
+            raise typer.Exit(1)
+
+        console.print(f"[green]✓[/green] SQL recuperado ({len(sql_text)} chars)")
+
+        # Parse
+        parsed = parse_sql(sql_text, default_schema=effective_schema)
+        console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
+        console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
+
+        # Coleta plano real via sql_id (sem re-executar)
+        console.print("[cyan]Coletando plano real...[/cyan]")
+        try:
+            sql_query, params = runtime_plan(sql_id)
+            cursor.execute(sql_query, params)
+            runtime_plan_lines = [r[0] for r in cursor]
+        except Exception as e:
+            console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
+            runtime_plan_lines = None
+
+        # Coleta métricas de V$SQL
+        console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
+        try:
+            sql_query, params = sql_runtime_stats(sql_id)
+            cursor.execute(sql_query, params)
+            columns = [col[0].lower() for col in cursor.description or []]
+            row = cursor.fetchone()
+            runtime_stats = dict(zip(columns, row)) if row else None
+        except Exception as e:
+            console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
+            runtime_stats = None
+
+        cursor.close()
+
+        # Coleta metadata das tabelas (fluxo normal, sem execute)
+        console.print("[cyan]Coletando contexto das tabelas...[/cyan]")
+        try:
+            ctx = collect_context(
+                parsed=parsed,
+                conn=oracle_conn,
+                default_schema=effective_schema,
+                deep=deep,
+                expand_views=expand_views,
+                expand_functions=expand_functions,
+                execute=False,
+            )
+        except Exception as e:
+            console.print(f"[red]Erro na coleta:[/red] {e}")
+            raise typer.Exit(1)
+        finally:
+            oracle_conn.close()
+
+        # Injeta plano real e métricas coletados via sql_id
+        if runtime_plan_lines:
+            ctx.runtime_plan = runtime_plan_lines
+        if runtime_stats:
+            ctx.runtime_stats = runtime_stats
+
+        # Relatório
+        if format.lower() == "json":
+            report = to_json(ctx)
+        else:
+            report = to_markdown(ctx)
+
+        if output:
+            out_path = output
+        else:
+            reports_dir = Path("reports")
+            reports_dir.mkdir(exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ext = "json" if format.lower() == "json" else "md"
+            out_path = reports_dir / f"report_{ts}_inspect_{sql_id}.{ext}"
+
+        out_path.write_text(report, encoding="utf-8")
+        console.print(f"[green]✓[/green] Relatório salvo em [bold]{out_path}[/bold]")
+
+        _print_summary(ctx)
+
     from sql_tuner.report import to_json, to_markdown
 
     # Resolve fonte do SQL
@@ -137,7 +289,7 @@ def analyze(
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
-        oracle_conn = connect(conn)
+        oracle_conn = connect(conn, timeout=timeout)
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
@@ -193,7 +345,7 @@ def analyze(
                 else f"-b {name}={bind_params.get(name, '')}"
                 for name in unique_sql_binds
             )
-            suggested = f"sql-tuner analyze {src_arg} --conn {conn} -x {bind_flags}"
+            suggested = f"sqlmentor analyze {src_arg} --conn {conn} -x {bind_flags}"
             console.print(
                 f"[yellow]⚠ Binds não informados:[/yellow] {', '.join(sorted(missing))}\n"
                 f"  Execução real desabilitada. Preencha os valores e re-execute:\n"
@@ -349,6 +501,9 @@ def config_add(
     schema_name: str = typer.Option(
         None, "--schema", help="Schema padrão (default: user)."
     ),
+    timeout: int = typer.Option(
+        180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
+    ),
 ) -> None:
     """Adiciona um profile de conexão Oracle."""
     from sql_tuner.connector import add_connection
@@ -361,6 +516,7 @@ def config_add(
         user=user,
         password=password,
         schema=schema_name,
+        timeout=timeout,
     )
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
 
@@ -373,7 +529,7 @@ def config_list() -> None:
     connections = list_connections()
     if not connections:
         console.print("[yellow]Nenhuma conexão configurada.[/yellow]")
-        console.print("Use: sql-tuner config add --name <nome> --host <host> --service <service> --user <user>")
+        console.print("Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>")
         return
 
     table = Table(title="Conexões", show_header=True)
@@ -383,6 +539,7 @@ def config_list() -> None:
     table.add_column("Service")
     table.add_column("User")
     table.add_column("Schema")
+    table.add_column("Timeout")
 
     for name, cfg in connections.items():
         table.add_row(
@@ -392,6 +549,7 @@ def config_list() -> None:
             cfg.get("service", "?"),
             cfg.get("user", "?"),
             cfg.get("schema", "?"),
+            f"{cfg.get('timeout', 180)}s",
         )
 
     console.print(table)
