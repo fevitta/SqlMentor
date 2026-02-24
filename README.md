@@ -28,6 +28,9 @@ sqlmentor config add \
   --user ANALISTA \
   --schema TELTELECOM
 # (senha será solicitada de forma segura)
+
+# Definir como conexão padrão (dispensa --conn nos comandos)
+sqlmentor config set-default -n producao
 ```
 
 ### 2. Analisar um SQL
@@ -36,8 +39,17 @@ sqlmentor config add \
 # Relatório salvo em reports/ automaticamente
 sqlmentor analyze minha_query.sql --conn producao
 
+# Ou sem --conn, usando a conexão padrão
+sqlmentor analyze minha_query.sql
+
 # Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
 sqlmentor analyze minha_query.sql --conn producao --execute
+
+# Bind variables (parâmetros da query)
+sqlmentor analyze minha_query.sql --conn producao -b id=123 -b status=A
+
+# Binds com valores nulos (Oracle NULL) — aceita null ou none
+sqlmentor analyze minha_query.sql --conn producao -b obr=123 -b filtro=null -b tipo=none
 
 # Detalha views (DDL, colunas internas)
 sqlmentor analyze minha_query.sql --conn producao --expand-views
@@ -61,8 +73,9 @@ sqlmentor parse minha_query.sql --schema TELTELECOM
 ### 4. Gerenciar conexões
 
 ```bash
-sqlmentor config list
+sqlmentor config list              # mostra todas (★ marca a padrão)
 sqlmentor config test --name producao
+sqlmentor config set-default --name producao
 sqlmentor config remove --name producao
 ```
 

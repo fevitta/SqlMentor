@@ -28,7 +28,7 @@ O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que
 ## Tools Disponíveis
 
 ### list_connections
-Lista os profiles de conexão Oracle configurados. Use primeiro para saber qual `conn` passar para `analyze_sql`.
+Lista os profiles de conexão Oracle configurados. Mostra qual conexão é a padrão (campo `default: true`). Use primeiro para saber qual `conn` passar para `analyze_sql`, ou omita `conn` para usar a conexão padrão.
 
 ### test_connection
 Testa se um profile de conexão funciona. Retorna versão do banco e schema.
@@ -43,12 +43,12 @@ A tool principal. Conecta no Oracle, coleta contexto completo e retorna relatór
 
 Parâmetros importantes:
 - `sql_text`: O SQL a ser analisado
-- `conn`: Nome do profile de conexão
+- `conn`: Nome do profile de conexão. Se omitido, usa a conexão padrão definida via `sqlmentor config set-default`
 - `deep`: Coleta histogramas e partições (mais lento, mais completo)
 - `expand_views`: Detalha views referenciadas (DDL, colunas)
 - `expand_functions`: Coleta DDL de funções PL/SQL
 - `execute`: Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
-- `binds`: Bind variables no formato "nome=valor,nome2=valor2"
+- `binds`: Bind variables no formato "nome=valor,nome2=valor2". Use `null` ou `none` para parâmetros que devem ser NULL no Oracle (ex: `binds="id=123,filtro=null"`)
 - `timeout`: Timeout em segundos para operações no banco (0 = usa default do profile, 180s)
 - `normalized`: Se True, força tratamento como SQL normalizado. Na maioria dos casos não é necessário — a auto-detecção identifica `?` placeholders automaticamente. Incompatível com `execute=True`.
 - `denorm_mode`: Estratégia de desnormalização: `"literal"` (default, `?` → `'1'`) ou `"bind"` (`?` → `:dn1`, `:dn2`...). Modo bind gera plano com seletividade padrão do otimizador, sem depender de valores concretos.
@@ -58,12 +58,22 @@ Coleta contexto de um SQL já executado via sql_id, sem re-executar. Puxa plano 
 
 Parâmetros importantes:
 - `sql_id`: SQL_ID da query no shared pool Oracle
-- `conn`: Nome do profile de conexão
+- `conn`: Nome do profile de conexão. Se omitido, usa a conexão padrão
 - `deep`, `expand_views`, `expand_functions`, `timeout`: mesmos do analyze_sql
+
+## Conexão Padrão
+
+Defina uma conexão como padrão para não precisar passar `conn` toda vez:
+
+```bash
+sqlmentor config set-default -n prod
+```
+
+Depois disso, `analyze_sql`, `inspect_sql` e os comandos CLI usam essa conexão automaticamente quando `conn` é omitido. O `list_connections` mostra qual é a padrão.
 
 ## Workflow Recomendado
 
-1. Chame `list_connections` para ver os profiles disponíveis
+1. Chame `list_connections` para ver os profiles disponíveis e qual é o default
 2. Chame `parse_sql` para entender a estrutura da query
 3. Chame `analyze_sql` com as flags adequadas:
    - Primeira rodada: sem `execute`, sem `deep` (rápido, plano estimado)
@@ -104,6 +114,7 @@ Limitações:
 ### Binds faltantes com execute=True
 - A tool retorna quais binds estão faltando
 - Passe no formato: `binds="id=123,status=A"`
+- Para binds que podem ser NULL: `binds="id=123,filtro=null"` (aceita `null` ou `none`, case-insensitive)
 
 ### Plano sem ALLSTATS
 - Use `execute=True` para obter plano real com A-Rows, Buffers, A-Time

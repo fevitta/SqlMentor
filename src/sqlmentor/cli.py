@@ -79,7 +79,7 @@ def analyze(
         None, "--sql", help="SQL inline (alternativa ao arquivo)."
     ),
     conn: str = typer.Option(
-        ..., "--conn", "-c", help="Nome do profile de conexão."
+        None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
     ),
     output: Path = typer.Option(
         None, "--output", "-o", help="Arquivo de saída. Se omitido, imprime no stdout."
@@ -120,9 +120,16 @@ def analyze(
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     from sqlmentor.collector import collect_context
-    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
     from sqlmentor.report import to_json, to_markdown
+
+    # Resolve conexão (explícita > default > erro)
+    try:
+        conn = resolve_connection(conn)
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
 
     # Resolve fonte do SQL
     sql_text, source_label = _resolve_sql_input(sql_file, sql)
@@ -191,18 +198,22 @@ def analyze(
     # Remapeia bind_params pro case exato do SQL (Oracle é case-sensitive nos binds)
     if bind_params and unique_sql_binds:
         provided_upper = {k.upper(): v for k, v in bind_params.items()}
-        remapped: dict[str, str | int | float] = {}
+        remapped: dict[str, str | int | float | None] = {}
         for sql_name in unique_sql_binds:
             if sql_name.upper() in provided_upper:
                 raw_val = provided_upper[sql_name.upper()]
-                # Converte pra número se possível (evita ORA-01790 em UNION ALL)
-                try:
-                    remapped[sql_name] = int(raw_val)
-                except ValueError:
+                # Trata null/None como Python None (Oracle NULL)
+                if raw_val.lower() in ("null", "none"):
+                    remapped[sql_name] = None
+                else:
+                    # Converte pra número se possível (evita ORA-01790 em UNION ALL)
                     try:
-                        remapped[sql_name] = float(raw_val)
+                        remapped[sql_name] = int(raw_val)
                     except ValueError:
-                        remapped[sql_name] = raw_val
+                        try:
+                            remapped[sql_name] = float(raw_val)
+                        except ValueError:
+                            remapped[sql_name] = raw_val
         bind_params = remapped
 
     # Avisa se faltam binds (só relevante com --execute)
@@ -289,7 +300,7 @@ def inspect(
         ..., help="SQL_ID da query no shared pool Oracle."
     ),
     conn: str = typer.Option(
-        ..., "--conn", "-c", help="Nome do profile de conexão."
+        None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
     ),
     output: Path = typer.Option(
         None, "--output", "-o", help="Arquivo de saída. Se omitido, salva em reports/."
@@ -318,10 +329,17 @@ def inspect(
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
     from sqlmentor.collector import collect_context
-    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
+
+    # Resolve conexão (explícita > default > erro)
+    try:
+        conn = resolve_connection(conn)
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
 
     # Resolve schema
     cfg = get_connection_config(conn)
@@ -585,13 +603,15 @@ def config_add(
 @config_app.command("list")
 def config_list() -> None:
     """Lista conexões salvas."""
-    from sqlmentor.connector import list_connections
+    from sqlmentor.connector import get_default_connection, list_connections
 
     connections = list_connections()
     if not connections:
         console.print("[yellow]Nenhuma conexão configurada.[/yellow]")
         console.print("Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>")
         return
+
+    default_name = get_default_connection()
 
     table = Table(title="Conexões", show_header=True)
     table.add_column("Nome", style="bold cyan")
@@ -601,8 +621,10 @@ def config_list() -> None:
     table.add_column("User")
     table.add_column("Schema")
     table.add_column("Timeout")
+    table.add_column("Default", justify="center")
 
     for name, cfg in connections.items():
+        is_default = "★" if name == default_name else ""
         table.add_row(
             name,
             cfg.get("host", "?"),
@@ -611,9 +633,25 @@ def config_list() -> None:
             cfg.get("user", "?"),
             cfg.get("schema", "?"),
             f"{cfg.get('timeout', 180)}s",
+            is_default,
         )
 
     console.print(table)
+
+
+@config_app.command("set-default")
+def config_set_default(
+    name: str = typer.Option(..., "--name", "-n", help="Nome do profile a definir como padrão."),
+) -> None:
+    """Define uma conexão como padrão para analyze/inspect/parse."""
+    from sqlmentor.connector import set_default_connection
+
+    try:
+        set_default_connection(name)
+        console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] definida como padrão.")
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @config_app.command("test")

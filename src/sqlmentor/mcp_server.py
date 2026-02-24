@@ -30,7 +30,7 @@ def list_connections() -> str:
     de todas as conexões salvas em ~/.sqlmentor/connections.yaml.
     Use antes de analyze_sql para saber qual profile usar.
     """
-    from sqlmentor.connector import list_connections as _list
+    from sqlmentor.connector import get_default_connection, list_connections as _list
 
     connections = _list()
     if not connections:
@@ -39,6 +39,7 @@ def list_connections() -> str:
             "hint": "Nenhuma conexão configurada. Use o CLI: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>",
         })
 
+    default_name = get_default_connection()
     result = []
     for name, cfg in connections.items():
         result.append({
@@ -49,6 +50,7 @@ def list_connections() -> str:
             "user": cfg.get("user", "?"),
             "schema": cfg.get("schema", cfg.get("user", "?")).upper(),
             "timeout": cfg.get("timeout", 180),
+            "default": name == default_name,
         })
     return json.dumps({"connections": result})
 
@@ -105,7 +107,7 @@ def parse_sql(sql_text: str, schema: str = "", denorm_mode: str = "literal") -> 
 @mcp.tool()
 def analyze_sql(
     sql_text: str,
-    conn: str,
+    conn: str = "",
     schema: str = "",
     deep: bool = False,
     expand_views: bool = False,
@@ -124,7 +126,7 @@ def analyze_sql(
 
     Args:
         sql_text: O SQL completo a ser analisado.
-        conn: Nome do profile de conexão Oracle (use list_connections para ver disponíveis).
+        conn: Nome do profile de conexão Oracle. Se omitido, usa a conexão padrão (use list_connections para ver disponíveis e qual é o default).
         schema: Schema padrão (sobrescreve o do profile). Opcional.
         deep: Se True, coleta histogramas e partições (mais lento, mais completo).
         expand_views: Se True, coleta DDL e colunas de views referenciadas.
@@ -139,9 +141,15 @@ def analyze_sql(
     import re
 
     from sqlmentor.collector import collect_context
-    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql as _parse
     from sqlmentor.report import to_json, to_markdown
+
+    # Resolve conexão (explícita > default > erro)
+    try:
+        conn = resolve_connection(conn or None)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
     # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
     if not normalized and is_normalized_sql(sql_text):
@@ -168,7 +176,7 @@ def analyze_sql(
         return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
 
     # Parseia binds
-    bind_params: dict[str, str | int | float] = {}
+    bind_params: dict[str, str | int | float | None] = {}
     if binds:
         for pair in binds.split(","):
             pair = pair.strip()
@@ -176,13 +184,17 @@ def analyze_sql(
                 continue
             key, val = pair.split("=", 1)
             key, val = key.strip(), val.strip()
-            try:
-                bind_params[key] = int(val)
-            except ValueError:
+            # Trata null/None como Python None (Oracle NULL)
+            if val.lower() in ("null", "none"):
+                bind_params[key] = None
+            else:
                 try:
-                    bind_params[key] = float(val)
+                    bind_params[key] = int(val)
                 except ValueError:
-                    bind_params[key] = val
+                    try:
+                        bind_params[key] = float(val)
+                    except ValueError:
+                        bind_params[key] = val
 
     # Detecta binds no SQL e remapeia case
     sql_bind_names = re.findall(r'(?<!:):([A-Za-z_]\w*)', sql_text)
@@ -195,7 +207,7 @@ def analyze_sql(
 
     if bind_params and unique_sql_binds:
         provided_upper = {k.upper(): v for k, v in bind_params.items()}
-        remapped: dict[str, str | int | float] = {}
+        remapped: dict[str, str | int | float | None] = {}
         for sql_name in unique_sql_binds:
             if sql_name.upper() in provided_upper:
                 remapped[sql_name] = provided_upper[sql_name.upper()]
@@ -243,7 +255,7 @@ def analyze_sql(
 @mcp.tool()
 def inspect_sql(
     sql_id: str,
-    conn: str,
+    conn: str = "",
     schema: str = "",
     deep: bool = False,
     expand_views: bool = False,
@@ -258,7 +270,7 @@ def inspect_sql(
 
     Args:
         sql_id: SQL_ID da query no shared pool Oracle (ex: "abc123def").
-        conn: Nome do profile de conexão Oracle.
+        conn: Nome do profile de conexão Oracle. Se omitido, usa a conexão padrão.
         schema: Schema padrão (sobrescreve o do profile). Opcional.
         deep: Se True, coleta histogramas e partições.
         expand_views: Se True, coleta DDL e colunas de views.
@@ -267,10 +279,16 @@ def inspect_sql(
         timeout: Timeout em segundos. 0 = usa default do profile (180s).
     """
     from sqlmentor.collector import collect_context
-    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
+
+    # Resolve conexão (explícita > default > erro)
+    try:
+        conn = resolve_connection(conn or None)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
 
     cfg = get_connection_config(conn)
     effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())

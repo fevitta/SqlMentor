@@ -34,6 +34,7 @@ CLI e MCP Server são interfaces sobre o mesmo core. Ao adicionar, remover ou al
 1. `src/sqlmentor/cli.py` — comando CLI
 2. `src/sqlmentor/mcp_server.py` — tool MCP equivalente
 3. `powers/sqlmentor/POWER.md` — documentação da tool
+4. `README.md` — exemplos de uso, tabela de flags, lista de subcomandos
 
 Exceções: `config` e `doctor` são só CLI; `list_connections` e `test_connection` são só MCP.
 

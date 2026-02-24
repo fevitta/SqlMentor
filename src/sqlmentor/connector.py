@@ -128,6 +128,74 @@ def get_connection_config(name: str) -> dict[str, Any]:
         raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
     return connections[name]
 
+
+def set_default_connection(name: str) -> None:
+    """Define um profile como conexão padrão."""
+    connections = _load_connections()
+    if name not in connections:
+        raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
+    # Remove default anterior
+    for cfg in connections.values():
+        cfg.pop("default", None)
+    connections[name]["default"] = True
+    _save_connections(connections)
+
+
+def get_default_connection() -> str | None:
+    """Retorna o nome do profile marcado como padrão, ou None."""
+    connections = _load_connections()
+    for name, cfg in connections.items():
+        if cfg.get("default"):
+            return name
+    return None
+
+
+def resolve_connection(conn: str | None) -> str:
+    """Resolve o nome da conexão: explícito > default > erro."""
+    if conn:
+        return conn
+    default = get_default_connection()
+    if default:
+        return default
+    raise ValueError(
+        "Nenhuma conexão informada e nenhuma conexão padrão definida.\n"
+        "Use --conn <profile> ou defina um default: sqlmentor config set-default -n <profile>"
+    )
+
+def set_default_connection(name: str) -> None:
+    """Define um profile como conexão padrão."""
+    connections = _load_connections()
+    if name not in connections:
+        raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
+    # Remove default anterior
+    for cfg in connections.values():
+        cfg.pop("default", None)
+    connections[name]["default"] = True
+    _save_connections(connections)
+
+
+def get_default_connection() -> str | None:
+    """Retorna o nome do profile marcado como padrão, ou None."""
+    connections = _load_connections()
+    for name, cfg in connections.items():
+        if cfg.get("default"):
+            return name
+    return None
+
+
+def resolve_connection(conn: str | None) -> str:
+    """Resolve o nome da conexão: explícito > default > erro."""
+    if conn:
+        return conn
+    default = get_default_connection()
+    if default:
+        return default
+    raise ValueError(
+        "Nenhuma conexão informada e nenhuma conexão padrão definida.\n"
+        "Use --conn <profile> ou defina um default: sqlmentor config set-default -n <profile>"
+    )
+
+
 _thick_mode_initialized = False
 
 
