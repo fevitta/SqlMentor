@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
+# Tabelas de sistema Oracle que não devem ser coletadas como objetos do usuário
+_ORACLE_SYSTEM_TABLES = frozenset({"DUAL"})
+
 
 @dataclass
 class ParsedSQL:
@@ -144,10 +147,13 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
             if cte_alias:
                 result.cte_names.add(cte_alias.upper())
 
-        # Extrai tabelas (ignorando referências a CTEs)
+        # Extrai tabelas (ignorando referências a CTEs e tabelas de sistema)
         for table in statement.find_all(exp.Table):
             # CTE nunca tem schema; se o nome bate com uma CTE, pula
             if not table.db and table.name and table.name.upper() in result.cte_names:
+                continue
+            # Ignora tabelas de sistema Oracle (DUAL, etc.)
+            if table.name and table.name.upper() in _ORACLE_SYSTEM_TABLES:
                 continue
             table_info = {
                 "name": table.name,
