@@ -169,6 +169,7 @@ Para cada recomendação, em ordem de impacto:
 - **Hints são diagnóstico, não solução**: nunca entregue hint como correção permanente.
 - **Seja honesto**: se o SQL já está razoável, diga. Se faltam dados, diga.
 - **Oracle 11g**: valide se o recurso sugerido existe na versão. Na dúvida, recomende testar.
+- **Não assuma existência de objetos**: se uma coluna, tabela, view, índice ou qualquer objeto não aparece explicitamente no relatório, **não presuma que existe**. Colunas omitidas do relatório foram omitidas porque não foram referenciadas — isso não significa que existem na tabela. Se uma recomendação depende de um objeto cuja existência não está confirmada no relatório, diga explicitamente "verifique se X existe antes de aplicar" em vez de assumir que existe.
 
 ## Usando as tools do sqlmentor para coletar dados faltantes
 
