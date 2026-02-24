@@ -29,14 +29,14 @@ class ParsedSQL:
 
     @property
     def table_names(self) -> list[str]:
-        """Lista simplificada de nomes de tabelas (schema.table ou table)."""
+        """Lista simplificada de nomes de tabelas (schema.table ou table), ordenada."""
         result = []
         for t in self.tables:
             if t.get("schema"):
                 result.append(f"{t['schema']}.{t['name']}")
             else:
                 result.append(t["name"])
-        return list(set(result))
+        return sorted(set(result))
 
 
 

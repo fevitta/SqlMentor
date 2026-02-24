@@ -31,17 +31,17 @@ def to_markdown(ctx: CollectedContext) -> str:
     lines.append(f"**Tabelas referenciadas:** {', '.join(ctx.parsed_sql.table_names)}")
 
     if ctx.parsed_sql.where_columns:
-        lines.append(f"**Colunas em WHERE:** {', '.join(ctx.parsed_sql.where_columns)}")
+        lines.append(f"**Colunas em WHERE:** {', '.join(sorted(set(ctx.parsed_sql.where_columns)))}")
     if ctx.parsed_sql.join_columns:
-        lines.append(f"**Colunas em JOIN:** {', '.join(ctx.parsed_sql.join_columns)}")
+        lines.append(f"**Colunas em JOIN:** {', '.join(sorted(set(ctx.parsed_sql.join_columns)))}")
     if ctx.parsed_sql.order_columns:
-        lines.append(f"**Colunas em ORDER BY:** {', '.join(ctx.parsed_sql.order_columns)}")
+        lines.append(f"**Colunas em ORDER BY:** {', '.join(sorted(set(ctx.parsed_sql.order_columns)))}")
     if ctx.parsed_sql.group_columns:
-        lines.append(f"**Colunas em GROUP BY:** {', '.join(ctx.parsed_sql.group_columns)}")
+        lines.append(f"**Colunas em GROUP BY:** {', '.join(sorted(set(ctx.parsed_sql.group_columns)))}")
     if ctx.parsed_sql.subqueries:
         lines.append(f"**Subqueries:** {ctx.parsed_sql.subqueries}")
     if ctx.parsed_sql.functions:
-        func_names = [f"{f['schema']}.{f['name']}" for f in ctx.parsed_sql.functions]
+        func_names = sorted(f"{f['schema']}.{f['name']}" for f in ctx.parsed_sql.functions)
         lines.append(f"**Funções PL/SQL:** {', '.join(func_names)}")
 
     lines.append("")
@@ -194,6 +194,10 @@ def to_markdown(ctx: CollectedContext) -> str:
             normal_tables.append(table)
         else:
             small_tables.append(table)
+
+    # Ordena pra garantir saída determinística entre execuções
+    normal_tables.sort(key=lambda t: f"{t.schema}.{t.name}")
+    small_tables.sort(key=lambda t: f"{t.schema}.{t.name}")
 
     for table in normal_tables:
         obj_label = "View" if table.object_type == "VIEW" else "Tabela"
@@ -419,12 +423,12 @@ def to_json(ctx: CollectedContext) -> str:
             "raw": ctx.parsed_sql.raw_sql,
             "type": ctx.parsed_sql.sql_type,
             "tables": ctx.parsed_sql.table_names,
-            "where_columns": ctx.parsed_sql.where_columns,
-            "join_columns": ctx.parsed_sql.join_columns,
-            "order_columns": ctx.parsed_sql.order_columns,
-            "group_columns": ctx.parsed_sql.group_columns,
+            "where_columns": sorted(set(ctx.parsed_sql.where_columns)),
+            "join_columns": sorted(set(ctx.parsed_sql.join_columns)),
+            "order_columns": sorted(set(ctx.parsed_sql.order_columns)),
+            "group_columns": sorted(set(ctx.parsed_sql.group_columns)),
             "subqueries": ctx.parsed_sql.subqueries,
-            "functions": [f"{f['schema']}.{f['name']}" for f in ctx.parsed_sql.functions],
+            "functions": sorted(f"{f['schema']}.{f['name']}" for f in ctx.parsed_sql.functions),
         },
         "execution_plan": ctx.execution_plan,
         "runtime_plan": ctx.runtime_plan,
@@ -432,7 +436,7 @@ def to_json(ctx: CollectedContext) -> str:
         "wait_events": ctx.wait_events,
         "view_expansions": ctx.view_expansions,
         "function_ddls": ctx.function_ddls,
-        "tables": [_table_to_dict(t) for t in ctx.tables],
+        "tables": [_table_to_dict(t) for t in sorted(ctx.tables, key=lambda t: f"{t.schema}.{t.name}")],
         "optimizer_params": ctx.optimizer_params,
         "errors": ctx.errors,
     }

@@ -482,7 +482,7 @@ def _print_summary(ctx) -> None:
             f"[green]{len(ctx.wait_events)}[/green]",
         )
 
-    for t in ctx.tables:
+    for t in sorted(ctx.tables, key=lambda t: f"{t.schema}.{t.name}"):
         is_view = t.object_type == "VIEW"
         obj_label = "View" if is_view else "Tabela"
         expanded = bool(t.ddl or t.columns)
