@@ -30,7 +30,7 @@ def list_connections() -> str:
     de todas as conexões salvas em ~/.sqlmentor/connections.yaml.
     Use antes de analyze_sql para saber qual profile usar.
     """
-    from sql_tuner.connector import list_connections as _list
+    from sqlmentor.connector import list_connections as _list
 
     connections = _list()
     if not connections:
@@ -60,7 +60,7 @@ def test_connection(conn: str) -> str:
     Args:
         conn: Nome do profile de conexão (ex: "prod", "dev").
     """
-    from sql_tuner.connector import test_connection as _test
+    from sqlmentor.connector import test_connection as _test
 
     try:
         info = _test(conn)
@@ -70,16 +70,22 @@ def test_connection(conn: str) -> str:
 
 
 @mcp.tool()
-def parse_sql(sql_text: str, schema: str = "") -> str:
+def parse_sql(sql_text: str, schema: str = "", denorm_mode: str = "literal") -> str:
     """Parse offline de SQL — extrai tabelas, colunas, joins, subqueries sem conectar no banco.
 
     Útil para entender a estrutura da query antes de decidir se precisa de conexão.
+    Auto-detecta SQL normalizado (Datadog, OEM, etc.) e desnormaliza antes do parse.
 
     Args:
         sql_text: O SQL completo (SELECT, INSERT, UPDATE, DELETE, ou bloco PL/SQL).
         schema: Schema padrão para tabelas não qualificadas (opcional).
+        denorm_mode: Estratégia de desnormalização se SQL normalizado: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...).
     """
-    from sql_tuner.parser import parse_sql as _parse
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql as _parse
+
+    # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
+    if is_normalized_sql(sql_text):
+        sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
     parsed = _parse(sql_text, default_schema=schema or None)
     return json.dumps({
@@ -108,6 +114,8 @@ def analyze_sql(
     binds: str = "",
     output_format: str = "markdown",
     timeout: int = 0,
+    normalized: bool = False,
+    denorm_mode: str = "literal",
 ) -> str:
     """Analisa um SQL conectando no Oracle e coleta contexto completo para tuning.
 
@@ -125,15 +133,30 @@ def analyze_sql(
         binds: Bind variables no formato "nome=valor,nome2=valor2". Necessário com execute=True se o SQL usa :param.
         output_format: "markdown" (padrão, otimizado pra LLM) ou "json" (pra integração).
         timeout: Timeout em segundos para operações no banco. 0 = usa o default do profile (180s).
+        normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido. Incompatível com execute=True.
+        denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
     """
     import re
 
-    from sql_tuner.collector import collect_context
-    from sql_tuner.connector import connect, get_connection_config
-    from sql_tuner.parser import parse_sql as _parse
-    from sql_tuner.report import to_json, to_markdown
+    from sqlmentor.collector import collect_context
+    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql as _parse
+    from sqlmentor.report import to_json, to_markdown
 
-    # Parse
+    # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
+    if not normalized and is_normalized_sql(sql_text):
+        normalized = True
+
+    # Desnormaliza SQL se veio de ferramenta de monitoramento
+    if normalized:
+        if execute:
+            return json.dumps({
+                "error": "SQL normalizado detectado (placeholders '?'). Incompatível com execute=True — os literais originais foram perdidos.",
+                "hint": "Use sem execute para obter plano estimado e metadata.",
+            })
+        sql_text, _denorm_binds = denormalize_sql(sql_text, mode=denorm_mode)
+
+    # Resolve schema
     cfg = get_connection_config(conn)
     effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
     parsed = _parse(sql_text, default_schema=effective_schema)
@@ -243,11 +266,11 @@ def inspect_sql(
         output_format: "markdown" (padrão) ou "json".
         timeout: Timeout em segundos. 0 = usa default do profile (180s).
     """
-    from sql_tuner.collector import collect_context
-    from sql_tuner.connector import connect, get_connection_config
-    from sql_tuner.parser import parse_sql as _parse
-    from sql_tuner.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
-    from sql_tuner.report import to_json, to_markdown
+    from sqlmentor.collector import collect_context
+    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.parser import parse_sql as _parse
+    from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
+    from sqlmentor.report import to_json, to_markdown
 
     cfg = get_connection_config(conn)
     effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())

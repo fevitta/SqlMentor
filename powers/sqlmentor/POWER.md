@@ -36,6 +36,8 @@ Testa se um profile de conexão funciona. Retorna versão do banco e schema.
 ### parse_sql
 Parse offline — extrai tabelas, colunas, joins, subqueries sem conectar no banco. Útil para entender a query antes de decidir o que coletar.
 
+Auto-detecta SQL normalizado (Datadog, OEM, pg_stat_statements) e desnormaliza automaticamente antes do parse.
+
 ### analyze_sql
 A tool principal. Conecta no Oracle, coleta contexto completo e retorna relatório estruturado.
 
@@ -48,6 +50,8 @@ Parâmetros importantes:
 - `execute`: Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
 - `binds`: Bind variables no formato "nome=valor,nome2=valor2"
 - `timeout`: Timeout em segundos para operações no banco (0 = usa default do profile, 180s)
+- `normalized`: Se True, força tratamento como SQL normalizado. Na maioria dos casos não é necessário — a auto-detecção identifica `?` placeholders automaticamente. Incompatível com `execute=True`.
+- `denorm_mode`: Estratégia de desnormalização: `"literal"` (default, `?` → `'1'`) ou `"bind"` (`?` → `:dn1`, `:dn2`...). Modo bind gera plano com seletividade padrão do otimizador, sem depender de valores concretos.
 
 ### inspect_sql
 Coleta contexto de um SQL já executado via sql_id, sem re-executar. Puxa plano real e métricas do shared pool Oracle. Ideal para queries longas que já rodaram.
@@ -72,12 +76,30 @@ Parâmetros importantes:
 6. Analise o relatório seguindo a metodologia do steering
 7. Se faltam dados, chame `analyze_sql` ou `inspect_sql` novamente com flags adicionais
 
+## SQL Normalizado (Datadog, OEM, pg_stat_statements)
+
+Ferramentas de monitoramento normalizam SQL substituindo literais por `?`. Isso é comum em exports do Datadog, Oracle Enterprise Manager, e pg_stat_statements.
+
+O SqlMentor detecta automaticamente SQL normalizado (2+ `?` fora de strings) e desnormaliza antes do parse e EXPLAIN PLAN. Não é necessário passar `normalized=True` na maioria dos casos.
+
+Duas estratégias de desnormalização (`denorm_mode`):
+- `"literal"` (default): substitui `?` por `'1'` (string literal). Funciona na maioria dos casos por conversão implícita do Oracle. O plano estimado pode divergir do real se o valor influenciar a cardinalidade.
+- `"bind"`: substitui `?` por bind variables Oracle (`:dn1`, `:dn2`...). O otimizador usa seletividade padrão sem depender de valores concretos — mais fiel ao comportamento de prepared statements.
+
+Limitações:
+- SQL normalizado não pode ser executado com `execute=True` — os literais originais foram perdidos
+- O plano estimado (sem execute) funciona normalmente com os literais dummy
+- Bind variables Oracle (`:param`) são preservadas e não são afetadas
+
 ## Troubleshooting
+
+### Diagnóstico do ambiente
+- Use `sqlmentor doctor` na CLI para verificar Python, oracledb, Instant Client e testar todas as conexões de uma vez.
 
 ### Erro de conexão
 - Verifique se o profile existe: `list_connections`
 - Teste a conexão: `test_connection`
-- O Oracle usa modo thin (sem Oracle Client instalado)
+- Para Oracle < 12c, é necessário o Oracle Instant Client (modo thick). O `config add` da CLI já detecta isso automaticamente.
 
 ### Binds faltantes com execute=True
 - A tool retorna quais binds estão faltando

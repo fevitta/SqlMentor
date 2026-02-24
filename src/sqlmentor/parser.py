@@ -39,6 +39,42 @@ class ParsedSQL:
         return list(set(result))
 
 
+
+
+def is_normalized_sql(sql_text: str) -> bool:
+    """
+    Detecta se o SQL parece ser normalizado (literais substituídos por '?').
+
+    Heurística: conta '?' fora de strings. Se houver 2+ ocorrências, é normalizado.
+    SQL Oracle normal não usa '?' — bind variables usam ':param'.
+
+    Args:
+        sql_text: SQL a ser verificado.
+
+    Returns:
+        True se o SQL parece normalizado.
+    """
+    count = 0
+    in_single_quote = False
+    in_double_quote = False
+
+    for ch in sql_text:
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            continue
+        if ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            continue
+        if in_single_quote or in_double_quote:
+            continue
+        if ch == '?':
+            count += 1
+            if count >= 2:
+                return True
+
+    return False
+
+
 def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
     """
     Faz parse do SQL e extrai metadata estrutural.
@@ -158,6 +194,78 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
     _extract_functions(sql_text, result, default_schema)
 
     return result
+
+def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
+    """
+    Substitui placeholders '?' de SQL normalizado (Datadog, OEM, etc.).
+
+    Ferramentas de monitoramento normalizam SQL substituindo literais por '?'.
+    Isso quebra o parser e o EXPLAIN PLAN. Esta função restaura o SQL para uma
+    forma sintaticamente válida.
+
+    Dois modos disponíveis:
+    - "literal": substitui '?' por '1' (string literal). Funciona pra parse e
+      EXPLAIN PLAN na maioria dos casos. Pode divergir do plano real se o tipo
+      do literal influenciar a estimativa de cardinalidade.
+    - "bind": substitui '?' por bind variables Oracle (:dn1, :dn2, ...).
+      O EXPLAIN PLAN usa seletividade padrão sem depender de valores concretos.
+      Retorna dict com as binds geradas (chave→None) pra passar ao cursor.
+
+    Não altera bind variables Oracle já existentes (:param, :B1) — preservadas.
+
+    Args:
+        sql_text: SQL com placeholders '?' de normalização.
+        mode: "literal" (default) ou "bind".
+
+    Returns:
+        Tupla (sql_transformado, bind_dict). bind_dict é vazio no modo literal.
+    """
+    result = []
+    binds: dict[str, None] = {}
+    bind_counter = 0
+    i = 0
+    in_single_quote = False
+    in_double_quote = False
+
+    while i < len(sql_text):
+        ch = sql_text[i]
+
+        # Rastreia strings (ignora ? dentro de strings)
+        if ch == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            result.append(ch)
+            i += 1
+            continue
+        if ch == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            result.append(ch)
+            i += 1
+            continue
+
+        # Dentro de string, copia literal
+        if in_single_quote or in_double_quote:
+            result.append(ch)
+            i += 1
+            continue
+
+        # Encontrou ? fora de string — substitui conforme modo
+        if ch == '?':
+            if mode == "bind":
+                bind_counter += 1
+                bind_name = f"dn{bind_counter}"
+                result.append(f":{bind_name}")
+                binds[bind_name] = None
+            else:
+                result.append("'1'")
+            i += 1
+            continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result), binds
+
+
 
 
 def _extract_from_plsql(

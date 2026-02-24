@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from sql_tuner.collector import CollectedContext, TableContext
+from sqlmentor.collector import CollectedContext, TableContext
 
 
 def to_markdown(ctx: CollectedContext) -> str:

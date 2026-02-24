@@ -13,8 +13,8 @@ import oracledb
 import sqlglot
 from sqlglot import exp
 
-from sql_tuner.parser import ParsedSQL
-from sql_tuner.queries import (
+from sqlmentor.parser import ParsedSQL
+from sqlmentor.queries import (
     column_stats,
     constraints,
     db_version,

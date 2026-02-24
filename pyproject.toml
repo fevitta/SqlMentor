@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-sqlmentor = "sql_tuner.cli:app"
-sqlmentor-mcp = "sql_tuner.mcp_server:main"
+sqlmentor = "sqlmentor.cli:app"
+sqlmentor-mcp = "sqlmentor.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -111,15 +111,36 @@ def analyze(
     timeout: int = typer.Option(
         None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile, default: 180)."
     ),
+    normalized: bool = typer.Option(
+        False, "--normalized", "-n", help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' antes do parse. Auto-detectado se omitido."
+    ),
+    denorm_mode: str = typer.Option(
+        "literal", "--denorm-mode", help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...)."
+    ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
-    from sql_tuner.collector import collect_context
-    from sql_tuner.connector import connect, get_connection_config
-    from sql_tuner.parser import parse_sql
-    from sql_tuner.report import to_json, to_markdown
+    from sqlmentor.collector import collect_context
+    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
+    from sqlmentor.report import to_json, to_markdown
 
     # Resolve fonte do SQL
     sql_text, source_label = _resolve_sql_input(sql_file, sql)
+
+    # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
+    if not normalized and is_normalized_sql(sql_text):
+        normalized = True
+        console.print("[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente.")
+
+    # Desnormaliza SQL se veio de ferramenta de monitoramento
+    if normalized:
+        if execute:
+            console.print(
+                "[red]Erro:[/red] SQL normalizado é incompatível com --execute. "
+                "Os literais originais foram perdidos."
+            )
+            raise typer.Exit(1)
+        sql_text, _denorm_binds = denormalize_sql(sql_text, mode=denorm_mode)
 
     # Resolve schema
     cfg = get_connection_config(conn)
@@ -296,11 +317,11 @@ def inspect(
     ),
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
-    from sql_tuner.collector import collect_context
-    from sql_tuner.connector import connect, get_connection_config
-    from sql_tuner.parser import parse_sql
-    from sql_tuner.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
-    from sql_tuner.report import to_json, to_markdown
+    from sqlmentor.collector import collect_context
+    from sqlmentor.connector import connect, get_connection_config
+    from sqlmentor.parser import parse_sql
+    from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
+    from sqlmentor.report import to_json, to_markdown
 
     # Resolve schema
     cfg = get_connection_config(conn)
@@ -516,7 +537,7 @@ def config_add(
     ),
 ) -> None:
     """Adiciona um profile de conexão Oracle."""
-    from sql_tuner.connector import add_connection
+    from sqlmentor.connector import add_connection
 
     add_connection(
         name=name,
@@ -530,11 +551,41 @@ def config_add(
     )
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
 
+    # Valida conexão e detecta versão/modo automaticamente
+    console.print(f"[cyan]Validando conexão...[/cyan]")
+    try:
+        from sqlmentor.connector import diagnose_connection
+        info = diagnose_connection(name)
+        console.print(f"[green]✓ Conectado![/green]")
+        console.print(f"  Versão: {info['version']}")
+        console.print(f"  Schema: {info['schema']}")
+        console.print(f"  Modo: [bold]{info['mode']}[/bold]")
+
+        major = int(info["major_version"])
+        if major > 0 and major < 12:
+            console.print(
+                f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
+            )
+            if info["mode"] == "thick":
+                console.print(f"  [green]✓ Thick mode ativo — tudo certo.[/green]")
+            else:
+                console.print(
+                    f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
+                    f"    https://www.oracle.com/database/technologies/instant-client.html\n"
+                    f"    Após instalar, adicione ao PATH e re-teste com: sqlmentor config test -n {name}"
+                )
+    except RuntimeError as e:
+        # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+        console.print(f"  Verifique host/porta/service/credenciais e re-teste com: sqlmentor config test -n {name}")
+
 
 @config_app.command("list")
 def config_list() -> None:
     """Lista conexões salvas."""
-    from sql_tuner.connector import list_connections
+    from sqlmentor.connector import list_connections
 
     connections = list_connections()
     if not connections:
@@ -570,7 +621,7 @@ def config_test(
     name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
 ) -> None:
     """Testa uma conexão Oracle."""
-    from sql_tuner.connector import test_connection
+    from sqlmentor.connector import test_connection
 
     console.print(f"[cyan]Testando:[/cyan] {name}...")
     try:
@@ -588,12 +639,80 @@ def config_remove(
     name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
 ) -> None:
     """Remove uma conexão."""
-    from sql_tuner.connector import remove_connection
+    from sqlmentor.connector import remove_connection
 
     if remove_connection(name):
         console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] removida.")
     else:
         console.print(f"[yellow]Conexão '{name}' não encontrada.[/yellow]")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DOCTOR
+# ═══════════════════════════════════════════════════════════════════
+
+
+@app.command()
+def doctor() -> None:
+    """Diagnóstico do ambiente: Python, oracledb, Instant Client, conexões."""
+    import platform
+    import importlib.metadata
+
+    console.print(Panel.fit("[bold]sqlmentor doctor[/bold]", border_style="cyan"))
+
+    # Python
+    py_ver = platform.python_version()
+    console.print(f"  Python: [bold]{py_ver}[/bold]")
+
+    # oracledb
+    try:
+        oradb_ver = importlib.metadata.version("oracledb")
+        console.print(f"  oracledb: [bold]{oradb_ver}[/bold]")
+    except importlib.metadata.PackageNotFoundError:
+        console.print("  oracledb: [red]não instalado[/red]")
+        return
+
+    # sqlmentor
+    from sqlmentor import __version__
+    console.print(f"  sqlmentor: [bold]{__version__}[/bold]")
+
+    # Oracle Instant Client
+    console.print("")
+    console.print("[cyan]Oracle Instant Client:[/cyan]")
+    from sqlmentor.connector import check_thick_mode_available
+    thick_info = check_thick_mode_available()
+    if thick_info["available"] == "True":
+        console.print(f"  [green]✓ Disponível[/green] — {thick_info['detail']}")
+    else:
+        console.print(f"  [yellow]✗ Não encontrado[/yellow]")
+        console.print(f"    Necessário apenas para Oracle < 12c (modo thick).")
+        console.print(f"    Download: https://www.oracle.com/database/technologies/instant-client.html")
+
+    # Conexões
+    console.print("")
+    console.print("[cyan]Conexões:[/cyan]")
+    from sqlmentor.connector import list_connections, diagnose_connection
+    connections = list_connections()
+    if not connections:
+        console.print("  [yellow]Nenhuma conexão configurada.[/yellow]")
+        return
+
+    for name, cfg in connections.items():
+        console.print(f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{cfg.get('service', '?')})")
+        try:
+            info = diagnose_connection(name)
+            major = int(info["major_version"])
+            mode_color = "green" if info["mode"] == "thin" or (info["mode"] == "thick" and major < 12) else "green"
+            console.print(f"    [green]✓ Conectado[/green] — {info['version']}")
+            console.print(f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]")
+            if major > 0 and major < 12 and info["mode"] == "thick":
+                console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
+            elif major > 0 and major < 12 and info["mode"] == "thin":
+                console.print(f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]")
+        except RuntimeError as e:
+            console.print(f"    [red]✗ {e}[/red]")
+        except Exception as e:
+            console.print(f"    [red]✗ Falha: {e}[/red]")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -613,11 +732,25 @@ def parse(
     schema: str = typer.Option(
         None, "--schema", "-s", help="Schema padrão."
     ),
+    normalized: bool = typer.Option(
+        False, "--normalized", "-n", help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' por literais dummy antes do parse."
+    ),
+    denorm_mode: str = typer.Option(
+        "literal", "--denorm-mode", help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...)."
+    ),
 ) -> None:
     """Parse offline — mostra tabelas e colunas sem conectar no banco."""
-    from sql_tuner.parser import parse_sql
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
 
     sql_text, source_label = _resolve_sql_input(sql_file, sql)
+
+    # Auto-detecção de SQL normalizado
+    if not normalized and is_normalized_sql(sql_text):
+        normalized = True
+        console.print("[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente.")
+    if normalized:
+        sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
+
     parsed = parse_sql(sql_text, default_schema=schema)
 
     console.print(Panel.fit(

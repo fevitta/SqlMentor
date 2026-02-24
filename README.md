@@ -154,7 +154,7 @@ sqlmentor/
 │       ├── mcp.json
 │       └── steering/
 │           └── analysis.md     # Metodologia de análise Oracle
-└── src/sql_tuner/
+└── src/sqlmentor/
     ├── __init__.py
     ├── cli.py                  # Entry point CLI (sqlmentor)
     ├── mcp_server.py           # Entry point MCP (sqlmentor-mcp)

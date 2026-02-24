@@ -12,7 +12,7 @@ sqlmentor/
 │       ├── mcp.json            # Config MCP apontando pro sqlmentor-mcp
 │       └── steering/
 │           └── analysis.md     # Metodologia de análise Oracle (DBA sênior)
-└── src/sql_tuner/
+└── src/sqlmentor/
     ├── __init__.py             # Versão do pacote
     ├── cli.py                  # Entry point CLI Typer (comandos: analyze, inspect, parse, config)
     ├── mcp_server.py           # Entry point MCP Server (tools: list_connections, test_connection, parse_sql, analyze_sql, inspect_sql)

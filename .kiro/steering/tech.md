@@ -21,6 +21,7 @@ sqlmentor analyze <arquivo.sql> --conn <profile>
 sqlmentor inspect <sql_id> --conn <profile>
 sqlmentor parse <arquivo.sql> --schema <SCHEMA>
 sqlmentor config add|list|test|remove
+sqlmentor doctor
 
 # MCP Server (normalmente iniciado pelo IDE, não manualmente)
 sqlmentor-mcp
@@ -30,11 +31,11 @@ sqlmentor-mcp
 
 CLI e MCP Server são interfaces sobre o mesmo core. Ao adicionar, remover ou alterar qualquer comando/tool/parâmetro, TODOS os arquivos abaixo devem ser atualizados na mesma operação:
 
-1. `src/sql_tuner/cli.py` — comando CLI
-2. `src/sql_tuner/mcp_server.py` — tool MCP equivalente
+1. `src/sqlmentor/cli.py` — comando CLI
+2. `src/sqlmentor/mcp_server.py` — tool MCP equivalente
 3. `powers/sqlmentor/POWER.md` — documentação da tool
 
-Exceções: `config` é só CLI; `list_connections` e `test_connection` são só MCP.
+Exceções: `config` e `doctor` são só CLI; `list_connections` e `test_connection` são só MCP.
 
 Nunca registrar a mesma função duas vezes com `@mcp.tool()`. Nunca editar apenas um dos arquivos sem verificar os outros dois.
 

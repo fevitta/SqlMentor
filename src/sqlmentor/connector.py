@@ -39,7 +39,7 @@ def validate_privileges(conn: oracledb.Connection) -> None:
     Raises:
         PermissionError: Se o user tiver privilégios além de leitura.
     """
-    from sql_tuner.queries import dangerous_privileges, dangerous_roles
+    from sqlmentor.queries import dangerous_privileges, dangerous_roles
 
     cursor = conn.cursor()
     problems: list[str] = []
@@ -209,6 +209,76 @@ def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
     return conn
 
 
+def diagnose_connection(name: str) -> dict[str, str]:
+    """
+    Diagnóstico completo de uma conexão: versão, modo, schema, thick mode.
+
+    Retorna dict com status, version, major_version, mode (thin/thick),
+    schema, e needs_thick (se o banco precisa de thick mode).
+    """
+    cfg = get_connection_config(name)
+    dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
+    mode = "thin"
+    needs_thick = False
+
+    try:
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+    except oracledb.DatabaseError as e:
+        if "DPY-3010" not in str(e):
+            raise
+        needs_thick = True
+        _init_thick_mode_if_available()
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+        mode = "thick"
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT banner FROM v$version WHERE ROWNUM = 1")
+        row = cursor.fetchone()
+        version = row[0] if row else "unknown"
+
+        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+        row = cursor.fetchone()
+        current_schema = row[0] if row else "unknown"
+
+        # Extrai major version (ex: "Oracle Database 11g" → 11)
+        import re
+        match = re.search(r'(\d+)', version)
+        major = int(match.group(1)) if match else 0
+
+        return {
+            "status": "ok",
+            "version": version,
+            "major_version": str(major),
+            "mode": mode,
+            "schema": current_schema,
+            "needs_thick": str(needs_thick),
+        }
+    finally:
+        conn.close()
+
+
+def check_thick_mode_available() -> dict[str, str]:
+    """
+    Verifica se o Oracle Instant Client está disponível no ambiente.
+
+    Retorna dict com available (bool como str) e detalhes.
+    """
+    global _thick_mode_initialized
+    if _thick_mode_initialized:
+        return {"available": "True", "detail": "Thick mode já inicializado"}
+    try:
+        oracledb.init_oracle_client()
+        _thick_mode_initialized = True
+        return {"available": "True", "detail": "Oracle Instant Client encontrado"}
+    except Exception as e:
+        return {"available": "False", "detail": str(e)}
+
+
 def test_connection(name: str) -> dict[str, str]:
     """Testa conexão e retorna info do banco."""
     conn = connect(name)
@@ -225,3 +295,110 @@ def test_connection(name: str) -> dict[str, str]:
         return {"status": "ok", "version": version, "schema": current_schema}
     finally:
         conn.close()
+def diagnose_connection(name: str) -> dict[str, str]:
+    """
+    Diagnóstico completo de uma conexão: versão, modo, schema, thick mode.
+
+    Retorna dict com status, version, major_version, mode (thin/thick),
+    schema, e needs_thick (se o banco precisa de thick mode).
+    """
+    cfg = get_connection_config(name)
+    dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
+    mode = "thin"
+    needs_thick = False
+
+    try:
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+    except oracledb.DatabaseError as e:
+        if "DPY-3010" not in str(e):
+            raise
+        needs_thick = True
+        _init_thick_mode_if_available()
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+        mode = "thick"
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT banner FROM v$version WHERE ROWNUM = 1")
+        row = cursor.fetchone()
+        version = row[0] if row else "unknown"
+
+        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+        row = cursor.fetchone()
+        current_schema = row[0] if row else "unknown"
+
+        # Extrai major version (ex: "Oracle Database 11g" → 11)
+        import re
+        match = re.search(r'(\d+)', version)
+        major = int(match.group(1)) if match else 0
+
+        return {
+            "status": "ok",
+            "version": version,
+            "major_version": str(major),
+            "mode": mode,
+            "schema": current_schema,
+            "needs_thick": str(needs_thick),
+        }
+    finally:
+        conn.close()
+
+
+
+
+def diagnose_connection(name: str) -> dict[str, str]:
+    """
+    Diagnóstico completo de uma conexão: versão, modo, schema, thick mode.
+
+    Retorna dict com status, version, major_version, mode (thin/thick),
+    schema, e needs_thick (se o banco precisa de thick mode).
+    """
+    cfg = get_connection_config(name)
+    dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
+    mode = "thin"
+    needs_thick = False
+
+    try:
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+    except oracledb.DatabaseError as e:
+        if "DPY-3010" not in str(e):
+            raise
+        needs_thick = True
+        _init_thick_mode_if_available()
+        conn = oracledb.connect(
+            user=cfg["user"], password=cfg["password"], dsn=dsn,
+        )
+        mode = "thick"
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT banner FROM v$version WHERE ROWNUM = 1")
+        row = cursor.fetchone()
+        version = row[0] if row else "unknown"
+
+        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
+        row = cursor.fetchone()
+        current_schema = row[0] if row else "unknown"
+
+        # Extrai major version (ex: "Oracle Database 11g" → 11)
+        import re
+        match = re.search(r'(\d+)', version)
+        major = int(match.group(1)) if match else 0
+
+        return {
+            "status": "ok",
+            "version": version,
+            "major_version": str(major),
+            "mode": mode,
+            "schema": current_schema,
+            "needs_thick": str(needs_thick),
+        }
+    finally:
+        conn.close()
+
