@@ -531,6 +531,13 @@ def _print_summary(ctx) -> None:
 
     console.print(table)
 
+    # Detalha erros no console após o resumo
+    if ctx.errors:
+        console.print("")
+        for err in ctx.errors:
+            for line in err.split('\n'):
+                console.print(f"  [red]⚠[/red] {line}")
+
 
 # ═══════════════════════════════════════════════════════════════════
 # CONFIG

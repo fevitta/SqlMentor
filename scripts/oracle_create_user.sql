@@ -41,6 +41,32 @@ GRANT CREATE SESSION, SELECT_CATALOG_ROLE TO &&TUNER_USER;
 GRANT SELECT ANY TABLE TO &&TUNER_USER;
 
 -- =============================================================================
+-- ROLE PARA FUNÇÕES PL/SQL
+-- =============================================================================
+-- O EXPLAIN PLAN precisa de EXECUTE nas funções PL/SQL referenciadas nos SQLs.
+-- Crie a role e adicione grants conforme os SQLs que serão analisados.
+--
+-- Exemplo:
+--   GRANT EXECUTE ON SCHEMA.FNC_GET_DOC_TYPE TO SQLMENTOR_EXEC_ROLE;
+--   GRANT EXECUTE ON SCHEMA.FNC_GET_STATUS_BY_CODE TO SQLMENTOR_EXEC_ROLE;
+--
+-- Se o EXPLAIN PLAN falhar com ORA-01031, o sqlmentor mostra a linha do SQL
+-- com a função que precisa de grant.
+-- =============================================================================
+
+DECLARE
+    v_exists NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO v_exists FROM dba_roles WHERE role = 'SQLMENTOR_EXEC_ROLE';
+    IF v_exists = 0 THEN
+        EXECUTE IMMEDIATE 'CREATE ROLE SQLMENTOR_EXEC_ROLE';
+    END IF;
+END;
+/
+
+GRANT SQLMENTOR_EXEC_ROLE TO &&TUNER_USER;
+
+-- =============================================================================
 -- VALIDAÇÃO
 -- =============================================================================
 
@@ -74,6 +100,10 @@ BEGIN
     SELECT COUNT(*) INTO v FROM dba_sys_privs
     WHERE grantee = UPPER('&&TUNER_USER') AND privilege = 'SELECT ANY TABLE';
     chk('SELECT ANY TABLE', v > 0);
+
+    SELECT COUNT(*) INTO v FROM dba_role_privs
+    WHERE grantee = UPPER('&&TUNER_USER') AND granted_role = 'SQLMENTOR_EXEC_ROLE';
+    chk('SQLMENTOR_EXEC_ROLE', v > 0);
 
     DBMS_OUTPUT.PUT_LINE('============================================');
     DBMS_OUTPUT.PUT_LINE('');

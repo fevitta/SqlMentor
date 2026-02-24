@@ -334,19 +334,52 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
 
 
 
+def _inline_binds(sql_text: str, bind_params: dict | None) -> str:
+    """Substitui :bind por literais no SQL para uso em EXPLAIN PLAN (DDL).
+
+    EXPLAIN PLAN FOR é DDL — Oracle não aceita bind variables via cursor.execute().
+    Precisamos injetar os valores como literais diretamente no texto SQL.
+    Isso é seguro porque o EXPLAIN PLAN não modifica dados.
+    """
+    if not bind_params:
+        return sql_text
+
+    import re
+
+    def _replacer(match: re.Match) -> str:
+        name = match.group(1)
+        # Busca case-insensitive
+        for k, v in bind_params.items():
+            if k.upper() == name.upper():
+                if v is None:
+                    return "NULL"
+                if isinstance(v, (int, float)):
+                    return str(v)
+                # String: escapa aspas simples
+                return f"'{str(v).replace(chr(39), chr(39)+chr(39))}'"
+        # Bind não fornecido — substitui por NULL pra não quebrar o EXPLAIN
+        return "NULL"
+
+    return re.sub(r'(?<!:):([A-Za-z_]\w*)', _replacer, sql_text)
+
+
 def _collect_explain_plan(
     cursor: oracledb.Cursor, sql_text: str, ctx: CollectedContext,
     bind_params: dict[str, str] | None = None,
 ) -> list[str] | None:
-    """Coleta o plano de execução."""
-    try:
-        steps = explain_plan(sql_text)
+    """Coleta o plano de execução.
 
-        # Step 1: EXPLAIN PLAN FOR ...
-        # EXPLAIN PLAN FOR aceita binds — Oracle resolve como literals no plano
-        sql, params = steps[0]
-        params.update(bind_params or {})
-        cursor.execute(sql, params)
+    EXPLAIN PLAN FOR é DDL e não aceita bind variables via cursor.execute().
+    Os binds são substituídos por literais diretamente no SQL.
+    """
+    try:
+        # Substitui binds por literais (EXPLAIN PLAN é DDL, não aceita binds)
+        inlined_sql = _inline_binds(sql_text, bind_params)
+        steps = explain_plan(inlined_sql)
+
+        # Step 1: EXPLAIN PLAN FOR ... (sem binds, já inlined)
+        explain_stmt, params = steps[0]
+        cursor.execute(explain_stmt, params)
 
         # Step 2: Busca resultado
         sql, params = steps[1]
@@ -359,7 +392,38 @@ def _collect_explain_plan(
 
         return plan_lines
     except Exception as e:
-        ctx.errors.append(f"Erro ao coletar EXPLAIN PLAN: {e}")
+        msg = f"Erro ao coletar EXPLAIN PLAN: {e}"
+        # Extrai offset do erro Oracle pra indicar a linha problemática
+        if hasattr(e, 'args') and e.args and hasattr(e.args[0], 'offset'):
+            offset = e.args[0].offset
+            if offset and offset > 0:
+                # O offset é relativo ao explain_stmt completo
+                # Desconta o prefixo "EXPLAIN PLAN SET STATEMENT_ID = '...' FOR "
+                prefix_len = len(explain_stmt) - len(inlined_sql)
+                adj_offset = offset - prefix_len
+                if 0 <= adj_offset < len(inlined_sql):
+                    # Calcula linha e coluna no SQL com binds inlined
+                    before = inlined_sql[:adj_offset]
+                    line_no = before.count('\n') + 1
+                    line_start = before.rfind('\n') + 1
+                    line_end = inlined_sql.find('\n', adj_offset)
+                    if line_end == -1:
+                        line_end = len(inlined_sql)
+                    offending_line = inlined_sql[line_start:line_end].strip()
+                    msg += f'\n- Line {line_no}: "{offending_line}"'
+
+        # Sugere GRANTs de EXECUTE pra funções PL/SQL quando ORA-01031
+        err_code = getattr(e.args[0], 'code', 0) if e.args else 0
+        if err_code == 1031 and ctx.parsed_sql.functions:
+            msg += "\nHelp: https://docs.oracle.com/error-help/db/ora-01031/"
+            msg += "\nFix: conceda EXECUTE nas funções PL/SQL referenciadas:"
+            for fn in ctx.parsed_sql.functions:
+                schema = fn.get("schema", "")
+                name = fn.get("name", "")
+                qualified = f"{schema}.{name}" if schema else name
+                msg += f"\n  GRANT EXECUTE ON {qualified} TO SQLMENTOR_EXEC_ROLE;"
+
+        ctx.errors.append(msg)
         return None
 
 
