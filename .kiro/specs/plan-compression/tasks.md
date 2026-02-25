@@ -22,12 +22,17 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
   - _Requirements: 1.1–1.6, 10.1–10.6_
 
 - [ ] 6. Corrigir bug em to_markdown — separação de plan_lines/predicate_lines e chamada de _compress_plan
-  - Em `to_markdown()`, após `_prune_orphan_predicates`, o `plan_cleaned` contém plano e predicados misturados numa única lista. `_compress_plan` espera os dois separados.
-  - Implementar função auxiliar `_split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]` que divide a lista em `plan_lines` (antes da seção `Predicate Information`) e `predicate_lines` (a partir da linha `Predicate Information` inclusive)
-  - Chamar `_split_plan_predicates(plan_cleaned)` antes de `_compress_plan`
-  - Corrigir a chamada para `plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)`
-  - Reconstruir o output concatenando `plan_compressed + pred_compressed` para renderizar no bloco de código do relatório
   - _Requirements: 9.1, 9.4, 9.5_
+  - [ ] 6.1 Implementar `_split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]`
+    - Divide a lista em `plan_lines` (antes da seção `Predicate Information`) e `predicate_lines` (a partir da linha `Predicate Information` inclusive)
+    - _Requirements: 9.4_
+  - [ ] 6.2 Integrar `_split_plan_predicates` em `to_markdown`
+    - Chamar `_split_plan_predicates(plan_cleaned)` após `_prune_orphan_predicates`
+    - Corrigir a chamada para `plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)`
+    - _Requirements: 9.1, 9.5_
+  - [ ] 6.3 Reconstruir output de `to_markdown`
+    - Concatenar `plan_compressed + pred_compressed` para renderizar no bloco de código do relatório
+    - _Requirements: 9.5_
 
 - [ ] 7. Adicionar hypothesis como dev dependency e criar estrutura de testes
   - Adicionar `hypothesis>=6.0` em `[project.optional-dependencies]` ou `[project.dependency-groups]` no `pyproject.toml`
@@ -160,10 +165,15 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
     - Estratégia: `to_markdown(ctx, "full")` chamado duas vezes produz output idêntico
 
 - [ ] 13. Teste de integração com fixture de plano real
-  - Usar fixture `tests/fixtures/sample_plan.txt` (ou equivalente)
-  - Verificar que `compact` produz menos linhas que `full` para o plano real
-  - Verificar que `full` produz output idêntico ao baseline (regressão)
   - _Requirements: 1.2, 1.3, 10.1, 10.2_
+  - [ ] 13.1 Criar fixture `tests/fixtures/sample_plan.txt`
+    - Copiar ou criar um plano de execução real (anonimizado, sem dados de produção) para uso nos testes de integração
+  - [ ] 13.2 Verificar que `compact` produz menos linhas que `full`
+    - Usar a fixture criada em 13.1 e assert `len(compact_lines) < len(full_lines)`
+    - _Requirements: 1.3_
+  - [ ] 13.3 Verificar regressão de `full` contra baseline
+    - Gerar baseline do output `full` e verificar que chamadas subsequentes produzem output idêntico
+    - _Requirements: 1.2, 10.1, 10.2_
 
 - [ ] 14. Checkpoint final — Garantir que todos os testes passam
   - Garantir que todos os testes passam, perguntar ao usuário se houver dúvidas.
