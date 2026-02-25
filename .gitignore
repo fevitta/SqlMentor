@@ -6,6 +6,12 @@ dist/
 build/
 *.egg
 
+# Hypothesis (property-based testing)
+.hypothesis/
+
+# Pytest
+.pytest_cache/
+
 # Virtual environments
 .venv/
 venv/
