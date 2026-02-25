@@ -22,6 +22,7 @@ from sqlmentor.report import (
     _collapse_vw_usuario_null,
     _compress_plan,
     _detect_plan_blocks,
+    _split_plan_predicates,
 )
 
 # ─── Estratégias Hypothesis ───────────────────────────────────────
@@ -283,21 +284,136 @@ def test_no_silent_pruning(blocks: list):
         )
 #
 # Tarefa 11.2 — Property 5: Consistência de predicados
-#   @given(predicate_lines=st.lists(st.text()), collapsed_ids=st.frozensets(st.text()))
-#   def test_predicate_consistency(predicate_lines, collapsed_ids): ...
-#
+import re as _re_module
+
+
+@given(
+    pred_entries=st.lists(
+        st.from_regex(r'   \d{1,3} - (access|filter)\([^)]+\)', fullmatch=True),
+        min_size=0,
+        max_size=20,
+    ),
+    collapsed_ids=st.frozensets(st.from_regex(r'\d{1,3}', fullmatch=True), max_size=5),
+)
+@settings(max_examples=300)
+def test_predicate_consistency(pred_entries, collapsed_ids):
+    """
+    Property 5: Consistência de predicados.
+    Validates: Requirements 7.1, 7.4
+
+    A função só filtra predicados dentro da seção "Predicate Information",
+    portanto o header é sempre incluído para ativar o modo de filtragem.
+    """
+    # Sempre inclui o header para que a função entre no modo de filtragem
+    predicate_lines = ["Predicate Information (identified by operation id):"] + list(pred_entries)
+
+    result = _collapse_orphan_predicates_by_ids(predicate_lines, set(collapsed_ids))
+    assert isinstance(result, list)
+
+    _PRED_ID = _re_module.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+    for line in result:
+        m = _PRED_ID.match(line.strip() if isinstance(line, str) else "")
+        if m:
+            assert m.group(1) not in collapsed_ids, (
+                f"Linha com ID colapsado encontrada no resultado: {line!r}"
+            )
+
+
 # Tarefa 11.4 — Property 12: Nota de IDs não sequenciais
-#   @given(plan_lines=st.lists(plan_block_line()))
-#   def test_nonsequential_id_note(plan_lines): ...
-#
+@given(
+    ids=st.lists(
+        st.integers(min_value=1, max_value=100),
+        min_size=0,
+        max_size=20,
+        unique=True,
+    ).map(sorted)
+)
+@settings(max_examples=300)
+def test_nonsequential_id_note(ids):
+    """
+    Property 12: Nota de IDs não sequenciais.
+    Validates: Requirements 8.1, 8.2
+    """
+    plan_lines = ["Plan hash value: 9999999"]
+    for id_val in ids:
+        plan_lines.append(
+            f"|   {id_val} | TABLE ACCESS FULL       | T                            |"
+            f"     1 |     1 |      1 |00:00:00.01 |       1 |       0 |"
+        )
+
+    result = _add_nonsequential_id_note(plan_lines)
+
+    has_gaps = any(ids[i + 1] - ids[i] > 1 for i in range(len(ids) - 1)) if len(ids) > 1 else False
+
+    note_present = any("IDs não sequenciais" in line for line in result)
+
+    if has_gaps:
+        assert note_present, f"Nota ausente para IDs com salto: {ids}"
+    else:
+        assert not note_present, f"Nota inserida indevidamente para IDs sequenciais: {ids}"
+
+
 # Tarefa 11.6 — Property 10: IDs colapsados ausentes do plano reconstruído
-#   @given(plan_lines=st.lists(plan_block_line()), verbosity=st.sampled_from(["compact", "minimal"]))
-#   def test_collapsed_ids_absent(plan_lines, verbosity): ...
-#
+@given(
+    blocks=st.lists(valid_plan_block(), min_size=0, max_size=20),
+    verbosity=st.sampled_from(["compact", "minimal"]),
+)
+@settings(max_examples=200)
+def test_collapsed_ids_absent_from_reconstructed_plan(blocks, verbosity):
+    """
+    Property 10: IDs colapsados ausentes do plano reconstruído.
+    Validates: Requirements 9.3, 9.5
+    """
+    plan_lines = ["Plan hash value: 9999999"]
+    for b in blocks:
+        plan_lines.append(_format_plan_block_line(b))
+
+    result_plan, _result_preds = _compress_plan(plan_lines, [], verbosity)
+
+    _apply_thresholds(blocks)
+    all_collapses = (
+        _collapse_config_fields(blocks)
+        + _collapse_situation_history(blocks, {})
+        + _collapse_vw_usuario_null(blocks)
+    )
+    all_collapsed_ids = {cid for cr in all_collapses for cid in cr.collapsed_ids}
+
+    _PLAN_ID_RE = _re_module.compile(r'\|\*?\s*(\d+)\s*\|')
+    for line in result_plan:
+        m = _PLAN_ID_RE.match(line)
+        if m:
+            assert m.group(1) not in all_collapsed_ids, (
+                f"ID colapsado {m.group(1)!r} encontrado no plano reconstruído"
+            )
+
+    for cr in all_collapses:
+        summary_count = sum(
+            1 for line in result_plan
+            if line.startswith("[COLAPSADO:") and line in cr.replacement_lines
+        )
+        if cr.collapsed_ids:
+            assert summary_count <= 1, (
+                f"CollapseResult emitiu {summary_count} resumos (esperado: ≤1)"
+            )
+
+
 # Tarefa 11.7 — Property 11: Robustez de _compress_plan
-#   @given(plan_lines=st.lists(st.text()), pred_lines=st.lists(st.text()),
-#          verbosity=st.sampled_from(["full", "compact", "minimal"]))
-#   def test_compress_never_crashes(plan_lines, pred_lines, verbosity): ...
+@given(
+    plan_lines=st.lists(st.text(max_size=200), max_size=50),
+    pred_lines=st.lists(st.text(max_size=200), max_size=20),
+    verbosity=st.sampled_from(["full", "compact", "minimal"]),
+)
+@settings(max_examples=300)
+def test_compress_never_crashes(plan_lines, pred_lines, verbosity):
+    """
+    Property 11: Robustez de _compress_plan.
+    Validates: Requirements 9.6
+    """
+    result_plan, result_preds = _compress_plan(plan_lines, pred_lines, verbosity)
+    assert isinstance(result_plan, list)
+    assert isinstance(result_preds, list)
+    assert all(isinstance(line, str) for line in result_plan)
+    assert all(isinstance(line, str) for line in result_preds)
 #
 # Tarefa 12.2 — Property 6: Verbosity inválido levanta erro
 #   @given(verbosity=st.text().filter(lambda s: s not in {"full", "compact", "minimal"}))
@@ -673,3 +789,492 @@ def test_immune_blocks_never_collapsed(blocks: list):
     assert immune_ids.isdisjoint(all_collapsed_ids), (
         f"Blocos imunes colapsados: {immune_ids & all_collapsed_ids}"
     )
+
+
+# ─── Tarefa 11.1 — Testes unitários para _collapse_orphan_predicates_by_ids ──
+
+import re
+
+
+class TestCollapseOrphanPredicates:
+    PRED_HEADER = "Predicate Information (identified by operation id):"
+    PRED_2 = "   2 - access(\"CAMPO\"='VALOR')"
+    PRED_3 = "   3 - filter(\"OUTRO_CAMPO\" IS NOT NULL)"
+    PRED_5 = "   5 - access(\"X\"=:B1)"
+
+    def test_collapsed_ids_removes_predicate_lines(self):
+        lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
+        result = _collapse_orphan_predicates_by_ids(lines, {"2"})
+        ids_in_result = {
+            m.group(1)
+            for line in result
+            for m in [re.match(r'^\s*(\d+)\s*-\s*(access|filter)\(', line.strip())]
+            if m
+        }
+        assert "2" not in ids_in_result
+
+    def test_non_collapsed_ids_preserved(self):
+        lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3, self.PRED_5]
+        result = _collapse_orphan_predicates_by_ids(lines, {"2"})
+        ids_in_result = {
+            m.group(1)
+            for line in result
+            for m in [re.match(r'^\s*(\d+)\s*-\s*(access|filter)\(', line.strip())]
+            if m
+        }
+        assert "3" in ids_in_result
+        assert "5" in ids_in_result
+
+    def test_empty_collapsed_ids_returns_unchanged(self):
+        lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
+        result = _collapse_orphan_predicates_by_ids(lines, set())
+        assert result == lines
+
+    def test_pruned_adds_note(self):
+        lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
+        result = _collapse_orphan_predicates_by_ids(lines, {"2", "3"})
+        assert any("predicados de blocos colapsados omitidos" in line for line in result)
+
+
+# ─── Tarefa 11.3 — Testes unitários para _add_nonsequential_id_note ──────────
+
+
+PLAN_HASH_LINE = "Plan hash value: 1234567890"
+LINE_ID_1 = "|   1 | SORT AGGREGATE          |                              |     1 |       |      0 |00:00:00.01 |       3 |       0 |"
+LINE_ID_2 = "|   2 | INDEX RANGE SCAN        | IDX_ATTR_ENTITY_ID           |     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
+LINE_ID_3 = "|   3 | TABLE ACCESS FULL       | SOME_TABLE                   |     1 |  1000 |    500 |00:00:00.05 |      10 |       0 |"
+LINE_ID_5 = "|   5 | TABLE ACCESS FULL       | OTHER_TABLE                  |     1 |   100 |     50 |00:00:00.02 |       5 |       0 |"
+
+
+class TestAddNonsequentialIdNote:
+    def test_sequential_ids_no_note(self):
+        lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_2, LINE_ID_3]
+        result = _add_nonsequential_id_note(lines)
+        assert not any("IDs não sequenciais" in line for line in result)
+
+    def test_nonsequential_ids_inserts_note(self):
+        lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_3, LINE_ID_5]
+        result = _add_nonsequential_id_note(lines)
+        assert any("IDs não sequenciais" in line for line in result)
+
+    def test_note_position_after_plan_hash(self):
+        lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_3]
+        result = _add_nonsequential_id_note(lines)
+        hash_idx = next(i for i, l in enumerate(result) if "Plan hash value" in l)
+        note_idx = next((i for i, l in enumerate(result) if "IDs não sequenciais" in l), None)
+        assert note_idx is not None
+        assert note_idx == hash_idx + 1
+
+    def test_no_plan_hash_line_no_note(self):
+        # Sem linha "Plan hash value", nota não deve ser inserida
+        lines = [LINE_ID_1, LINE_ID_3, LINE_ID_5]
+        result = _add_nonsequential_id_note(lines)
+        assert not any("IDs não sequenciais" in line for line in result)
+
+
+# ─── Tarefa 11.5 — Testes unitários para _compress_plan ──────────────────────
+
+
+def _make_config_fields_plan_lines(n_groups: int) -> list[str]:
+    """Gera linhas de plano com n_groups de campos configurados."""
+    lines = ["Plan hash value: 1234567890"]
+    bid = 1
+    for _ in range(n_groups):
+        lines.append(
+            f"|   {bid} | SORT AGGREGATE          |                              |"
+            f"     1 |       |      0 |00:00:00.01 |       3 |       0 |"
+        )
+        bid += 1
+        lines.append(
+            f"|   {bid} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID           |"
+            f"     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
+        )
+        bid += 1
+        lines.append(
+            f"|   {bid} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|"
+            f"     1 |     1 |      0 |00:00:00.01 |       1 |       0 |"
+        )
+        bid += 1
+    return lines
+
+
+class TestCompressPlan:
+    def test_full_verbosity_returns_unchanged(self):
+        plan = _make_config_fields_plan_lines(3)
+        preds = ["   1 - access(\"X\"=:B1)"]
+        result_plan, result_preds = _compress_plan(plan, preds, "full")
+        assert result_plan == plan
+        assert result_preds == preds
+
+    def test_no_parseable_lines_returns_original(self):
+        plan = ["-- sem linhas parseáveis", "outra linha qualquer"]
+        preds = []
+        result_plan, result_preds = _compress_plan(plan, preds, "compact")
+        assert result_plan == plan
+        assert result_preds == preds
+
+    def test_collapsable_plan_removes_collapsed_ids(self):
+        plan = _make_config_fields_plan_lines(3)
+        result_plan, _preds = _compress_plan(plan, [], "compact")
+        # IDs 1–9 devem ter sido colapsados; nenhum deve aparecer como linha de plano normal
+        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
+        ids_in_result = {
+            m.group(1)
+            for line in result_plan
+            for m in [_PLAN_ID_RE.match(line)]
+            if m
+        }
+        # Deve haver pelo menos um bloco [COLAPSADO:] no resultado
+        assert any(line.startswith("[COLAPSADO:") for line in result_plan)
+        # Nenhum ID original deve aparecer como linha de plano normal
+        for id_val in [str(i) for i in range(1, 10)]:
+            assert id_val not in ids_in_result
+
+    def test_each_collapse_result_emits_one_summary(self):
+        plan = _make_config_fields_plan_lines(3)
+        result_plan, _preds = _compress_plan(plan, [], "compact")
+        # Conta blocos [COLAPSADO:] — deve haver exatamente 1 para este plano
+        summary_count = sum(1 for line in result_plan if line.startswith("[COLAPSADO:"))
+        assert summary_count == 1
+
+
+# ─── Tarefa 12 — Testes para to_markdown e integração CLI/MCP ────
+
+from sqlmentor.collector import CollectedContext
+from sqlmentor.parser import ParsedSQL
+from sqlmentor.report import to_markdown
+
+
+def _make_minimal_ctx(**kwargs) -> CollectedContext:
+    """Cria CollectedContext mínimo para testes de to_markdown."""
+    parsed = ParsedSQL(raw_sql="SELECT 1 FROM DUAL", sql_type="SELECT")
+    defaults = dict(parsed_sql=parsed)
+    defaults.update(kwargs)
+    return CollectedContext(**defaults)
+
+
+def _make_runtime_plan_with_collapses() -> list[str]:
+    """Plano com 3 grupos R1 — compact deve colapsar em [COLAPSADO:."""
+    lines = [
+        "SQL_ID  abc123, child number 0",
+        "-------------------------------------",
+        "Plan hash value: 1234567890",
+        "",
+        "| Id | Operation               | Name                          | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |",
+        "|----|-------------------------|-------------------------------|--------|--------|--------|------------|---------|--------|",
+    ]
+    bid = 1
+    for _ in range(3):
+        lines += [
+            f"|   {bid} | SORT AGGREGATE          |                               |      1 |        |      0 |00:00:00.01 |       3 |      0 |",
+            f"|   {bid+1} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID            |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
+            f"|   {bid+2} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
+        ]
+        bid += 3
+    return lines
+
+
+# ─── Tarefa 12.1 — Testes unitários para to_markdown com verbosity ────────────
+
+
+class TestToMarkdownVerbosity:
+    def test_invalid_verbosity_raises_value_error(self):
+        ctx = _make_minimal_ctx()
+        with pytest.raises(ValueError, match="verbosity"):
+            to_markdown(ctx, verbosity="verbose")
+
+    def test_invalid_verbosity_message_lists_valid_values(self):
+        ctx = _make_minimal_ctx()
+        with pytest.raises(ValueError) as exc_info:
+            to_markdown(ctx, verbosity="wrong")
+        msg = str(exc_info.value)
+        assert "full" in msg
+        assert "compact" in msg
+        assert "minimal" in msg
+
+    def test_full_produces_no_colapsado_blocks(self):
+        ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+        result = to_markdown(ctx, verbosity="full")
+        assert "[COLAPSADO:" not in result
+
+    def test_compact_produces_colapsado_blocks_for_complex_plan(self):
+        ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+        result = to_markdown(ctx, verbosity="compact")
+        assert "[COLAPSADO:" in result
+
+    def test_minimal_has_no_execution_plan_section(self):
+        ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+        result = to_markdown(ctx, verbosity="minimal")
+        # minimal não deve conter o bloco de código do plano de execução
+        assert "Runtime Execution Plan" not in result
+        assert "Execution Plan" not in result
+
+    def test_minimal_has_no_ddl(self):
+        from sqlmentor.collector import TableContext
+        table = TableContext(
+            schema="SCHEMA",
+            name="MINHA_TABELA",
+            object_type="TABLE",
+            ddl="CREATE TABLE MINHA_TABELA (ID NUMBER)",
+            stats={"num_rows": 10000},
+            columns=[],
+            indexes=[],
+            constraints=[],
+        )
+        ctx = _make_minimal_ctx(tables=[table])
+        result = to_markdown(ctx, verbosity="minimal")
+        assert "CREATE TABLE" not in result
+
+    def test_default_verbosity_is_compact(self):
+        ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+        result_default = to_markdown(ctx)
+        result_compact = to_markdown(ctx, verbosity="compact")
+        assert result_default == result_compact
+
+    def test_full_returns_string(self):
+        ctx = _make_minimal_ctx()
+        assert isinstance(to_markdown(ctx, verbosity="full"), str)
+
+    def test_compact_returns_string(self):
+        ctx = _make_minimal_ctx()
+        assert isinstance(to_markdown(ctx, verbosity="compact"), str)
+
+    def test_minimal_returns_string(self):
+        ctx = _make_minimal_ctx()
+        assert isinstance(to_markdown(ctx, verbosity="minimal"), str)
+
+
+# ─── Tarefa 12.2 — Property 6: Verbosity inválido levanta erro ───────────────
+
+
+@given(verbosity=st.text().filter(lambda s: s not in {"full", "compact", "minimal"}))
+@settings(max_examples=200)
+def test_invalid_verbosity_always_raises(verbosity: str):
+    """
+    Property 6: Verbosity inválido levanta erro.
+    Validates: Requirements 1.5
+
+    Para qualquer string fora do conjunto {"full", "compact", "minimal"},
+    to_markdown sempre levanta ValueError.
+    """
+    ctx = _make_minimal_ctx()
+    with pytest.raises(ValueError):
+        to_markdown(ctx, verbosity=verbosity)
+
+
+# ─── Tarefa 12.3 — Property 2: Monotonicidade de compressão ──────────────────
+
+
+def test_compression_monotonic_with_complex_plan():
+    """
+    Property 2: Monotonicidade de compressão.
+    Validates: Requirements 1.3, 1.4
+
+    Para um plano com views complexas:
+    len(minimal) <= len(compact) <= len(full)
+
+    Usa plano fixo (não hypothesis) porque CollectedContext completo
+    requer conexão Oracle para geração arbitrária.
+    """
+    ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+    minimal_lines = to_markdown(ctx, verbosity="minimal").splitlines()
+    compact_lines = to_markdown(ctx, verbosity="compact").splitlines()
+    full_lines = to_markdown(ctx, verbosity="full").splitlines()
+
+    assert len(minimal_lines) <= len(compact_lines), (
+        f"minimal ({len(minimal_lines)}) > compact ({len(compact_lines)})"
+    )
+    assert len(compact_lines) <= len(full_lines), (
+        f"compact ({len(compact_lines)}) > full ({len(full_lines)})"
+    )
+
+
+def test_compression_monotonic_without_plan():
+    """
+    Monotonicidade também vale para ctx sem plano de execução.
+    """
+    ctx = _make_minimal_ctx()
+    minimal_lines = to_markdown(ctx, verbosity="minimal").splitlines()
+    compact_lines = to_markdown(ctx, verbosity="compact").splitlines()
+    full_lines = to_markdown(ctx, verbosity="full").splitlines()
+
+    assert len(minimal_lines) <= len(compact_lines)
+    assert len(compact_lines) <= len(full_lines)
+
+
+# ─── Tarefa 12.4 — Property 1: Idempotência de full ─────────────────────────
+
+
+def _strip_timestamps(text: str) -> str:
+    """Remove timestamps do output para comparação de idempotência."""
+    import re
+    # Padrão: datas como "2025-01-25 18:12:21" ou "25 18:12:21"
+    return re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", "TIMESTAMP", text)
+
+
+def test_full_idempotent_with_complex_plan():
+    """
+    Property 1: Idempotência de full.
+    Validates: Requirements 1.2, 9.2
+
+    to_markdown(ctx, "full") chamado duas vezes produz output idêntico
+    (desconsiderando timestamps gerados em runtime).
+    """
+    ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+    result1 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+    result2 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+    assert result1 == result2
+
+
+def test_full_idempotent_without_plan():
+    """Idempotência de full também vale para ctx sem plano."""
+    ctx = _make_minimal_ctx()
+    r1 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+    r2 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+    assert r1 == r2
+
+
+def test_compact_idempotent():
+    """compact também deve ser determinístico (mesmo input → mesmo output)."""
+    ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
+    r1 = _strip_timestamps(to_markdown(ctx, verbosity="compact"))
+    r2 = _strip_timestamps(to_markdown(ctx, verbosity="compact"))
+    assert r1 == r2
+
+
+# ─── Tarefa 13 — Testes de integração com fixture de plano real ──────────────
+
+
+class TestIntegrationRealPlan:
+    """
+    Testes de integração usando a fixture sample_plan.txt.
+    Valida que compact produz menos linhas que full e que full é estável.
+    """
+
+    def _load_plan_lines(self) -> list[str]:
+        return _load_fixture("sample_plan.txt")
+
+    # ─── Tarefa 13.2 — compact produz menos linhas que full ──────
+
+    def test_compact_produces_fewer_lines_than_full(self):
+        """
+        Validates: Requirements 1.3
+
+        compact deve colapsar R1 (4 grupos), R2 (3 grupos) e R3 (VW_CURRENT_USER),
+        produzindo menos linhas que full.
+        """
+        plan_lines = self._load_plan_lines()
+        plan_only, pred_lines = _split_plan_predicates(plan_lines)
+
+        full_plan, full_preds = _compress_plan(plan_only, pred_lines, "full")
+        compact_plan, compact_preds = _compress_plan(plan_only, pred_lines, "compact")
+
+        full_total = len(full_plan) + len(full_preds)
+        compact_total = len(compact_plan) + len(compact_preds)
+
+        assert compact_total < full_total, (
+            f"compact ({compact_total} linhas) não é menor que full ({full_total} linhas)"
+        )
+
+    def test_compact_contains_colapsado_blocks(self):
+        """compact deve gerar pelo menos um bloco [COLAPSADO: para a fixture."""
+        plan_lines = self._load_plan_lines()
+        plan_only, pred_lines = _split_plan_predicates(plan_lines)
+        compact_plan, _ = _compress_plan(plan_only, pred_lines, "compact")
+        assert any(line.startswith("[COLAPSADO:") for line in compact_plan)
+
+    def test_full_contains_no_colapsado_blocks(self):
+        """full não deve gerar nenhum bloco [COLAPSADO:."""
+        plan_lines = self._load_plan_lines()
+        plan_only, pred_lines = _split_plan_predicates(plan_lines)
+        full_plan, _ = _compress_plan(plan_only, pred_lines, "full")
+        assert not any(line.startswith("[COLAPSADO:") for line in full_plan)
+
+    def test_compact_via_to_markdown_fewer_lines_than_full(self):
+        """
+        Validates: Requirements 1.3
+
+        Verifica monotonicidade via to_markdown com a fixture real.
+        """
+        ctx = _make_minimal_ctx(runtime_plan=self._load_plan_lines())
+        full_lines = to_markdown(ctx, verbosity="full").splitlines()
+        compact_lines = to_markdown(ctx, verbosity="compact").splitlines()
+        assert len(compact_lines) < len(full_lines), (
+            f"compact ({len(compact_lines)} linhas) não é menor que full ({len(full_lines)} linhas)"
+        )
+
+    # ─── Tarefa 13.3 — regressão de full contra baseline ─────────
+
+    def test_full_regression_stable(self):
+        """
+        Validates: Requirements 1.2, 10.1, 10.2
+
+        full chamado duas vezes com a mesma fixture produz output idêntico
+        (desconsiderando timestamps).
+        """
+        ctx = _make_minimal_ctx(runtime_plan=self._load_plan_lines())
+        result1 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+        result2 = _strip_timestamps(to_markdown(ctx, verbosity="full"))
+        assert result1 == result2, "full não é estável — output difere entre chamadas"
+
+    def test_compact_regression_stable(self):
+        """compact também deve ser determinístico com a fixture real."""
+        ctx = _make_minimal_ctx(runtime_plan=self._load_plan_lines())
+        result1 = _strip_timestamps(to_markdown(ctx, verbosity="compact"))
+        result2 = _strip_timestamps(to_markdown(ctx, verbosity="compact"))
+        assert result1 == result2, "compact não é estável — output difere entre chamadas"
+
+    def test_full_plan_preserves_all_original_ids(self):
+        """
+        Validates: Requirements 1.2
+
+        full deve preservar todos os IDs do plano original sem remoção.
+        """
+        import re
+        plan_lines = self._load_plan_lines()
+        plan_only, pred_lines = _split_plan_predicates(plan_lines)
+
+        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
+        original_ids = {m.group(1) for line in plan_only for m in [_PLAN_ID_RE.match(line)] if m}
+
+        full_plan, _ = _compress_plan(plan_only, pred_lines, "full")
+        full_ids = {m.group(1) for line in full_plan for m in [_PLAN_ID_RE.match(line)] if m}
+
+        assert original_ids == full_ids, (
+            f"full removeu IDs: {original_ids - full_ids}"
+        )
+
+    def test_compact_removes_collapsed_ids_from_plan(self):
+        """
+        Validates: Requirements 9.5
+
+        compact não deve conter nenhum ID que foi colapsado.
+        """
+        import re
+        from sqlmentor.report import (
+            _apply_thresholds,
+            _collapse_config_fields,
+            _collapse_situation_history,
+            _collapse_vw_usuario_null,
+            _detect_plan_blocks,
+        )
+
+        plan_lines = self._load_plan_lines()
+        plan_only, pred_lines = _split_plan_predicates(plan_lines)
+
+        blocks = _detect_plan_blocks(plan_only)
+        _apply_thresholds(blocks)
+        all_collapses = (
+            _collapse_config_fields(blocks)
+            + _collapse_situation_history(blocks, {})
+            + _collapse_vw_usuario_null(blocks)
+        )
+        all_collapsed_ids = {cid for cr in all_collapses for cid in cr.collapsed_ids}
+
+        compact_plan, _ = _compress_plan(plan_only, pred_lines, "compact")
+
+        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
+        ids_in_compact = {m.group(1) for line in compact_plan for m in [_PLAN_ID_RE.match(line)] if m}
+
+        overlap = all_collapsed_ids & ids_in_compact
+        assert not overlap, f"IDs colapsados ainda presentes no plano compact: {overlap}"

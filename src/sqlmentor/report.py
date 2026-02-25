@@ -135,54 +135,48 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
     """
     Detecta e colapsa grupos de scalar subqueries de campos configurados (R1).
     Padrão: SORT AGGREGATE → NESTED LOOPS → IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG
+    Mínimo: ≥ 3 grupos SORT AGGREGATE consecutivos com o padrão.
     """
     results: list[CollapseResult] = []
-    # Identifica blocos SORT AGGREGATE com starts=1 e filhos usando os índices alvo
     target_indexes = {"IDX_ATTR_ENTITY_ID", "PK_ATTR_CONFIG"}
 
-    # Agrupa blocos SORT AGGREGATE consecutivos com mesmo padrão de filhos
     group: list[PlanBlock] = []
-    group_ids: set[str] = set()
+    group_root_ids: list[str] = []  # só os IDs dos SORT AGGREGATE raiz
 
     def _flush_group():
-        nonlocal group, group_ids
-        if len(group) >= 3:
-            # Verifica se nenhum é imune
-            all_ids = set()
-            for b in group:
-                all_ids.add(b.id)
+        nonlocal group, group_root_ids
+        if len(group_root_ids) >= 3:
             immune_any = any(b.immune for b in group)
             if not immune_any:
+                all_ids = {b.id for b in group}
                 total_buffers = sum(b.buffers for b in group)
                 total_reads = sum(b.reads for b in group)
                 a_rows_nonzero = [b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0]
                 lines = [
-                    f"[COLAPSADO: {len(group)} scalar subqueries — campos configurados por obra]",
+                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — campos configurados por obra]",
                     f"  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
                     f"  Resultado: A-Rows=0 em todos" if not a_rows_nonzero else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
                     f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
                     f"  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
                 ]
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
-        group = []
-        group_ids = set()
+        group.clear()
+        group_root_ids.clear()
 
     i = 0
     while i < len(blocks):
         b = blocks[i]
         if b.operation == "SORT AGGREGATE" and b.starts == 1:
-            # Verifica se os próximos blocos com indent maior usam os índices alvo
             j = i + 1
             child_names: set[str] = set()
-            child_ids: set[str] = {b.id}
+            child_blocks: list[PlanBlock] = [b]
             while j < len(blocks) and blocks[j].indent > b.indent:
                 child_names.add(blocks[j].name.upper())
-                child_ids.add(blocks[j].id)
+                child_blocks.append(blocks[j])
                 j += 1
             if target_indexes.issubset(child_names):
-                # Candidato — adiciona ao grupo
-                for k in range(i, j):
-                    group.append(blocks[k])
+                group.extend(child_blocks)
+                group_root_ids.append(b.id)
                 i = j
                 continue
             else:
@@ -206,37 +200,33 @@ def _collapse_situation_history(
     target_indexes = {"UK_STATUS_TYPE_REF", "IDX_STATUS_HIST_ENTITY"}
     _TPS_REF = re.compile(r"TYPE_REF\s*=\s*'([^']+)'")
 
-    group: list[PlanBlock] = []
-    group_root_ids: list[str] = []
+    # Cada entrada: (root_block, child_blocks_including_root)
+    group_entries: list[tuple[PlanBlock, list[PlanBlock]]] = []
 
     def _flush():
-        nonlocal group, group_root_ids
-        if len(group_root_ids) >= 2:
-            immune_any = any(b.immune for b in group)
+        nonlocal group_entries
+        if len(group_entries) >= 2:
+            all_blocks = [b for _, entry in group_entries for b in entry]
+            immune_any = any(b.immune for b in all_blocks)
             if not immune_any:
-                all_ids = {b.id for b in group}
-                total_buffers = sum(b.buffers for b in group)
-                # Monta tabela com A-Rows por tipo
+                all_ids = {b.id for b in all_blocks}
+                total_buffers = sum(b.buffers for b in all_blocks)
                 table_rows = []
-                for root_id in group_root_ids:
-                    # Busca TYPE_REF nos predicados dos filhos deste root
+                for root_block, child_blocks in group_entries:
+                    # Busca TYPE_REF só nos predicados dos filhos deste root
                     tps_val = "?"
-                    root_block = next((b for b in group if b.id == root_id), None)
-                    if root_block:
-                        # Procura nos predicados dos filhos
-                        for b in group:
-                            preds = predicate_map.get(b.id, [])
-                            for p in preds:
-                                m = _TPS_REF.search(p)
-                                if m:
-                                    tps_val = m.group(1)
-                                    break
-                        a_rows = root_block.a_rows
-                        buffers = root_block.buffers
-                        table_rows.append((tps_val, a_rows, buffers))
+                    for b in child_blocks:
+                        for p in predicate_map.get(b.id, []):
+                            m = _TPS_REF.search(p)
+                            if m:
+                                tps_val = m.group(1)
+                                break
+                        if tps_val != "?":
+                            break
+                    table_rows.append((tps_val, root_block.a_rows, root_block.buffers))
 
                 lines = [
-                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries DATA_ALT_SIT_* — histórico de situações]",
+                    f"[COLAPSADO: {len(group_entries)} scalar subqueries DATA_ALT_SIT_* — histórico de situações]",
                     f"  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY",
                     f"  | Tipo | A-Rows | Buffers |",
                     f"  |------|--------|---------|",
@@ -245,8 +235,7 @@ def _collapse_situation_history(
                     lines.append(f"  | {tps} | {ar} | {buf} |")
                 lines.append(f"  Custo total: {total_buffers:,} buffers")
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
-        group.clear()
-        group_root_ids.clear()
+        group_entries.clear()
 
     i = 0
     while i < len(blocks):
@@ -260,8 +249,7 @@ def _collapse_situation_history(
                 child_blocks.append(blocks[j])
                 j += 1
             if target_indexes.issubset(child_names):
-                group.extend(child_blocks)
-                group_root_ids.append(b.id)
+                group_entries.append((b, child_blocks))
                 i = j
                 continue
             else:
@@ -582,7 +570,12 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
     if ctx.execution_plan:
         lines.append(f"## {section}. Execution Plan (Estimado)")
         lines.append("```")
-        for line in ctx.execution_plan:
+        plan_cleaned = _strip_sql_from_plan(ctx.execution_plan)
+        plan_cleaned, pruned_ids = _prune_dead_operations(plan_cleaned)
+        plan_cleaned = _prune_orphan_predicates(plan_cleaned, pruned_ids)
+        plan_lines, predicate_lines = _split_plan_predicates(plan_cleaned)
+        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        for line in plan_compressed + pred_compressed:
             lines.append(line)
         lines.append("```")
         lines.append("")

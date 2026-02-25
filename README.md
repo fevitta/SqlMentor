@@ -146,6 +146,23 @@ O `sqlmentor` inclui um MCP Server que permite integração direta com IDEs como
 | `test_connection` | Testa se um profile funciona (retorna versão e schema) |
 | `parse_sql` | Parse offline — extrai tabelas, colunas, joins sem conectar |
 | `analyze_sql` | Análise completa: conecta no Oracle, coleta contexto, retorna relatório |
+| `inspect_sql` | Coleta contexto de um SQL já executado via sql_id, sem re-executar |
+
+### Exemplos de uso via MCP (verbosity)
+
+```python
+# compact é o default — colapsa scalar subqueries repetitivas
+analyze_sql(sql="SELECT ...", conn="producao", verbosity="compact")
+
+# full — plano completo sem compressão adicional
+analyze_sql(sql="SELECT ...", conn="producao", verbosity="full")
+
+# minimal — só hotspots + runtime stats + parâmetros do otimizador
+analyze_sql(sql="SELECT ...", conn="producao", verbosity="minimal")
+
+# inspect também aceita verbosity
+inspect_sql(sql_id="abc123xyz", conn="producao", verbosity="compact")
+```
 
 ### Configuração manual (mcp.json)
 

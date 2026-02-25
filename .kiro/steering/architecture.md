@@ -78,19 +78,19 @@ Ativado quando `verbosity != "full"`. Executado dentro de `to_markdown()` após 
 ~~~mermaid
 flowchart TD
     A([_compress_plan]) --> B{verbosity == full?}
-    B -->|nao| C[_detect_plan_blocks - regex _PLAN_ROW]
     B -->|sim| RET[retorna input sem modificacao]
+    B -->|nao| C[_detect_plan_blocks - regex _PLAN_ROW]
     C --> D[_apply_thresholds - marca immune=True R5]
-    D --> E[_build_predicate_map]
-    E --> F[_collapse_config_fields R1]
-    F --> G[_collapse_situation_history R2]
-    G --> H[_collapse_vw_usuario_null R3]
+    D --> E[_build_predicate_map → pred_map]
+    E --> F[_collapse_config_fields R1 - recebe blocks]
+    F --> G[_collapse_situation_history R2 - recebe blocks + pred_map]
+    G --> H[_collapse_vw_usuario_null R3 - recebe blocks]
     H --> I{all_collapsed_ids vazio?}
-    I -->|nao| K[reconstroi plano - substitui blocos por resumos]
     I -->|sim| J[_add_nonsequential_id_note R6]
-    J --> RET2[retorna plan_lines original]
+    J --> RET2[retorna plan_lines original + predicate_lines original]
+    I -->|nao| K[reconstroi plano - substitui blocos colapsados por replacement_lines]
     K --> L[_add_nonsequential_id_note R6]
-    L --> M[_collapse_orphan_predicates_by_ids R4]
+    L --> M[_collapse_orphan_predicates_by_ids R4 - recebe predicate_lines + all_collapsed_ids]
     M --> RET3[retorna plan_comprimido + predicados_comprimidos]
 ~~~
 
@@ -121,16 +121,16 @@ Um bloco com `immune=True` nunca é colapsado por nenhuma regra.
 ~~~
 CollectedContext (collector.py)
 ├── parsed_sql: ParsedSQL          ← output de parser.py
-├── tables: list[TableContext]     ← uma entrada por tabela/view
-├── execution_plan: list[str]      ← EXPLAIN PLAN estimado
-├── runtime_plan: list[str]        ← ALLSTATS LAST (só com execute=True ou inspect)
-├── runtime_stats: dict            ← V$SQL métricas
+├── db_version: str | None
+├── execution_plan: list[str] | None  ← EXPLAIN PLAN estimado
+├── runtime_plan: list[str] | None    ← ALLSTATS LAST (só com execute=True ou inspect)
+├── runtime_stats: dict | None        ← V$SQL métricas
 ├── wait_events: list[dict]
-├── optimizer_params: list[dict]
 ├── view_expansions: dict[str, list[str]]
-├── function_ddls: dict[str, str]
 ├── index_table_map: dict[str, str]
-├── db_version: str
+├── tables: list[TableContext]
+├── function_ddls: dict[str, str]
+├── optimizer_params: dict[str, str]  ← ⚠️ dict, não list[dict]
 └── errors: list[str]
 
 TableContext (collector.py)
@@ -156,7 +156,8 @@ PlanBlock (report.py)
 ├── buffers: int                   ← já convertido de K/M/G para inteiro
 ├── reads: int
 ├── indent: int                    ← proxy de profundidade na árvore
-└── immune: bool                   ← setado só por _apply_thresholds
+├── immune: bool                   ← setado só por _apply_thresholds
+└── children: list[PlanBlock]      ← não usado nas regras de colapso, reservado
 ~~~
 
 ## Parâmetro `verbosity`
