@@ -369,6 +369,20 @@ def _add_nonsequential_id_note(plan_lines: list[str]) -> list[str]:
     return result
 
 
+def _split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Divide a lista de linhas do plano em duas partes:
+    - plan_lines: tudo antes da seção "Predicate Information" (exclusive)
+    - predicate_lines: a partir da linha "Predicate Information" (inclusive)
+
+    Se não houver seção "Predicate Information", retorna (lines, []).
+    """
+    for i, line in enumerate(lines):
+        if "Predicate Information" in line:
+            return lines[:i], lines[i:]
+    return lines, []
+
+
 def _compress_plan(
     plan_lines: list[str],
     predicate_lines: list[str],
@@ -588,10 +602,10 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
         plan_cleaned = _strip_sql_from_plan(ctx.runtime_plan)
         plan_cleaned, pruned_ids = _prune_dead_operations(plan_cleaned)
         plan_cleaned = _prune_orphan_predicates(plan_cleaned, pruned_ids)
-        # Compressão adicional (compact/full)
-        if verbosity != "full":
-            plan_cleaned, _ = _compress_plan(plan_cleaned, plan_cleaned, verbosity)
-        for line in plan_cleaned:
+        # Separa plan_lines de predicate_lines antes de comprimir
+        plan_lines, predicate_lines = _split_plan_predicates(plan_cleaned)
+        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        for line in plan_compressed + pred_compressed:
             lines.append(line)
         lines.append("```")
         lines.append("")

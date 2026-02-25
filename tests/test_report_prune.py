@@ -12,7 +12,7 @@ def test_prune_dead_operations():
         "|  27 |    TABLE ACCESS BY INDEX ROWID  | GRUPO_ATIVIDADE  |      0 |      1 |      0 |00:00:00.01 |       0 |",
         "| 381 | TABLE ACCESS BY INDEX ROWID  | FUNCIONARIO  |  62502 |      1 |  59897 |00:00:00.15 |   79881 |",
     ]
-    result = _prune_dead_operations(plan)
+    result, pruned_ids = _prune_dead_operations(plan)
     # Deve manter linhas 0, 1, 381 (Starts>0) e remover 26, 27 (Starts=0, A-Rows=0)
     kept_ids = [l for l in result if l.startswith("|")]
     assert len(kept_ids) == 3, f"Esperava 3 linhas, got {len(kept_ids)}: {kept_ids}"

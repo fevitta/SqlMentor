@@ -20,5 +20,11 @@ dependencies = [
 sqlmentor = "sqlmentor.cli:app"
 sqlmentor-mcp = "sqlmentor.mcp_server:main"
 
+[project.optional-dependencies]
+dev = [
+    "hypothesis>=6.0",
+    "pytest>=7.0",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

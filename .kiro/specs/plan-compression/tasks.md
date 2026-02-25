@@ -21,85 +21,85 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
 - [x] 5. Integrar verbosity em to_markdown, cli.py e mcp_server.py
   - _Requirements: 1.1–1.6, 10.1–10.6_
 
-- [ ] 6. Corrigir bug em to_markdown — separação de plan_lines/predicate_lines e chamada de _compress_plan
+- [x] 6. Corrigir bug em to_markdown — separação de plan_lines/predicate_lines e chamada de _compress_plan
   - _Requirements: 9.1, 9.4, 9.5_
-  - [ ] 6.1 Implementar `_split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]`
+  - [x] 6.1 Implementar `_split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]`
     - Divide a lista em `plan_lines` (antes da seção `Predicate Information`) e `predicate_lines` (a partir da linha `Predicate Information` inclusive)
     - _Requirements: 9.4_
-  - [ ] 6.2 Integrar `_split_plan_predicates` em `to_markdown`
+  - [x] 6.2 Integrar `_split_plan_predicates` em `to_markdown`
     - Chamar `_split_plan_predicates(plan_cleaned)` após `_prune_orphan_predicates`
     - Corrigir a chamada para `plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)`
     - _Requirements: 9.1, 9.5_
-  - [ ] 6.3 Reconstruir output de `to_markdown`
+  - [x] 6.3 Reconstruir output de `to_markdown`
     - Concatenar `plan_compressed + pred_compressed` para renderizar no bloco de código do relatório
     - _Requirements: 9.5_
 
-- [ ] 7. Adicionar hypothesis como dev dependency e criar estrutura de testes
+- [x] 7. Adicionar hypothesis como dev dependency e criar estrutura de testes
   - Adicionar `hypothesis>=6.0` em `[project.optional-dependencies]` ou `[project.dependency-groups]` no `pyproject.toml`
   - Criar `tests/test_plan_compression.py` com imports e helpers de estratégias Hypothesis
   - Criar `tests/fixtures/` com pelo menos um plano real (ex: `sample_plan.txt`) para testes de integração
   - _Requirements: 2.7, 9.6_
 
-- [ ] 8. Escrever testes unitários para funções de parsing e thresholds
-  - [ ] 8.1 Testes para `_detect_plan_blocks`
+- [x] 8. Escrever testes unitários para funções de parsing e thresholds
+  - [x] 8.1 Testes para `_detect_plan_blocks`
     - Plano simples sem views: verifica ordem e campos numéricos
     - Linha malformada: deve ser ignorada sem exceção
     - Sufixos K/M/G em buffers: verifica conversão correta
     - Lista vazia: retorna lista vazia
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
 
-  - [ ]* 8.2 Escrever property test — Property 9: Round-trip de PlanBlock
+  - [x] 8.2 Escrever property test — Property 9: Round-trip de PlanBlock
     - **Property 9: Round-trip de PlanBlock**
     - **Validates: Requirements 2.7**
     - Estratégia: gerar `PlanBlock` válidos com `st.builds`, formatar para linha, parsear de volta, comparar campos
 
-  - [ ] 8.3 Testes para `_apply_thresholds`
+  - [x] 8.3 Testes para `_apply_thresholds`
     - Cada threshold individualmente (reads, buffers, starts, a_time_ms, cardinalidade)
     - Bloco sem nenhum threshold: `immune = False`
     - Combinação de thresholds: `immune = True` se qualquer um atingido
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
 
-  - [ ]* 8.4 Escrever property test — Property 8: Thresholds determinísticos
+  - [x] 8.4 Escrever property test — Property 8: Thresholds determinísticos
     - **Property 8: Thresholds determinísticos**
     - **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6**
     - Estratégia: gerar `PlanBlock` com campos numéricos arbitrários, verificar que `immune` é `True` sse pelo menos um critério é satisfeito
 
-- [ ] 9. Escrever testes unitários para regras de colapso R1–R3
-  - [ ] 9.1 Testes para `_collapse_config_fields`
+- [x] 9. Escrever testes unitários para regras de colapso R1–R3
+  - [x] 9.1 Testes para `_collapse_config_fields`
     - Grupo com ≥ 3 blocos sem imune: colapsa, `len(collapsed_ids) >= 3`
     - Grupo com bloco imune: não colapsa nenhum
     - Grupo com < 3 blocos: não colapsa
     - Verifica que `replacement_lines[0]` começa com `[COLAPSADO:`
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
-  - [ ] 9.2 Testes para `_collapse_situation_history`
+  - [x] 9.2 Testes para `_collapse_situation_history`
     - Grupo com ≥ 2 blocos sem imune: colapsa, tabela com colunas Tipo/A-Rows/Buffers
     - Grupo com bloco imune: não colapsa
     - TYPE_REF ausente nos predicados: usa `"?"` como fallback
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
 
-  - [ ] 9.3 Testes para `_collapse_vw_usuario_null`
+  - [x] 9.3 Testes para `_collapse_vw_usuario_null`
     - Nó VIEW com `a_rows == 0` e subárvore sem imune: colapsa
     - Nó VIEW com `a_rows > 0`: não colapsa
     - Subárvore com nó imune: preserva tudo
     - _Requirements: 6.1, 6.2, 6.3, 6.4_
 
-  - [ ]* 9.4 Escrever property test — Property 4: Imunidade preservada
+  - [x] 9.4 Escrever property test — Property 4: Imunidade preservada
     - **Property 4: Imunidade preservada**
     - **Validates: Requirements 3.7, 4.2, 5.2, 6.2**
     - Estratégia: gerar lista de `PlanBlock`, aplicar thresholds, rodar R1+R2+R3, verificar que `immune_ids ∩ collapsed_ids = ∅`
 
-  - [ ]* 9.5 Escrever property test — Property 7: Grupos mínimos
+  - [x] 9.5 Escrever property test — Property 7: Grupos mínimos
     - **Property 7: Grupos mínimos**
     - **Validates: Requirements 4.3, 5.3**
     - Estratégia: para qualquer lista de blocos, `_collapse_config_fields` nunca retorna `CollapseResult` com `len(collapsed_ids) < 3`; `_collapse_situation_history` nunca retorna com `len(collapsed_ids) < 2`
 
-  - [ ]* 9.6 Escrever property test — Property 3: Nenhuma poda silenciosa
+  - [x] 9.6 Escrever property test — Property 3: Nenhuma poda silenciosa
     - **Property 3: Nenhuma poda silenciosa**
     - **Validates: Requirements 4.4, 5.4, 6.3**
     - Estratégia: para qualquer `CollapseResult` retornado por R1/R2/R3, `len(cr.replacement_lines) >= 1` e `cr.replacement_lines[0].startswith("[COLAPSADO:")`
 
-- [ ] 10. Checkpoint — Garantir que todos os testes unitários passam
+- [x] 10. Checkpoint — Garantir que todos os testes unitários passam
   - Garantir que todos os testes passam, perguntar ao usuário se houver dúvidas.
 
 - [ ] 11. Escrever testes para R4, R6 e orquestrador
@@ -110,7 +110,7 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
     - Verifica nota de omissão quando `pruned > 0`
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
-  - [ ]* 11.2 Escrever property test — Property 5: Consistência de predicados
+  - [ ] 11.2 Escrever property test — Property 5: Consistência de predicados
     - **Property 5: Consistência de predicados**
     - **Validates: Requirements 7.1, 7.4**
     - Estratégia: gerar `predicate_lines` e `collapsed_ids` arbitrários, verificar que nenhuma linha com ID colapsado aparece no resultado e todas as linhas com ID não colapsado são preservadas
@@ -120,7 +120,7 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
     - IDs com salto (1,3,5): nota inserida após `Plan hash value`
     - _Requirements: 8.1, 8.2_
 
-  - [ ]* 11.4 Escrever property test — Property 12: Nota de IDs não sequenciais
+  - [ ] 11.4 Escrever property test — Property 12: Nota de IDs não sequenciais
     - **Property 12: Nota de IDs não sequenciais**
     - **Validates: Requirements 8.1, 8.2**
     - Estratégia: gerar planos com IDs sequenciais e não sequenciais, verificar presença/ausência da nota
@@ -132,11 +132,11 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
     - Cada `CollapseResult` emite exatamente um bloco de resumo (sem duplicação)
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-  - [ ]* 11.6 Escrever property test — Property 10: IDs colapsados ausentes do plano reconstruído
+  - [ ] 11.6 Escrever property test — Property 10: IDs colapsados ausentes do plano reconstruído
     - **Property 10: IDs colapsados ausentes do plano reconstruído**
     - **Validates: Requirements 9.3, 9.5**
 
-  - [ ]* 11.7 Escrever property test — Property 11: Robustez de _compress_plan
+  - [ ] 11.7 Escrever property test — Property 11: Robustez de _compress_plan
     - **Property 11: Robustez de _compress_plan**
     - **Validates: Requirements 9.6**
     - Estratégia: `@given(st.lists(st.text()), st.lists(st.text()), st.sampled_from(["full", "compact", "minimal"]))` — nunca levanta exceção, sempre retorna `(list, list)`
@@ -149,17 +149,17 @@ A implementação principal (dataclasses, regex, funções R1–R6, orquestrador
     - `verbosity="minimal"` produz output sem seção de plano de execução e sem DDLs
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
 
-  - [ ]* 12.2 Escrever property test — Property 6: Verbosity inválido levanta erro
+  - [ ] 12.2 Escrever property test — Property 6: Verbosity inválido levanta erro
     - **Property 6: Verbosity inválido levanta erro**
     - **Validates: Requirements 1.5**
     - Estratégia: `@given(st.text().filter(lambda s: s not in {"full", "compact", "minimal"}))` — sempre levanta `ValueError`
 
-  - [ ]* 12.3 Escrever property test — Property 2: Monotonicidade de compressão
+  - [ ] 12.3 Escrever property test — Property 2: Monotonicidade de compressão
     - **Property 2: Monotonicidade de compressão**
     - **Validates: Requirements 1.3, 1.4**
     - Estratégia: para qualquer `CollectedContext` válido, `len(minimal) <= len(compact) <= len(full)`
 
-  - [ ]* 12.4 Escrever property test — Property 1: Idempotência de full
+  - [ ] 12.4 Escrever property test — Property 1: Idempotência de full
     - **Property 1: Idempotência de full**
     - **Validates: Requirements 1.2, 9.2**
     - Estratégia: `to_markdown(ctx, "full")` chamado duas vezes produz output idêntico

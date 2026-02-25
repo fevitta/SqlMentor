@@ -1,0 +1,58 @@
+Plan hash value: 1234567890
+
+-------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                    | Name                         | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  Reads  |
+-------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT             |                              |      1 |        |      1 |00:00:00.15 |     250 |       0 |
+|   1 |  NESTED LOOPS                |                              |      1 |      1 |      1 |00:00:00.15 |     250 |       0 |
+|   2 |   TABLE ACCESS BY INDEX ROWID| ENTITY_A                        |      1 |      1 |      1 |00:00:00.01 |       5 |       0 |
+|*  3 |    INDEX UNIQUE SCAN         | PK_ENTITY_A                      |      1 |      1 |      1 |00:00:00.01 |       3 |       0 |
+|   4 |   VIEW                       | VW_ENTITY_A_DETAIL                   |      1 |      1 |      1 |00:00:00.14 |     245 |       0 |
+|   5 |    SORT AGGREGATE            |                              |      1 |        |      0 |00:00:00.01 |       3 |       0 |
+|*  6 |     INDEX RANGE SCAN         | IDX_ATTR_ENTITY_ID           |      1 |      1 |      0 |00:00:00.01 |       3 |       0 |
+|*  7 |      INDEX UNIQUE SCAN       | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       2 |       0 |
+|   8 |    SORT AGGREGATE            |                              |      1 |        |      0 |00:00:00.01 |       3 |       0 |
+|*  9 |     INDEX RANGE SCAN         | IDX_ATTR_ENTITY_ID           |      1 |      1 |      0 |00:00:00.01 |       3 |       0 |
+|* 10 |      INDEX UNIQUE SCAN       | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       2 |       0 |
+|  11 |    SORT AGGREGATE            |                              |      1 |        |      0 |00:00:00.01 |       3 |       0 |
+|* 12 |     INDEX RANGE SCAN         | IDX_ATTR_ENTITY_ID           |      1 |      1 |      0 |00:00:00.01 |       3 |       0 |
+|* 13 |      INDEX UNIQUE SCAN       | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       2 |       0 |
+|  14 |    SORT AGGREGATE            |                              |      1 |        |      0 |00:00:00.01 |       3 |       0 |
+|* 15 |     INDEX RANGE SCAN         | IDX_ATTR_ENTITY_ID           |      1 |      1 |      0 |00:00:00.01 |       3 |       0 |
+|* 16 |      INDEX UNIQUE SCAN       | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       2 |       0 |
+|  17 |    SORT AGGREGATE            |                              |      1 |        |      3 |00:00:00.02 |      10 |       0 |
+|* 18 |     INDEX RANGE SCAN         | UK_STATUS_TYPE_REF        |      1 |      1 |      3 |00:00:00.01 |       5 |       0 |
+|* 19 |      INDEX RANGE SCAN        | IDX_STATUS_HIST_ENTITY     |      3 |      1 |      3 |00:00:00.01 |       5 |       0 |
+|  20 |    SORT AGGREGATE            |                              |      1 |        |      0 |00:00:00.01 |       8 |       0 |
+|* 21 |     INDEX RANGE SCAN         | UK_STATUS_TYPE_REF        |      1 |      1 |      0 |00:00:00.01 |       4 |       0 |
+|* 22 |      INDEX RANGE SCAN        | IDX_STATUS_HIST_ENTITY     |      1 |      1 |      0 |00:00:00.01 |       4 |       0 |
+|  23 |    SORT AGGREGATE            |                              |      1 |        |      1 |00:00:00.01 |       9 |       0 |
+|* 24 |     INDEX RANGE SCAN         | UK_STATUS_TYPE_REF        |      1 |      1 |      1 |00:00:00.01 |       5 |       0 |
+|* 25 |      INDEX RANGE SCAN        | IDX_STATUS_HIST_ENTITY     |      1 |      1 |      1 |00:00:00.01 |       4 |       0 |
+|  26 |    VIEW                       | VW_CURRENT_USER                   |      1 |      1 |      0 |00:00:00.01 |      12 |       0 |
+|  27 |     NESTED LOOPS             |                              |      0 |      1 |      0 |00:00:00.01 |      12 |       0 |
+|  28 |      TABLE ACCESS BY INDEX ROWID| ENTITY_B                  |      0 |      1 |      0 |00:00:00.01 |       8 |       0 |
+|* 29 |       INDEX UNIQUE SCAN      | PK_ENTITY_B                   |      0 |      1 |      0 |00:00:00.01 |       4 |       0 |
+|* 30 |      INDEX RANGE SCAN        | IDX_ENTITY_B_ROLE           |      0 |      1 |      0 |00:00:00.01 |       4 |       0 |
+-------------------------------------------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   3 - access("O"."ENTITY_ID"=:B1)
+   6 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=1)
+   7 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=1)
+   9 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=2)
+  10 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=2)
+  12 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=3)
+  13 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=3)
+  15 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=4)
+  16 - access("CA"."ENTITY_ID"=:B1 AND "CA"."ATTR_ID"=4)
+  18 - access("TS"."TYPE_REF"='STATUS_ACTIVE' AND "TS"."STATUS_ID">0)
+  19 - access("HS"."ENTITY_ID"=:B1 AND "HS"."STATUS_ID"="TS"."STATUS_ID")
+  21 - access("TS"."TYPE_REF"='SITUACAO_VISTORIA' AND "TS"."STATUS_ID">0)
+  22 - access("HS"."ENTITY_ID"=:B1 AND "HS"."STATUS_ID"="TS"."STATUS_ID")
+  24 - access("TS"."TYPE_REF"='SITUACAO_MEDICAO' AND "TS"."STATUS_ID">0)
+  25 - access("HS"."ENTITY_ID"=:B1 AND "HS"."STATUS_ID"="TS"."STATUS_ID")
+  29 - access("U"."ENTITY_B_ID"=:B2)
+  30 - access("U"."ENTITY_B_ID"=:B2 AND "P"."ROLE_ID"="U"."ROLE_ID")
