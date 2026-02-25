@@ -118,6 +118,7 @@ def analyze_sql(
     timeout: int = 0,
     normalized: bool = False,
     denorm_mode: str = "literal",
+    verbosity: str = "compact",
 ) -> str:
     """Analisa um SQL conectando no Oracle e coleta contexto completo para tuning.
 
@@ -137,6 +138,7 @@ def analyze_sql(
         timeout: Timeout em segundos para operações no banco. 0 = usa o default do profile (180s).
         normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido. Incompatível com execute=True.
         denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
+        verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
     """
     import re
 
@@ -250,7 +252,7 @@ def analyze_sql(
     # Relatório
     if output_format.lower() == "json":
         return to_json(ctx)
-    return to_markdown(ctx)
+    return to_markdown(ctx, verbosity=verbosity)
 
 @mcp.tool()
 def inspect_sql(
@@ -262,6 +264,7 @@ def inspect_sql(
     expand_functions: bool = False,
     output_format: str = "markdown",
     timeout: int = 0,
+    verbosity: str = "compact",
 ) -> str:
     """Coleta contexto de um SQL já executado via sql_id, sem re-executar a query.
 
@@ -277,6 +280,7 @@ def inspect_sql(
         expand_functions: Se True, coleta DDL de funções PL/SQL.
         output_format: "markdown" (padrão) ou "json".
         timeout: Timeout em segundos. 0 = usa default do profile (180s).
+        verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
     """
     from sqlmentor.collector import collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
@@ -369,7 +373,7 @@ def inspect_sql(
 
     if output_format.lower() == "json":
         return to_json(ctx)
-    return to_markdown(ctx)
+    return to_markdown(ctx, verbosity=verbosity)
 
 
 def main():

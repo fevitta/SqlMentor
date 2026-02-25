@@ -99,6 +99,22 @@ sqlmentor config remove --name producao
 | Histogramas detalhados | `ALL_TAB_HISTOGRAMS` | `--deep` |
 | Partições | `ALL_TAB_PARTITIONS` | `--deep` |
 
+### Verbosity (compressão do plano)
+
+O flag `--verbosity` controla o nível de compressão do plano de execução no relatório:
+
+| Nível | Comportamento |
+|-------|---------------|
+| `compact` | Default. Colapsa scalar subqueries repetitivas, expansões de views com A-Rows=0, e predicados redundantes. Reduz ~40% do tamanho sem perder informação relevante. |
+| `full` | Sem compressão adicional (além de P1/P3 já existentes). Útil para inspecionar o plano completo. |
+| `minimal` | Só hotspots + runtime stats + parâmetros do otimizador. Sem plano, sem DDL. Ideal para uma visão rápida. |
+
+```bash
+sqlmentor analyze minha_query.sql --verbosity compact   # default
+sqlmentor analyze minha_query.sql --verbosity full      # plano completo
+sqlmentor analyze minha_query.sql --verbosity minimal   # só métricas
+```
+
 ## Relatórios
 
 Reports são salvos automaticamente em `reports/` com o formato:

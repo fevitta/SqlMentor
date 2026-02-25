@@ -5,18 +5,508 @@ Suporta Markdown (otimizado pra colar em chat) e JSON (pra integração via API)
 """
 
 import json
+import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from sqlmentor.collector import CollectedContext, TableContext
 
 
-def to_markdown(ctx: CollectedContext) -> str:
+# ─── Dataclasses para compressão do plano ────────────────────────
+
+@dataclass
+class PlanBlock:
+    """Representa uma operação do plano de execução Oracle."""
+    id: str
+    operation: str
+    name: str
+    starts: int
+    e_rows: int | None
+    a_rows: int
+    a_time_ms: float
+    buffers: int
+    reads: int
+    indent: int = 0
+    immune: bool = False
+    children: list["PlanBlock"] = field(default_factory=list)
+
+
+@dataclass
+class CollapseResult:
+    """Resultado de um colapso de blocos do plano."""
+    collapsed_ids: set[str]
+    replacement_lines: list[str]
+
+
+# Regex para parsear linha do plano ALLSTATS
+# Captura indentação da coluna Operation separadamente para inferir hierarquia
+_PLAN_ROW = re.compile(
+    r'\|\*?\s*(\d+)\s*\|'           # Id
+    r'(\s*)(\S[^|]*?)\s*\|'         # (indent_spaces)(Operation) — captura espaços iniciais
+    r'\s*(.*?)\s*\|'                 # Name
+    r'\s*(\d+)\s*\|'                 # Starts
+    r'\s*(\d*)\s*\|'                 # E-Rows (pode estar vazio)
+    r'\s*(\d+)\s*\|'                 # A-Rows
+    r'\s*(\d+:\d+:\d+\.\d+)\s*\|'  # A-Time
+    r'\s*(\d+[KMG]?)\s*\|'          # Buffers
+    r'\s*(\d+)\s*\|',               # Reads
+)
+
+_BUFFERS_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
+
+# Thresholds de proteção (R5)
+_THRESHOLD_BUFFERS = 1_000
+_THRESHOLD_STARTS = 100
+_THRESHOLD_ATIME_MS = 100.0
+_CARDINALITY_RATIO = 10
+
+
+def _parse_buffers(s: str) -> int:
+    """Converte '10K', '2M', '137K' etc. para inteiro."""
+    s = s.strip()
+    if not s:
+        return 0
+    suffix = s[-1].upper()
+    if suffix in _BUFFERS_MULTIPLIER:
+        return int(float(s[:-1]) * _BUFFERS_MULTIPLIER[suffix])
+    return int(s)
+
+
+def _parse_atime_ms(s: str) -> float:
+    """Converte 'HH:MM:SS.ss' para milissegundos."""
+    parts = s.split(":")
+    if len(parts) != 3:
+        return 0.0
+    return (int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])) * 1000
+
+
+def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
+    """
+    Parseia o plano em lista plana de PlanBlock.
+    A indentação da coluna Operation é preservada em PlanBlock.indent.
+    """
+    blocks: list[PlanBlock] = []
+    for line in plan_lines:
+        m = _PLAN_ROW.match(line)
+        if not m:
+            continue
+        # grupos: 1=id, 2=indent_spaces, 3=operation, 4=name,
+        #         5=starts, 6=e_rows, 7=a_rows, 8=a_time, 9=buffers, 10=reads
+        indent = len(m.group(2))
+        e_rows_str = m.group(6).strip()
+        blocks.append(PlanBlock(
+            id=m.group(1),
+            operation=m.group(3).strip(),
+            name=m.group(4).strip(),
+            starts=int(m.group(5)),
+            e_rows=int(e_rows_str) if e_rows_str else None,
+            a_rows=int(m.group(7)),
+            a_time_ms=_parse_atime_ms(m.group(8)),
+            buffers=_parse_buffers(m.group(9)),
+            reads=int(m.group(10)),
+            indent=indent,
+        ))
+    return blocks
+
+
+def _apply_thresholds(blocks: list[PlanBlock]) -> None:
+    """Marca blocks.immune=True para operações que atendem R5."""
+    for b in blocks:
+        if b.reads > 0:
+            b.immune = True
+            continue
+        if b.buffers > _THRESHOLD_BUFFERS:
+            b.immune = True
+            continue
+        if b.starts > _THRESHOLD_STARTS:
+            b.immune = True
+            continue
+        if b.a_time_ms > _THRESHOLD_ATIME_MS:
+            b.immune = True
+            continue
+        if b.e_rows and b.a_rows and b.e_rows > 0 and b.a_rows > 0:
+            ratio = max(b.e_rows, b.a_rows) / min(b.e_rows, b.a_rows)
+            if ratio > _CARDINALITY_RATIO:
+                b.immune = True
+
+
+def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
+    """
+    Detecta e colapsa grupos de scalar subqueries de campos configurados (R1).
+    Padrão: SORT AGGREGATE → NESTED LOOPS → IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG
+    """
+    results: list[CollapseResult] = []
+    # Identifica blocos SORT AGGREGATE com starts=1 e filhos usando os índices alvo
+    target_indexes = {"IDX_ATTR_ENTITY_ID", "PK_ATTR_CONFIG"}
+
+    # Agrupa blocos SORT AGGREGATE consecutivos com mesmo padrão de filhos
+    group: list[PlanBlock] = []
+    group_ids: set[str] = set()
+
+    def _flush_group():
+        nonlocal group, group_ids
+        if len(group) >= 3:
+            # Verifica se nenhum é imune
+            all_ids = set()
+            for b in group:
+                all_ids.add(b.id)
+            immune_any = any(b.immune for b in group)
+            if not immune_any:
+                total_buffers = sum(b.buffers for b in group)
+                total_reads = sum(b.reads for b in group)
+                a_rows_nonzero = [b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0]
+                lines = [
+                    f"[COLAPSADO: {len(group)} scalar subqueries — campos configurados por obra]",
+                    f"  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
+                    f"  Resultado: A-Rows=0 em todos" if not a_rows_nonzero else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
+                    f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
+                    f"  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
+                ]
+                results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
+        group = []
+        group_ids = set()
+
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if b.operation == "SORT AGGREGATE" and b.starts == 1:
+            # Verifica se os próximos blocos com indent maior usam os índices alvo
+            j = i + 1
+            child_names: set[str] = set()
+            child_ids: set[str] = {b.id}
+            while j < len(blocks) and blocks[j].indent > b.indent:
+                child_names.add(blocks[j].name.upper())
+                child_ids.add(blocks[j].id)
+                j += 1
+            if target_indexes.issubset(child_names):
+                # Candidato — adiciona ao grupo
+                for k in range(i, j):
+                    group.append(blocks[k])
+                i = j
+                continue
+            else:
+                _flush_group()
+        else:
+            _flush_group()
+        i += 1
+
+    _flush_group()
+    return results
+
+
+def _collapse_situation_history(
+    blocks: list[PlanBlock], predicate_map: dict[str, list[str]]
+) -> list[CollapseResult]:
+    """
+    Detecta e colapsa scalar subqueries de histórico de situação (R2).
+    Padrão: SORT AGGREGATE → NESTED LOOPS → UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY
+    """
+    results: list[CollapseResult] = []
+    target_indexes = {"UK_STATUS_TYPE_REF", "IDX_STATUS_HIST_ENTITY"}
+    _TPS_REF = re.compile(r"TYPE_REF\s*=\s*'([^']+)'")
+
+    group: list[PlanBlock] = []
+    group_root_ids: list[str] = []
+
+    def _flush():
+        nonlocal group, group_root_ids
+        if len(group_root_ids) >= 2:
+            immune_any = any(b.immune for b in group)
+            if not immune_any:
+                all_ids = {b.id for b in group}
+                total_buffers = sum(b.buffers for b in group)
+                # Monta tabela com A-Rows por tipo
+                table_rows = []
+                for root_id in group_root_ids:
+                    # Busca TYPE_REF nos predicados dos filhos deste root
+                    tps_val = "?"
+                    root_block = next((b for b in group if b.id == root_id), None)
+                    if root_block:
+                        # Procura nos predicados dos filhos
+                        for b in group:
+                            preds = predicate_map.get(b.id, [])
+                            for p in preds:
+                                m = _TPS_REF.search(p)
+                                if m:
+                                    tps_val = m.group(1)
+                                    break
+                        a_rows = root_block.a_rows
+                        buffers = root_block.buffers
+                        table_rows.append((tps_val, a_rows, buffers))
+
+                lines = [
+                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries DATA_ALT_SIT_* — histórico de situações]",
+                    f"  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY",
+                    f"  | Tipo | A-Rows | Buffers |",
+                    f"  |------|--------|---------|",
+                ]
+                for tps, ar, buf in table_rows:
+                    lines.append(f"  | {tps} | {ar} | {buf} |")
+                lines.append(f"  Custo total: {total_buffers:,} buffers")
+                results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
+        group.clear()
+        group_root_ids.clear()
+
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if b.operation == "SORT AGGREGATE" and b.starts == 1:
+            j = i + 1
+            child_names: set[str] = set()
+            child_blocks: list[PlanBlock] = [b]
+            while j < len(blocks) and blocks[j].indent > b.indent:
+                child_names.add(blocks[j].name.upper())
+                child_blocks.append(blocks[j])
+                j += 1
+            if target_indexes.issubset(child_names):
+                group.extend(child_blocks)
+                group_root_ids.append(b.id)
+                i = j
+                continue
+            else:
+                _flush()
+        else:
+            _flush()
+        i += 1
+
+    _flush()
+    return results
+
+
+def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
+    """
+    Detecta e colapsa expansões de VW_CURRENT_USER com A-Rows=0 no nó pai (R3).
+    """
+    results: list[CollapseResult] = []
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        # Procura nó VIEW com nome VW_CURRENT_USER (ou from$_subquery$_)
+        is_view_node = (
+            "VIEW" in b.operation.upper()
+            and ("VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper())
+        )
+        if is_view_node and b.a_rows == 0:
+            # Coleta toda a subárvore
+            j = i + 1
+            subtree: list[PlanBlock] = [b]
+            while j < len(blocks) and blocks[j].indent > b.indent:
+                subtree.append(blocks[j])
+                j += 1
+            immune_any = any(sb.immune for sb in subtree)
+            if not immune_any:
+                all_ids = {sb.id for sb in subtree}
+                total_buffers = sum(sb.buffers for sb in subtree)
+                lines = [
+                    f"[COLAPSADO: {b.name} — A-Rows=0, {total_buffers:,} buffers — usuário NULL nesta execução]",
+                    f"  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.",
+                ]
+                results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
+                i = j
+                continue
+        i += 1
+    return results
+
+
+def _build_predicate_map(plan_lines: list[str]) -> dict[str, list[str]]:
+    """
+    Constrói mapa id → lista de predicados a partir da seção Predicate Information.
+    """
+    pred_map: dict[str, list[str]] = {}
+    in_predicates = False
+    current_id: str | None = None
+    _PRED_ID = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\((.+)')
+
+    for line in plan_lines:
+        stripped = line.strip()
+        if stripped.startswith("Predicate Information"):
+            in_predicates = True
+            continue
+        if not in_predicates:
+            continue
+        m = _PRED_ID.match(stripped)
+        if m:
+            current_id = m.group(1)
+            pred_map.setdefault(current_id, []).append(m.group(3))
+        elif current_id and stripped and not stripped.startswith("---"):
+            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+                in_predicates = False
+                current_id = None
+            else:
+                pred_map[current_id].append(stripped)
+
+    return pred_map
+
+
+def _add_nonsequential_id_note(plan_lines: list[str]) -> list[str]:
+    """
+    Adiciona nota no cabeçalho do plano quando IDs não sequenciais são detectados (R6).
+    """
+    ids = []
+    for line in plan_lines:
+        m = _PLAN_ROW.match(line)
+        if m:
+            ids.append(int(m.group(1)))
+
+    has_gaps = any(ids[i+1] - ids[i] > 1 for i in range(len(ids) - 1)) if len(ids) > 1 else False
+    if not has_gaps:
+        return plan_lines
+
+    # Insere nota após a linha "Plan hash value"
+    result = []
+    inserted = False
+    for line in plan_lines:
+        result.append(line)
+        if not inserted and line.strip().startswith("Plan hash value"):
+            result.append(
+                "ℹ️ IDs não sequenciais são normais — operações internas de views/subqueries"
+            )
+            result.append(
+                "   são numeradas pelo Oracle mas omitidas do DBMS_XPLAN."
+            )
+            inserted = True
+    return result
+
+
+def _compress_plan(
+    plan_lines: list[str],
+    predicate_lines: list[str],
+    verbosity: str,
+) -> tuple[list[str], list[str]]:
+    """
+    Aplica compressão ao plano e predicados conforme nível de verbosidade.
+    Retorna (plano_comprimido, predicados_comprimidos).
+
+    Orquestra R1–R6 em sequência.
+    """
+    if verbosity == "full":
+        return plan_lines, predicate_lines
+
+    blocks = _detect_plan_blocks(plan_lines)
+    _apply_thresholds(blocks)
+    pred_map = _build_predicate_map(plan_lines)
+
+    # Coleta todos os colapsos
+    all_collapses: list[CollapseResult] = []
+    all_collapses.extend(_collapse_config_fields(blocks))
+    all_collapses.extend(_collapse_situation_history(blocks, pred_map))
+    all_collapses.extend(_collapse_vw_usuario_null(blocks))
+
+    # Conjunto de todos os IDs colapsados
+    all_collapsed_ids: set[str] = set()
+    for cr in all_collapses:
+        all_collapsed_ids.update(cr.collapsed_ids)
+
+    if not all_collapsed_ids:
+        # Nada a colapsar — só adiciona nota de IDs não sequenciais
+        return _add_nonsequential_id_note(plan_lines), predicate_lines
+
+    # Reconstrói o plano substituindo blocos colapsados pelos resumos
+    # Mapeia id → CollapseResult para lookup rápido
+    id_to_collapse: dict[str, CollapseResult] = {}
+    for cr in all_collapses:
+        for cid in cr.collapsed_ids:
+            id_to_collapse[cid] = cr
+
+    new_plan: list[str] = []
+    emitted_collapses: set[int] = set()  # id(CollapseResult) já emitidos
+    for line in plan_lines:
+        m = _PLAN_ROW.match(line)
+        if m:
+            line_id = m.group(1)
+            if line_id in all_collapsed_ids:
+                cr = id_to_collapse[line_id]
+                cr_key = id(cr)
+                if cr_key not in emitted_collapses:
+                    emitted_collapses.add(cr_key)
+                    new_plan.extend(cr.replacement_lines)
+                # Pula a linha original
+                continue
+        new_plan.append(line)
+
+    # Adiciona nota de IDs não sequenciais
+    new_plan = _add_nonsequential_id_note(new_plan)
+
+    # Colapsa predicados dos IDs removidos (R4)
+    new_preds = _collapse_orphan_predicates_by_ids(predicate_lines, all_collapsed_ids)
+
+    return new_plan, new_preds
+
+
+def _collapse_orphan_predicates_by_ids(
+    plan_lines: list[str], collapsed_ids: set[str]
+) -> list[str]:
+    """
+    Remove predicados cujos IDs foram colapsados.
+    Adiciona nota de quantos foram omitidos.
+    """
+    if not collapsed_ids:
+        return plan_lines
+
+    result = []
+    pruned = 0
+    in_predicates = False
+    skipping = False
+    _PRED_ID = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+
+    for line in plan_lines:
+        stripped = line.strip()
+        if stripped.startswith("Predicate Information"):
+            in_predicates = True
+            skipping = False
+            result.append(line)
+            continue
+        if not in_predicates:
+            result.append(line)
+            continue
+
+        m = _PRED_ID.match(stripped)
+        if m:
+            pred_id = m.group(1)
+            if pred_id in collapsed_ids:
+                skipping = True
+                pruned += 1
+                continue
+            else:
+                skipping = False
+                result.append(line)
+                continue
+
+        if skipping and stripped and not stripped.startswith("---"):
+            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+                in_predicates = False
+                skipping = False
+                result.append(line)
+            else:
+                pruned += 1
+            continue
+
+        result.append(line)
+
+    if pruned > 0:
+        result.append(f"({pruned} predicados de blocos colapsados omitidos — ver resumos acima)")
+
+    return result
+
+
+def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
     """
     Gera relatório Markdown estruturado pro LLM analisar.
 
     Formato otimizado pra context window de LLM — conciso mas completo.
+
+    Args:
+        ctx: Contexto coletado do Oracle.
+        verbosity: Nível de compressão do plano.
+            "full"    — sem compressão além de P1/P3 já existentes.
+            "compact" — todas as podas ativas (default).
+            "minimal" — só hotspots + runtime stats + optimizer params.
     """
+    _VALID_VERBOSITY = ("full", "compact", "minimal")
+    if verbosity not in _VALID_VERBOSITY:
+        raise ValueError(f"verbosity inválido: '{verbosity}'. Use: {', '.join(_VALID_VERBOSITY)}")
+
     lines: list[str] = []
 
     lines.append("# SQL Tuning Context Report")
@@ -24,6 +514,29 @@ def to_markdown(ctx: CollectedContext) -> str:
     if ctx.db_version:
         lines.append(f"**Database:** {ctx.db_version}")
     lines.append("")
+
+    # ─── Modo minimal: só hotspots + runtime stats + optimizer params ─
+    if verbosity == "minimal":
+        plan_source = ctx.runtime_plan or ctx.execution_plan or []
+        hotspots = _format_hotspots(plan_source) if plan_source else ""
+        if hotspots:
+            lines.append("## Hotspots")
+            lines.append(hotspots)
+            lines.append("")
+        if ctx.runtime_stats:
+            lines.append("## Runtime Stats (V$SQL)")
+            lines.append(_format_runtime_stats(ctx.runtime_stats))
+            lines.append("")
+        if ctx.optimizer_params:
+            lines.append("## Parâmetros do Otimizador")
+            lines.append(_format_optimizer_params(ctx.optimizer_params))
+            lines.append("")
+        if ctx.errors:
+            lines.append("## ⚠️ Erros na Coleta")
+            for err in ctx.errors:
+                lines.append(f"- {err}")
+            lines.append("")
+        return "\n".join(lines)
 
     # ─── SQL Original ────────────────────────────────────────────
     lines.append("## 1. SQL Original")
@@ -72,7 +585,13 @@ def to_markdown(ctx: CollectedContext) -> str:
                           "Stats de V$SQL são acumuladas, mas o plano ALLSTATS LAST é da última execução.")
         lines.append("")
         lines.append("```")
-        for line in _strip_sql_from_plan(ctx.runtime_plan):
+        plan_cleaned = _strip_sql_from_plan(ctx.runtime_plan)
+        plan_cleaned, pruned_ids = _prune_dead_operations(plan_cleaned)
+        plan_cleaned = _prune_orphan_predicates(plan_cleaned, pruned_ids)
+        # Compressão adicional (compact/full)
+        if verbosity != "full":
+            plan_cleaned, _ = _compress_plan(plan_cleaned, plan_cleaned, verbosity)
+        for line in plan_cleaned:
             lines.append(line)
         lines.append("```")
         lines.append("")
@@ -215,7 +734,7 @@ def to_markdown(ctx: CollectedContext) -> str:
         if table.ddl and table.object_type == "VIEW":
             lines.append("### DDL")
             lines.append("```sql")
-            lines.append(table.ddl.strip())
+            lines.append(_strip_view_column_list(table.ddl.strip()))
             lines.append("```")
             lines.append("")
 
@@ -316,6 +835,144 @@ def _strip_sql_from_plan(plan_lines: list[str]) -> list[str]:
     return result if found_plan_hash else plan_lines
 
 
+
+def _prune_dead_operations(plan_lines: list[str]) -> tuple[list[str], set[str]]:
+    """Remove operações com Starts=0 AND A-Rows=0 do plano ALLSTATS LAST.
+
+    Essas operações nunca executaram em runtime — são ramos eliminados
+    pelo otimizador (ex: UNION ALL branches não acessados em views).
+    Reduz drasticamente o tamanho de planos de views complexas.
+
+    Retorna (linhas_filtradas, ids_podados) para permitir poda de
+    predicados órfãos via _prune_orphan_predicates.
+    """
+    result = []
+    pruned = 0
+    pruned_ids: set[str] = set()
+    id_pattern = re.compile(r'\|\*?\s*(\d+)\s*\|')
+    dead_pattern = re.compile(
+        r'\|\*?\s*\d+\s*\|'     # Id
+        r'\s*.+?\s*\|'          # Operation
+        r'\s*.*?\s*\|'          # Name
+        r'\s*0\s*\|'            # Starts = 0
+        r'\s*\d*\s*\|'          # E-Rows (qualquer)
+        r'\s*0\s*\|'            # A-Rows = 0
+    )
+    for line in plan_lines:
+        if dead_pattern.match(line):
+            m = id_pattern.match(line)
+            if m:
+                pruned_ids.add(m.group(1))
+            pruned += 1
+            continue
+        result.append(line)
+
+    if pruned > 0:
+        result.append("")
+        result.append(f"({pruned} operações com Starts=0/A-Rows=0 omitidas — ramos não executados)")
+
+    return result, pruned_ids
+
+
+def _prune_orphan_predicates(plan_lines: list[str], pruned_ids: set[str]) -> list[str]:
+    """Remove predicados cujos Ids foram podados por _prune_dead_operations.
+
+    A seção 'Predicate Information' referencia Ids do plano. Se a operação
+    foi removida (Starts=0/A-Rows=0), o predicado é órfão — não agrega
+    valor pra análise de tuning.
+
+    Formato das linhas de predicado:
+        '   16 - access("IDX"."COL"=:B1)'
+        '         filter("X"."Y"="Z"."W")'   ← continuação (sem Id)
+    """
+    if not pruned_ids:
+        return plan_lines
+
+    result = []
+    pruned_preds = 0
+    in_predicates = False
+    skipping = False
+    pred_id_pattern = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+
+    for line in plan_lines:
+        stripped = line.strip()
+
+        # Detecta início da seção de predicados
+        if stripped.startswith("Predicate Information"):
+            in_predicates = True
+            skipping = False
+            result.append(line)
+            continue
+
+        if not in_predicates:
+            result.append(line)
+            continue
+
+        # Linha de predicado com Id
+        m = pred_id_pattern.match(stripped)
+        if m:
+            pred_id = m.group(1)
+            if pred_id in pruned_ids:
+                skipping = True
+                pruned_preds += 1
+                continue
+            else:
+                skipping = False
+                result.append(line)
+                continue
+
+        # Linha de continuação (indentada, sem Id) — segue o estado anterior
+        if skipping and stripped and not stripped.startswith("---"):
+            # Continuação de predicado órfão — pula
+            # Mas se parece início de nova seção, para de pular
+            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+                in_predicates = False
+                skipping = False
+                result.append(line)
+            else:
+                pruned_preds += 1
+            continue
+
+        # Separadores, linhas em branco, etc.
+        result.append(line)
+
+    if pruned_preds > 0:
+        result.append(f"({pruned_preds} predicados de operações não executadas omitidos)")
+
+    return result
+
+
+
+def _strip_view_column_list(ddl: str) -> str:
+    """Remove a lista de colunas do CREATE VIEW (...) AS e linhas vazias.
+
+    A lista de aliases entre parênteses após CREATE VIEW é redundante —
+    os aliases já aparecem no SELECT. Em views grandes (200+ colunas),
+    essa lista sozinha pode ter 100+ linhas de ruído puro.
+
+    Também remove linhas em branco do DDL — são separadores visuais
+    do desenvolvedor original que só desperdiçam tokens no contexto LLM.
+    """
+    # Padrão: CREATE [OR REPLACE] [FORCE] VIEW "SCHEMA"."NAME" (col1, col2, ...) AS\n  SELECT
+    # Queremos trocar tudo até "AS\n" por uma versão sem a lista de colunas
+    match = re.match(
+        r'(CREATE\s+(?:OR\s+REPLACE\s+)?(?:FORCE\s+)?VIEW\s+'
+        r'["\w.]+(?:\s*\.\s*["\w.]+)*)'  # CREATE ... VIEW "SCHEMA"."NAME"
+        r'\s*\([^)]+\)'                    # (col1, col2, ...) — lista de colunas
+        r'\s+AS\b',                        # AS
+        ddl,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        # Encontra onde o AS termina pra pegar o SELECT
+        as_end = match.end()
+        ddl = match.group(1) + " AS\n" + ddl[as_end:].lstrip()
+
+    # Remove linhas em branco (só whitespace) — economiza tokens sem perder semântica
+    cleaned_lines = [line for line in ddl.splitlines() if line.strip()]
+    return "\n".join(cleaned_lines)
+
+
 def _get_sql_referenced_columns(ctx: CollectedContext) -> set[str]:
     """Retorna set de nomes de colunas (upper) referenciadas no SQL (WHERE, JOIN, ORDER, GROUP, SELECT)."""
     cols = set()
@@ -334,7 +991,6 @@ def _get_sql_referenced_columns(ctx: CollectedContext) -> set[str]:
     plan_source = ctx.runtime_plan or ctx.execution_plan or []
     for line in plan_source:
         # Predicate info: extrai nomes de colunas entre aspas
-        import re
         for match in re.finditer(r'"(\w+)"', line):
             cols.add(match.group(1).upper())
 
@@ -709,8 +1365,6 @@ def _format_wait_events(events: list[dict[str, Any]]) -> str:
 
 def _parse_plan_operations(plan_lines: list[str]) -> list[dict[str, Any]]:
     """Parseia linhas do DISPLAY_CURSOR e extrai operações com métricas."""
-    import re
-
     ops = []
     # Padrão: |  Id | Operation | Name | Starts | E-Rows | A-Rows | A-Time | Buffers | ...
     # Linhas de dados: |*  3 |    HASH JOIN OUTER  |   | 1 | 1557 | 50 | 00:00:00.26 | 10919 | ...
@@ -767,8 +1421,6 @@ def _extract_plan_tables(
 
 def _extract_implicit_conversions(plan_lines: list[str]) -> list[dict[str, str]]:
     """Extrai conversões implícitas (TO_NUMBER, TO_CHAR, TO_DATE) da Predicate Information."""
-    import re
-
     conversions = []
     in_predicates = False
 
@@ -822,6 +1474,9 @@ def _format_hotspots(plan_lines: list[str]) -> str:
 
     Foca em desvios de cardinalidade e efeito multiplicador —
     top N por buffers/tempo são redundantes (operações pai acumulam filhos).
+
+    Operações com mesmo (Operation, Name) são agrupadas pra evitar
+    repetição quando views são expandidas múltiplas vezes no plano.
     """
     ops = _parse_plan_operations(plan_lines)
     if not ops:
@@ -829,18 +1484,44 @@ def _format_hotspots(plan_lines: list[str]) -> str:
 
     lines: list[str] = []
 
-    # Operações com Starts >= 10 (efeito multiplicador)
+    # Operações com Starts >= 10 (efeito multiplicador) — agrupadas por (Operation, Name)
     high_starts = [o for o in ops if o["starts"] >= 10]
     if high_starts:
-        high_starts.sort(key=lambda o: o["starts"], reverse=True)
-        lines.append("### Operações com efeito multiplicador (Starts ≥ 10)")
-        lines.append("| Id | Operation | Name | Starts | A-Rows | Buffers |")
-        lines.append("|----|-----------|------|--------|--------|---------|")
+        # Agrupa por (operation, name) somando métricas
+        grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for o in high_starts:
-            lines.append(f"| {o['id']} | {o['operation']} | {o['name']} | {o['starts']:,} | {o['a_rows']:,} | {o['buffers']:,} |")
+            key = (o["operation"], o["name"])
+            if key not in grouped:
+                grouped[key] = {
+                    "operation": o["operation"],
+                    "name": o["name"],
+                    "ids": [o["id"]],
+                    "starts": o["starts"],
+                    "a_rows": o["a_rows"],
+                    "buffers": o["buffers"],
+                    "occurrences": 1,
+                }
+            else:
+                g = grouped[key]
+                g["ids"].append(o["id"])
+                g["starts"] += o["starts"]
+                g["a_rows"] += o["a_rows"]
+                g["buffers"] += o["buffers"]
+                g["occurrences"] += 1
+
+        sorted_groups = sorted(grouped.values(), key=lambda g: g["starts"], reverse=True)
+        lines.append("### Operações com efeito multiplicador (Starts ≥ 10)")
+        lines.append("| Operation | Name | Ocorrências | Starts (total) | A-Rows (total) | Buffers (total) |")
+        lines.append("|-----------|------|-------------|----------------|----------------|-----------------|")
+        for g in sorted_groups:
+            occ = f"{g['occurrences']}×" if g["occurrences"] > 1 else "1"
+            lines.append(
+                f"| {g['operation']} | {g['name']} | {occ} "
+                f"| {g['starts']:,} | {g['a_rows']:,} | {g['buffers']:,} |"
+            )
         lines.append("")
 
-    # Maiores desvios de cardinalidade (E-Rows vs A-Rows)
+    # Maiores desvios de cardinalidade (E-Rows vs A-Rows) — também deduplicados
     deviations = []
     for o in ops:
         if o["e_rows"] > 0 and o["a_rows"] > 0:
@@ -848,15 +1529,42 @@ def _format_hotspots(plan_lines: list[str]) -> str:
             if ratio >= 5:
                 deviations.append({**o, "ratio": ratio})
     if deviations:
-        deviations.sort(key=lambda o: o["ratio"], reverse=True)
+        # Agrupa por (operation, name) mantendo o maior ratio
+        dev_grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        for d in deviations:
+            key = (d["operation"], d["name"])
+            if key not in dev_grouped:
+                dev_grouped[key] = {
+                    "operation": d["operation"],
+                    "name": d["name"],
+                    "e_rows": d["e_rows"],
+                    "a_rows": d["a_rows"],
+                    "ratio": d["ratio"],
+                    "occurrences": 1,
+                }
+            else:
+                g = dev_grouped[key]
+                g["occurrences"] += 1
+                # Mantém o pior caso (maior ratio)
+                if d["ratio"] > g["ratio"]:
+                    g["e_rows"] = d["e_rows"]
+                    g["a_rows"] = d["a_rows"]
+                    g["ratio"] = d["ratio"]
+
+        sorted_devs = sorted(dev_grouped.values(), key=lambda g: g["ratio"], reverse=True)
         lines.append("### Desvios de cardinalidade (E-Rows vs A-Rows, ratio ≥ 5x)")
-        lines.append("| Id | Operation | Name | E-Rows | A-Rows | Ratio |")
-        lines.append("|----|-----------|------|--------|--------|-------|")
-        for o in deviations[:10]:
-            direction = "↑" if o["a_rows"] > o["e_rows"] else "↓"
-            lines.append(f"| {o['id']} | {o['operation']} | {o['name']} | {o['e_rows']:,} | {o['a_rows']:,} | {o['ratio']:.1f}x {direction} |")
+        lines.append("| Operation | Name | Ocorrências | E-Rows | A-Rows | Ratio |")
+        lines.append("|-----------|------|-------------|--------|--------|-------|")
+        for g in sorted_devs[:10]:
+            direction = "↑" if g["a_rows"] > g["e_rows"] else "↓"
+            occ = f"{g['occurrences']}×" if g["occurrences"] > 1 else "1"
+            lines.append(
+                f"| {g['operation']} | {g['name']} | {occ} "
+                f"| {g['e_rows']:,} | {g['a_rows']:,} | {g['ratio']:.1f}x {direction} |"
+            )
         lines.append("")
 
     return "\n".join(lines)
+
 
 

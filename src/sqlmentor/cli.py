@@ -18,6 +18,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Força UTF-8 no stdout/stderr no Windows (evita UnicodeEncodeError com ✓ ✗ ⚠ etc.)
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -116,6 +121,9 @@ def analyze(
     ),
     denorm_mode: str = typer.Option(
         "literal", "--denorm-mode", help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...)."
+    ),
+    verbosity: str = typer.Option(
+        "compact", "--verbosity", help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats)."
     ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
@@ -260,7 +268,7 @@ def analyze(
     if format.lower() == "json":
         report = to_json(ctx)
     else:
-        report = to_markdown(ctx)
+        report = to_markdown(ctx, verbosity=verbosity)
 
     if output:
         out_path = output
@@ -325,6 +333,9 @@ def inspect(
     ),
     timeout: int = typer.Option(
         None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile)."
+    ),
+    verbosity: str = typer.Option(
+        "compact", "--verbosity", help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats)."
     ),
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
@@ -433,7 +444,7 @@ def inspect(
     if format.lower() == "json":
         report = to_json(ctx)
     else:
-        report = to_markdown(ctx)
+        report = to_markdown(ctx, verbosity=verbosity)
 
     if output:
         out_path = output

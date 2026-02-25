@@ -52,6 +52,7 @@ Parâmetros importantes:
 - `timeout`: Timeout em segundos para operações no banco (0 = usa default do profile, 180s)
 - `normalized`: Se True, força tratamento como SQL normalizado. Na maioria dos casos não é necessário — a auto-detecção identifica `?` placeholders automaticamente. Incompatível com `execute=True`.
 - `denorm_mode`: Estratégia de desnormalização: `"literal"` (default, `?` → `'1'`) ou `"bind"` (`?` → `:dn1`, `:dn2`...). Modo bind gera plano com seletividade padrão do otimizador, sem depender de valores concretos.
+- `verbosity`: Nível de compressão do plano: `"compact"` (default — todas as podas ativas), `"full"` (sem compressão, comportamento legado), `"minimal"` (só hotspots + runtime stats + parâmetros do otimizador, sem plano nem DDL).
 
 ### inspect_sql
 Coleta contexto de um SQL já executado via sql_id, sem re-executar. Puxa plano real e métricas do shared pool Oracle. Ideal para queries longas que já rodaram.
@@ -60,6 +61,7 @@ Parâmetros importantes:
 - `sql_id`: SQL_ID da query no shared pool Oracle
 - `conn`: Nome do profile de conexão. Se omitido, usa a conexão padrão
 - `deep`, `expand_views`, `expand_functions`, `timeout`: mesmos do analyze_sql
+- `verbosity`: mesmo do analyze_sql
 
 ## Conexão Padrão
 
