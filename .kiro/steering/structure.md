@@ -4,8 +4,19 @@
 sqlmentor/
 ├── pyproject.toml              # Build config, dependências, entry points (sqlmentor + sqlmentor-mcp)
 ├── connections.example.yaml    # Exemplo de config de conexões
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # GitHub Actions CI (Python 3.10/3.12, lint, format, tests)
 ├── scripts/
 │   └── oracle_create_user.sql  # Script DBA para criar user read-only
+├── tests/
+│   ├── conftest.py             # Fixtures compartilhadas (ParsedSQL, CollectedContext, mock Oracle)
+│   ├── test_parser.py          # Testes: parse_sql, normalize, binds, functions
+│   ├── test_connector.py       # Testes: CRUD conexões, validate_privileges, resolve
+│   ├── test_cli.py             # Testes: comandos CLI via CliRunner
+│   ├── test_mcp_server.py      # Testes: tools MCP (parse, analyze, inspect, list, test)
+│   ├── test_report_prune.py    # Testes: to_markdown, to_json, verbosity, pruning
+│   └── test_plan_compression.py # Testes: regras R1-R6 de compressão do plano
 ├── powers/
 │   └── sqlmentor/              # Kiro Power (distribuição pro time)
 │       ├── POWER.md            # Frontmatter + overview + workflow + troubleshooting
