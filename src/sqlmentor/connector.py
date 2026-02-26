@@ -29,6 +29,7 @@ def _load_connections() -> dict[str, dict]:
         data = yaml.safe_load(f)
     return data or {}
 
+
 def validate_privileges(conn: oracledb.Connection) -> None:
     """
     Verifica se o user conectado tem apenas privilégios de leitura.
@@ -67,7 +68,6 @@ def validate_privileges(conn: oracledb.Connection) -> None:
             f"  {'; '.join(problems)}\n"
             f"Use um usuário read-only (veja scripts/oracle_create_user.sql)."
         )
-
 
 
 def _save_connections(connections: dict[str, dict]) -> None:
@@ -117,7 +117,7 @@ def list_connections() -> dict[str, dict]:
     safe = {}
     for name, cfg in connections.items():
         safe[name] = {k: v for k, v in cfg.items() if k != "password"}
-        safe[name]["password"] = "****"
+        safe[name]["password"] = "****"  # noqa: S105
     return safe
 
 
@@ -188,7 +188,6 @@ def _init_thick_mode_if_available() -> None:
             "     https://www.oracle.com/database/technologies/instant-client.html\n"
             "  2. Atualize o banco para Oracle 12c+ (suporta thin mode nativo)"
         )
-
 
 
 def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
@@ -293,7 +292,9 @@ def diagnose_connection(name: str) -> dict[str, str]:
 
     try:
         conn = oracledb.connect(
-            user=cfg["user"], password=cfg["password"], dsn=dsn,
+            user=cfg["user"],
+            password=cfg["password"],
+            dsn=dsn,
         )
     except oracledb.DatabaseError as e:
         if "DPY-3010" not in str(e):
@@ -301,7 +302,9 @@ def diagnose_connection(name: str) -> dict[str, str]:
         needs_thick = True
         _init_thick_mode_if_available()
         conn = oracledb.connect(
-            user=cfg["user"], password=cfg["password"], dsn=dsn,
+            user=cfg["user"],
+            password=cfg["password"],
+            dsn=dsn,
         )
         mode = "thick"
 
@@ -317,7 +320,8 @@ def diagnose_connection(name: str) -> dict[str, str]:
 
         # Extrai major version (ex: "Oracle Database 11g" → 11)
         import re
-        match = re.search(r'(\d+)', version)
+
+        match = re.search(r"(\d+)", version)
         major = int(match.group(1)) if match else 0
 
         return {
@@ -330,4 +334,3 @@ def diagnose_connection(name: str) -> dict[str, str]:
         }
     finally:
         conn.close()
-

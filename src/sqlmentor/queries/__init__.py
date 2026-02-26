@@ -4,6 +4,19 @@ Queries Oracle 11g para coleta de metadata e estatísticas.
 Cada função retorna uma tuple (sql, params) pronta pra executar.
 """
 
+import re
+
+_SQL_ID_RE = re.compile(r"^[a-z0-9]{8,16}$")
+
+
+def _validate_sql_id(sql_id: str) -> None:
+    """Valida formato do sql_id Oracle (alfanumérico lowercase, 8-16 chars)."""
+    if not _SQL_ID_RE.match(sql_id):
+        raise ValueError(
+            f"sql_id inválido: {sql_id!r}. "
+            "Formato esperado: 8-16 caracteres alfanuméricos lowercase (ex: 'abc123def4567')."
+        )
+
 
 def explain_plan(sql_text: str) -> list[tuple[str, dict]]:
     """Gera EXPLAIN PLAN e recupera o resultado."""
@@ -18,7 +31,7 @@ def explain_plan(sql_text: str) -> list[tuple[str, dict]]:
             f"""
             SELECT plan_table_output
             FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', '{stmt_id}', 'ALL'))
-            """,
+            """,  # noqa: S608
             {},
         ),
         (
@@ -26,15 +39,22 @@ def explain_plan(sql_text: str) -> list[tuple[str, dict]]:
             {"stmt_id": stmt_id},
         ),
     ]
+
+
 def runtime_plan(sql_id: str, child_number: int = 0) -> tuple[str, dict]:
-    """Plano real com ALLSTATS LAST via sql_id explícito (sem Outline pra reduzir ruído)."""
+    """Plano real com ALLSTATS LAST via sql_id explícito (sem Outline pra reduzir ruído).
+
+    Nota: DBMS_XPLAN.DISPLAY_CURSOR não aceita bind variables nos parâmetros
+    sql_id e child_number — usa f-string com validação prévia do formato.
+    """
+    _validate_sql_id(sql_id)
     return (
         f"""
         SELECT plan_table_output
         FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(
             '{sql_id}', {child_number}, 'ALLSTATS LAST +PEEKED_BINDS -OUTLINE'
         ))
-        """,
+        """,  # noqa: S608
         {},
     )
 
@@ -61,6 +81,7 @@ def sql_runtime_stats(sql_id: str) -> tuple[str, dict]:
         {"sql_id": sql_id},
     )
 
+
 def sql_text_by_id(sql_id: str) -> tuple[str, dict]:
     """Recupera o texto completo do SQL a partir do sql_id via V$SQL."""
     return (
@@ -72,7 +93,6 @@ def sql_text_by_id(sql_id: str) -> tuple[str, dict]:
         """,
         {"sql_id": sql_id},
     )
-
 
 
 def session_wait_events(sid: int) -> tuple[str, dict]:
@@ -113,6 +133,7 @@ def object_type(owner: str, object_name: str) -> tuple[str, dict]:
         {"owner": owner.upper(), "object_name": object_name.upper()},
     )
 
+
 def index_to_table_map(owner: str) -> tuple[str, dict]:
     """Mapa index_name → table_name para um schema."""
     return (
@@ -123,8 +144,6 @@ def index_to_table_map(owner: str) -> tuple[str, dict]:
         """,
         {"owner": owner.upper()},
     )
-
-
 
 
 def table_ddl(owner: str, table_name: str) -> tuple[str, dict]:
@@ -148,6 +167,7 @@ def table_ddl(owner: str, table_name: str) -> tuple[str, dict]:
         """,
         {"owner": owner.upper(), "table_name": table_name.upper()},
     )
+
 
 def function_ddl(owner: str, function_name: str) -> tuple[str, dict]:
     """DDL de uma função ou procedure PL/SQL via DBMS_METADATA."""
@@ -173,7 +193,6 @@ def function_ddl(owner: str, function_name: str) -> tuple[str, dict]:
         """,
         {"owner": owner.upper(), "function_name": function_name.upper()},
     )
-
 
 
 def table_stats(owner: str, table_name: str) -> tuple[str, dict]:
@@ -322,6 +341,7 @@ def table_partitions(owner: str, table_name: str) -> tuple[str, dict]:
         {"owner": owner.upper(), "table_name": table_name.upper()},
     )
 
+
 def dangerous_privileges() -> tuple[str, dict]:
     """Privilégios de sistema perigosos (escrita/DDL) que o user do sqlmentor NÃO deveria ter."""
     return (
@@ -359,4 +379,3 @@ def dangerous_roles() -> tuple[str, dict]:
         """,
         {},
     )
-

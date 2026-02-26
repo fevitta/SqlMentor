@@ -1,5 +1,8 @@
-"""Teste rápido das novas funções de poda do report."""
-from sqlmentor.report import _prune_dead_operations, _strip_view_column_list
+"""Testes das funções de poda, formatação e geração de report."""
+
+import json
+
+from sqlmentor.report import _prune_dead_operations, _strip_view_column_list, to_json, to_markdown
 
 
 def test_prune_dead_operations():
@@ -12,7 +15,7 @@ def test_prune_dead_operations():
         "|  27 |    TABLE ACCESS BY INDEX ROWID  | GRUPO_ATIVIDADE  |      0 |      1 |      0 |00:00:00.01 |       0 |",
         "| 381 | TABLE ACCESS BY INDEX ROWID  | FUNCIONARIO  |  62502 |      1 |  59897 |00:00:00.15 |   79881 |",
     ]
-    result, pruned_ids = _prune_dead_operations(plan)
+    result, _pruned_ids = _prune_dead_operations(plan)
     # Deve manter linhas 0, 1, 381 (Starts>0) e remover 26, 27 (Starts=0, A-Rows=0)
     kept_ids = [ln for ln in result if ln.startswith("|")]
     assert len(kept_ids) == 3, f"Esperava 3 linhas, got {len(kept_ids)}: {kept_ids}"
@@ -43,6 +46,73 @@ def test_strip_view_no_column_list():
     result = _strip_view_column_list(ddl)
     assert result == ddl
     print("P3 OK: DDL sem lista de colunas inalterada")
+
+
+# ─── to_json ──────────────────────────────────────────────────────────────────
+
+
+class TestToJson:
+    def test_returns_valid_json(self, minimal_collected_context):
+        result = to_json(minimal_collected_context)
+        data = json.loads(result)
+        assert isinstance(data, dict)
+
+    def test_contains_expected_keys(self, minimal_collected_context):
+        data = json.loads(to_json(minimal_collected_context))
+        assert "tables" in data
+        assert "execution_plan" in data or "db_version" in data
+
+    def test_empty_context(self, empty_collected_context):
+        result = to_json(empty_collected_context)
+        data = json.loads(result)
+        assert isinstance(data, dict)
+
+
+# ─── to_markdown ──────────────────────────────────────────────────────────────
+
+
+class TestToMarkdown:
+    def test_returns_string(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context)
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_contains_sql_section(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context)
+        assert "SQL" in result
+
+    def test_contains_plan_section(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context)
+        # Plan should be in the report since we provided execution_plan
+        assert "Plan" in result or "plan" in result.lower() or "Plano" in result
+
+    def test_empty_context_no_crash(self, empty_collected_context):
+        """to_markdown com contexto vazio não deve explodir."""
+        result = to_markdown(empty_collected_context)
+        assert isinstance(result, str)
+
+    def test_full_verbosity(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context, verbosity="full")
+        assert isinstance(result, str)
+
+    def test_compact_verbosity(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context, verbosity="compact")
+        assert isinstance(result, str)
+
+    def test_minimal_verbosity(self, minimal_collected_context):
+        result = to_markdown(minimal_collected_context, verbosity="minimal")
+        assert isinstance(result, str)
+
+    def test_minimal_shorter_than_full(self, minimal_collected_context):
+        full = to_markdown(minimal_collected_context, verbosity="full")
+        minimal = to_markdown(minimal_collected_context, verbosity="minimal")
+        assert len(minimal) <= len(full)
+
+    def test_invalid_verbosity_raises(self, minimal_collected_context):
+        import pytest
+
+        with pytest.raises(ValueError):
+            to_markdown(minimal_collected_context, verbosity="invalid")
 
 
 if __name__ == "__main__":

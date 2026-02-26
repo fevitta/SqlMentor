@@ -7,6 +7,7 @@ e se comunica via JSON-RPC sobre stdin/stdout.
 Entry point: sqlmentor-mcp
 """
 
+import contextlib
 import json
 import logging
 
@@ -33,24 +34,28 @@ def list_connections() -> str:
 
     connections = _list()
     if not connections:
-        return json.dumps({
-            "connections": [],
-            "hint": "Nenhuma conexão configurada. Use o CLI: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>",
-        })
+        return json.dumps(
+            {
+                "connections": [],
+                "hint": "Nenhuma conexão configurada. Use o CLI: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>",
+            }
+        )
 
     default_name = get_default_connection()
     result = []
     for name, cfg in connections.items():
-        result.append({
-            "name": name,
-            "host": cfg.get("host", "?"),
-            "port": cfg.get("port", "?"),
-            "service": cfg.get("service", "?"),
-            "user": cfg.get("user", "?"),
-            "schema": cfg.get("schema", cfg.get("user", "?")).upper(),
-            "timeout": cfg.get("timeout", 180),
-            "default": name == default_name,
-        })
+        result.append(
+            {
+                "name": name,
+                "host": cfg.get("host", "?"),
+                "port": cfg.get("port", "?"),
+                "service": cfg.get("service", "?"),
+                "user": cfg.get("user", "?"),
+                "schema": cfg.get("schema", cfg.get("user", "?")).upper(),
+                "timeout": cfg.get("timeout", 180),
+                "default": name == default_name,
+            }
+        )
     return json.dumps({"connections": result})
 
 
@@ -71,7 +76,9 @@ def test_connection(conn: str) -> str:
 
 
 @mcp.tool()
-def parse_sql(sql_text: str, schema: str = "", denorm_mode: str = "literal") -> str:
+def parse_sql(
+    sql_text: str, schema: str = "", normalized: bool = False, denorm_mode: str = "literal"
+) -> str:
     """Parse offline de SQL — extrai tabelas, colunas, joins, subqueries sem conectar no banco.
 
     Útil para entender a estrutura da query antes de decidir se precisa de conexão.
@@ -80,28 +87,31 @@ def parse_sql(sql_text: str, schema: str = "", denorm_mode: str = "literal") -> 
     Args:
         sql_text: O SQL completo (SELECT, INSERT, UPDATE, DELETE, ou bloco PL/SQL).
         schema: Schema padrão para tabelas não qualificadas (opcional).
+        normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido.
         denorm_mode: Estratégia de desnormalização se SQL normalizado: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...).
     """
     from sqlmentor.parser import denormalize_sql, is_normalized_sql
     from sqlmentor.parser import parse_sql as _parse
 
     # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
-    if is_normalized_sql(sql_text):
+    if normalized or is_normalized_sql(sql_text):
         sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
     parsed = _parse(sql_text, default_schema=schema or None)
-    return json.dumps({
-        "sql_type": parsed.sql_type,
-        "tables": parsed.table_names,
-        "where_columns": parsed.where_columns,
-        "join_columns": parsed.join_columns,
-        "order_columns": parsed.order_columns,
-        "group_columns": parsed.group_columns,
-        "subqueries": parsed.subqueries,
-        "functions": [f"{f['schema']}.{f['name']}" for f in parsed.functions],
-        "is_parseable": parsed.is_parseable,
-        "parse_errors": parsed.parse_errors,
-    })
+    return json.dumps(
+        {
+            "sql_type": parsed.sql_type,
+            "tables": parsed.table_names,
+            "where_columns": parsed.where_columns,
+            "join_columns": parsed.join_columns,
+            "order_columns": parsed.order_columns,
+            "group_columns": parsed.group_columns,
+            "subqueries": parsed.subqueries,
+            "functions": [f"{f['schema']}.{f['name']}" for f in parsed.functions],
+            "is_parseable": parsed.is_parseable,
+            "parse_errors": parsed.parse_errors,
+        }
+    )
 
 
 @mcp.tool()
@@ -140,11 +150,15 @@ def analyze_sql(
         denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
     """
-    import re
-
     from sqlmentor.collector import collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
-    from sqlmentor.parser import denormalize_sql, is_normalized_sql
+    from sqlmentor.parser import (
+        denormalize_sql,
+        detect_sql_binds,
+        is_normalized_sql,
+        parse_bind_values,
+        remap_bind_params,
+    )
     from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.report import to_json, to_markdown
 
@@ -161,10 +175,12 @@ def analyze_sql(
     # Desnormaliza SQL se veio de ferramenta de monitoramento
     if normalized:
         if execute:
-            return json.dumps({
-                "error": "SQL normalizado detectado (placeholders '?'). Incompatível com execute=True — os literais originais foram perdidos.",
-                "hint": "Use sem execute para obter plano estimado e metadata.",
-            })
+            return json.dumps(
+                {
+                    "error": "SQL normalizado detectado (placeholders '?'). Incompatível com execute=True — os literais originais foram perdidos.",
+                    "hint": "Use sem execute para obter plano estimado e metadata.",
+                }
+            )
         sql_text, _denorm_binds = denormalize_sql(sql_text, mode=denorm_mode)
 
     # Resolve schema
@@ -181,40 +197,18 @@ def analyze_sql(
     # Parseia binds
     bind_params: dict[str, str | int | float | None] = {}
     if binds:
+        raw_binds: dict[str, str] = {}
         for pair in binds.split(","):
             pair = pair.strip()
             if "=" not in pair:
                 continue
             key, val = pair.split("=", 1)
-            key, val = key.strip(), val.strip()
-            # Trata null/None como Python None (Oracle NULL)
-            if val.lower() in ("null", "none"):
-                bind_params[key] = None
-            else:
-                try:
-                    bind_params[key] = int(val)
-                except ValueError:
-                    try:
-                        bind_params[key] = float(val)
-                    except ValueError:
-                        bind_params[key] = val
+            raw_binds[key.strip()] = val.strip()
+        bind_params = parse_bind_values(raw_binds)
 
     # Detecta binds no SQL e remapeia case
-    sql_bind_names = re.findall(r'(?<!:):([A-Za-z_]\w*)', sql_text)
-    seen_upper: set[str] = set()
-    unique_sql_binds: list[str] = []
-    for name in sql_bind_names:
-        if name.upper() not in seen_upper:
-            seen_upper.add(name.upper())
-            unique_sql_binds.append(name)
-
-    if bind_params and unique_sql_binds:
-        provided_upper = {k.upper(): v for k, v in bind_params.items()}
-        remapped: dict[str, str | int | float | None] = {}
-        for sql_name in unique_sql_binds:
-            if sql_name.upper() in provided_upper:
-                remapped[sql_name] = provided_upper[sql_name.upper()]
-        bind_params = remapped
+    unique_sql_binds = detect_sql_binds(sql_text)
+    bind_params = remap_bind_params(bind_params, unique_sql_binds)
 
     # Verifica binds faltantes se execute=True
     if execute and unique_sql_binds:
@@ -223,11 +217,13 @@ def analyze_sql(
         missing = sql_binds_upper - provided_upper
         if missing:
             oracle_conn.close()
-            return json.dumps({
-                "error": f"Binds faltantes para --execute: {', '.join(sorted(missing))}",
-                "hint": f"Passe binds='{'  ,'.join(f'{n}=<valor>' for n in sorted(missing))}'",
-                "fallback": "Chamando sem execute para obter plano estimado.",
-            })
+            return json.dumps(
+                {
+                    "error": f"Binds faltantes para --execute: {', '.join(sorted(missing))}",
+                    "hint": f"Passe binds='{'  ,'.join(f'{n}=<valor>' for n in sorted(missing))}'",
+                    "fallback": "Chamando sem execute para obter plano estimado.",
+                }
+            )
 
     # Coleta
     try:
@@ -245,15 +241,19 @@ def analyze_sql(
         oracle_conn.close()
         return json.dumps({"error": f"Erro na coleta: {e}"})
     finally:
-        try:
+        with contextlib.suppress(Exception):
             oracle_conn.close()
-        except Exception:
-            pass
 
     # Relatório
     if output_format.lower() == "json":
+        if verbosity != "compact":
+            logger.warning(
+                "verbosity='%s' ignorado com format=json — JSON sempre retorna dados completos",
+                verbosity,
+            )
         return to_json(ctx)
     return to_markdown(ctx, verbosity=verbosity)
+
 
 @mcp.tool()
 def inspect_sql(
@@ -312,10 +312,12 @@ def inspect_sql(
         row = cursor.fetchone()
         if not row or not row[0]:
             oracle_conn.close()
-            return json.dumps({
-                "error": f"SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).",
-                "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
-            })
+            return json.dumps(
+                {
+                    "error": f"SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).",
+                    "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
+                }
+            )
         sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         oracle_conn.close()
@@ -330,8 +332,8 @@ def inspect_sql(
         sql_query, params = runtime_plan(sql_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Falha ao recuperar plano real para sql_id '%s': %s", sql_id, e)
 
     # Métricas V$SQL
     runtime_stats_data = None
@@ -341,8 +343,8 @@ def inspect_sql(
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
         runtime_stats_data = dict(zip(columns, row)) if row else None
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Falha ao recuperar métricas V$SQL para sql_id '%s': %s", sql_id, e)
 
     cursor.close()
 
@@ -361,10 +363,8 @@ def inspect_sql(
         oracle_conn.close()
         return json.dumps({"error": f"Erro na coleta: {e}"})
     finally:
-        try:
+        with contextlib.suppress(Exception):
             oracle_conn.close()
-        except Exception:
-            pass
 
     # Injeta plano real e métricas
     if runtime_plan_lines:
@@ -373,6 +373,11 @@ def inspect_sql(
         ctx.runtime_stats = runtime_stats_data
 
     if output_format.lower() == "json":
+        if verbosity != "compact":
+            logger.warning(
+                "verbosity='%s' ignorado com format=json — JSON sempre retorna dados completos",
+                verbosity,
+            )
         return to_json(ctx)
     return to_markdown(ctx, verbosity=verbosity)
 

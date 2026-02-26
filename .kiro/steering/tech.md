@@ -7,7 +7,7 @@
 - **SQL parsing:** sqlglot (dialeto Oracle)
 - **DB driver:** oracledb (modo thin, sem Oracle Client)
 - **Config:** PyYAML (conexões em ~/.sqlmentor/connections.yaml)
-- **Testes:** nenhum framework configurado ainda
+- **Testes:** pytest + hypothesis (property-based), taskipy (task runner), ruff (lint/format)
 
 ## Comandos
 
@@ -37,12 +37,14 @@ CLI e MCP Server são interfaces sobre o mesmo core. Ao adicionar, remover ou al
 4. `README.md` — exemplos de uso, tabela de flags, lista de subcomandos
 
 Exceções: `config` e `doctor` são só CLI; `list_connections` e `test_connection` são só MCP.
+Flags somente CLI (não precisam de equivalente MCP): `--verbose` (controle de display no terminal), `--output` (escrita em arquivo — MCP retorna conteúdo direto).
 
 Nunca registrar a mesma função duas vezes com `@mcp.tool()`. Nunca editar apenas um dos arquivos sem verificar os outros dois.
 
 ## Convenções
 
 - Todas as queries Oracle usam bind variables (`:param`) — nunca f-strings com input do usuário.
+  - **Exceção**: `EXPLAIN PLAN FOR` e `DBMS_XPLAN.DISPLAY_CURSOR` não aceitam binds no Oracle. Nesses casos, usa-se f-string com validação prévia do input (`_validate_sql_id` para sql_id).
 - Funções de query retornam `tuple[str, dict]` (sql, params) prontas para `cursor.execute()`.
 - Imports pesados (oracledb, connector, collector) são lazy dentro dos comandos CLI e MCP para manter o startup rápido.
 - Docstrings e comentários em português.

@@ -25,7 +25,9 @@ class ParsedSQL:
     order_columns: list[str] = field(default_factory=list)
     group_columns: list[str] = field(default_factory=list)
     cte_names: set[str] = field(default_factory=set)  # nomes de CTEs (WITH ... AS)
-    functions: list[dict] = field(default_factory=list)  # [{schema, name}] — funções PL/SQL chamadas
+    functions: list[dict] = field(
+        default_factory=list
+    )  # [{schema, name}] — funções PL/SQL chamadas
     subqueries: int = 0
     is_parseable: bool = True
     parse_errors: list[str] = field(default_factory=list)
@@ -40,8 +42,6 @@ class ParsedSQL:
             else:
                 result.append(t["name"])
         return sorted(set(result))
-
-
 
 
 def is_normalized_sql(sql_text: str) -> bool:
@@ -70,7 +70,7 @@ def is_normalized_sql(sql_text: str) -> bool:
             continue
         if in_single_quote or in_double_quote:
             continue
-        if ch == '?':
+        if ch == "?":
             count += 1
             if count >= 2:
                 return True
@@ -201,6 +201,7 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
 
     return result
 
+
 def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
     """
     Substitui placeholders '?' de SQL normalizado (Datadog, OEM, etc.).
@@ -255,7 +256,7 @@ def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
             continue
 
         # Encontrou ? fora de string — substitui conforme modo
-        if ch == '?':
+        if ch == "?":
             if mode == "bind":
                 bind_counter += 1
                 bind_name = f"dn{bind_counter}"
@@ -272,11 +273,57 @@ def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
     return "".join(result), binds
 
 
+def parse_bind_values(raw_binds: dict[str, str]) -> dict[str, str | int | float | None]:
+    """Converte dict de bind values string para tipos Python adequados.
+
+    Trata "null"/"none" como None, converte números quando possível,
+    mantém strings como string.
+    """
+    result: dict[str, str | int | float | None] = {}
+    for key, val in raw_binds.items():
+        if val.lower() in ("null", "none"):
+            result[key] = None
+        else:
+            try:
+                result[key] = int(val)
+            except ValueError:
+                try:
+                    result[key] = float(val)
+                except ValueError:
+                    result[key] = val
+    return result
 
 
-def _extract_from_plsql(
-    sql_text: str, result: ParsedSQL, default_schema: str | None
-) -> None:
+def detect_sql_binds(sql_text: str) -> list[str]:
+    """Detecta nomes de bind variables (:param) no SQL, deduplicados e case-preserving."""
+    import re
+
+    sql_bind_names = re.findall(r"(?<!:):([A-Za-z_]\w*)", sql_text)
+    seen_upper: set[str] = set()
+    unique: list[str] = []
+    for name in sql_bind_names:
+        if name.upper() not in seen_upper:
+            seen_upper.add(name.upper())
+            unique.append(name)
+    return unique
+
+
+def remap_bind_params(
+    bind_params: dict[str, str | int | float | None],
+    sql_binds: list[str],
+) -> dict[str, str | int | float | None]:
+    """Remapeia bind_params pro case exato dos bind names encontrados no SQL."""
+    if not bind_params or not sql_binds:
+        return bind_params
+    provided_upper = {k.upper(): v for k, v in bind_params.items()}
+    remapped: dict[str, str | int | float | None] = {}
+    for sql_name in sql_binds:
+        if sql_name.upper() in provided_upper:
+            remapped[sql_name] = provided_upper[sql_name.upper()]
+    return remapped
+
+
+def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | None) -> None:
     """
     Fallback: extrai tabelas de PL/SQL via parsing parcial.
 
@@ -289,26 +336,57 @@ def _extract_from_plsql(
     # Nota: INTO sozinho pega variáveis PL/SQL (SELECT INTO v_var).
     # Usamos INSERT INTO e MERGE INTO explicitamente pra evitar falsos positivos.
     patterns = [
-        r'\bFROM\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bJOIN\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bINSERT\s+INTO\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bUPDATE\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bDELETE\s+FROM\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bTRUNCATE\s+TABLE\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
-        r'\bMERGE\s+INTO\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)',
+        r"\bFROM\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bJOIN\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bINSERT\s+INTO\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bUPDATE\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bDELETE\s+FROM\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bTRUNCATE\s+TABLE\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
+        r"\bMERGE\s+INTO\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?)",
     ]
 
     # Palavras reservadas que podem aparecer em posições de tabela
     reserved = {
-        "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "EXISTS",
-        "NULL", "IS", "SET", "VALUES", "AS", "ON", "WHEN", "THEN",
-        "ELSE", "END", "IF", "LOOP", "BEGIN", "DECLARE", "EXCEPTION",
-        "CURSOR", "OPEN", "CLOSE", "FETCH", "INTO", "BULK", "COLLECT",
-        "FORALL", "DUAL", "TABLE", "INDEX", "VIEW", "SEQUENCE",
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "AND",
+        "OR",
+        "NOT",
+        "IN",
+        "EXISTS",
+        "NULL",
+        "IS",
+        "SET",
+        "VALUES",
+        "AS",
+        "ON",
+        "WHEN",
+        "THEN",
+        "ELSE",
+        "END",
+        "IF",
+        "LOOP",
+        "BEGIN",
+        "DECLARE",
+        "EXCEPTION",
+        "CURSOR",
+        "OPEN",
+        "CLOSE",
+        "FETCH",
+        "INTO",
+        "BULK",
+        "COLLECT",
+        "FORALL",
+        "DUAL",
+        "TABLE",
+        "INDEX",
+        "VIEW",
+        "SEQUENCE",
     }
 
     # Detecta nomes de CTEs (WITH nome AS (...)) pra não confundir com tabelas
-    cte_pattern = r'\bWITH\s+(\w+)\s+AS\s*\('
+    cte_pattern = r"\bWITH\s+(\w+)\s+AS\s*\("
     for m in re.finditer(cte_pattern, sql_text, re.IGNORECASE):
         result.cte_names.add(m.group(1).upper())
 
@@ -322,22 +400,24 @@ def _extract_from_plsql(
     for table_ref in sorted(found_tables):
         parts = table_ref.split(".")
         if len(parts) == 2:
-            result.tables.append({
-                "name": parts[1],
-                "schema": parts[0],
-                "alias": None,
-            })
+            result.tables.append(
+                {
+                    "name": parts[1],
+                    "schema": parts[0],
+                    "alias": None,
+                }
+            )
         else:
-            result.tables.append({
-                "name": parts[0],
-                "schema": default_schema,
-                "alias": None,
-            })
+            result.tables.append(
+                {
+                    "name": parts[0],
+                    "schema": default_schema,
+                    "alias": None,
+                }
+            )
 
 
-def _extract_functions(
-    sql_text: str, result: ParsedSQL, default_schema: str | None
-) -> None:
+def _extract_functions(sql_text: str, result: ParsedSQL, default_schema: str | None) -> None:
     """
     Extrai funções PL/SQL chamadas no SQL via regex.
 
@@ -349,34 +429,94 @@ def _extract_functions(
 
     # Funções built-in Oracle que não interessam
     builtins = {
-        "NVL", "NVL2", "COALESCE", "DECODE", "CASE", "CAST",
-        "TO_CHAR", "TO_DATE", "TO_NUMBER", "TO_TIMESTAMP", "TO_CLOB",
-        "TRIM", "LTRIM", "RTRIM", "UPPER", "LOWER", "INITCAP",
-        "SUBSTR", "INSTR", "REPLACE", "TRANSLATE", "LENGTH", "LPAD", "RPAD",
-        "ROUND", "TRUNC", "CEIL", "FLOOR", "MOD", "ABS", "SIGN", "POWER", "SQRT",
-        "COUNT", "SUM", "AVG", "MIN", "MAX", "LISTAGG",
-        "ROW_NUMBER", "RANK", "DENSE_RANK", "LEAD", "LAG", "FIRST_VALUE", "LAST_VALUE",
-        "OVER", "PARTITION", "WITHIN",
-        "SYSDATE", "SYSTIMESTAMP", "CURRENT_DATE", "CURRENT_TIMESTAMP",
-        "EXTRACT", "ADD_MONTHS", "MONTHS_BETWEEN", "LAST_DAY", "NEXT_DAY",
-        "GREATEST", "LEAST", "NULLIF",
-        "SYS_CONTEXT", "USERENV", "USER", "UID",
-        "ROWNUM", "ROWID", "LEVEL", "CONNECT_BY_ROOT",
-        "EXISTS", "NOT", "IN", "BETWEEN", "LIKE",
-        "DBMS_METADATA", "DBMS_XPLAN", "TABLE",
+        "NVL",
+        "NVL2",
+        "COALESCE",
+        "DECODE",
+        "CASE",
+        "CAST",
+        "TO_CHAR",
+        "TO_DATE",
+        "TO_NUMBER",
+        "TO_TIMESTAMP",
+        "TO_CLOB",
+        "TRIM",
+        "LTRIM",
+        "RTRIM",
+        "UPPER",
+        "LOWER",
+        "INITCAP",
+        "SUBSTR",
+        "INSTR",
+        "REPLACE",
+        "TRANSLATE",
+        "LENGTH",
+        "LPAD",
+        "RPAD",
+        "ROUND",
+        "TRUNC",
+        "CEIL",
+        "FLOOR",
+        "MOD",
+        "ABS",
+        "SIGN",
+        "POWER",
+        "SQRT",
+        "COUNT",
+        "SUM",
+        "AVG",
+        "MIN",
+        "MAX",
+        "LISTAGG",
+        "ROW_NUMBER",
+        "RANK",
+        "DENSE_RANK",
+        "LEAD",
+        "LAG",
+        "FIRST_VALUE",
+        "LAST_VALUE",
+        "OVER",
+        "PARTITION",
+        "WITHIN",
+        "SYSDATE",
+        "SYSTIMESTAMP",
+        "CURRENT_DATE",
+        "CURRENT_TIMESTAMP",
+        "EXTRACT",
+        "ADD_MONTHS",
+        "MONTHS_BETWEEN",
+        "LAST_DAY",
+        "NEXT_DAY",
+        "GREATEST",
+        "LEAST",
+        "NULLIF",
+        "SYS_CONTEXT",
+        "USERENV",
+        "USER",
+        "UID",
+        "ROWNUM",
+        "ROWID",
+        "LEVEL",
+        "CONNECT_BY_ROOT",
+        "EXISTS",
+        "NOT",
+        "IN",
+        "BETWEEN",
+        "LIKE",
+        "DBMS_METADATA",
+        "DBMS_XPLAN",
+        "TABLE",
     }
 
     # Padrão: SCHEMA.FUNCTION_NAME( — schema-qualificado
-    pattern = r'\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\('
+    pattern = r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\("
     seen = set()
     for match in re.finditer(pattern, sql_text, re.IGNORECASE):
         schema_part = match.group(1).upper()
         func_name = match.group(2).upper()
 
         # Ignora se o "schema" é na verdade um alias de tabela usado no SQL
-        table_aliases = {
-            (t.get("alias") or "").upper() for t in result.tables
-        }
+        table_aliases = {(t.get("alias") or "").upper() for t in result.tables}
         table_names = {t["name"].upper() for t in result.tables}
         # Se schema_part é alias ou nome de tabela, é acesso a coluna, não função
         if schema_part in table_aliases or schema_part in table_names:

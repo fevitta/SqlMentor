@@ -79,6 +79,12 @@ sqlmentor config set-default --name producao
 sqlmentor config remove --name producao
 ```
 
+### 5. Diagnóstico do ambiente
+
+```bash
+sqlmentor doctor    # verifica Python, oracledb, Oracle Instant Client e conexões
+```
+
 ## O que é coletado
 
 | Dado | Descrição | Flag |

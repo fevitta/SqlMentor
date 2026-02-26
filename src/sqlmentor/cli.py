@@ -44,9 +44,7 @@ console = Console()
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _resolve_sql_input(
-    sql_file: Path | None, sql_inline: str | None
-) -> tuple[str, str]:
+def _resolve_sql_input(sql_file: Path | None, sql_inline: str | None) -> tuple[str, str]:
     """Resolve a fonte do SQL: arquivo ou --sql inline. Retorna (texto, label)."""
     if sql_inline and sql_file:
         console.print("[red]Erro:[/red] Passe arquivo OU --sql, não ambos.")
@@ -80,56 +78,75 @@ def analyze(
         None,
         help="Arquivo .sql com a query/procedure/trigger a ser analisada.",
     ),
-    sql: str = typer.Option(
-        None, "--sql", help="SQL inline (alternativa ao arquivo)."
-    ),
+    sql: str = typer.Option(None, "--sql", help="SQL inline (alternativa ao arquivo)."),
     conn: str = typer.Option(
         None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
     ),
     output: Path = typer.Option(
         None, "--output", "-o", help="Arquivo de saída. Se omitido, imprime no stdout."
     ),
-    format: str = typer.Option(
-        "markdown", "--format", "-f", help="Formato: markdown ou json."
-    ),
+    format: str = typer.Option("markdown", "--format", "-f", help="Formato: markdown ou json."),
     schema: str = typer.Option(
         None, "--schema", "-s", help="Schema padrão (sobrescreve o do profile)."
     ),
-    deep: bool = typer.Option(
-        False, "--deep", "-d", help="Coleta extra: histogramas e partições."
-    ),
+    deep: bool = typer.Option(False, "--deep", "-d", help="Coleta extra: histogramas e partições."),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Imprime o relatório completo no console."
     ),
     expand_views: bool = typer.Option(
-        False, "--expand-views", help="Detalha views (DDL, colunas). Sem isso, views aparecem só como referência."
+        False,
+        "--expand-views",
+        help="Detalha views (DDL, colunas). Sem isso, views aparecem só como referência.",
     ),
     expand_functions: bool = typer.Option(
         False, "--expand-functions", help="Coleta DDL de funções PL/SQL referenciadas no SQL."
     ),
     execute: bool = typer.Option(
-        False, "--execute", "-x", help="Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime."
+        False,
+        "--execute",
+        "-x",
+        help="Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime.",
     ),
     bind: list[str] = typer.Option(
-        [], "--bind", "-b", help="Bind variables no formato nome=valor (ex: -b idDesconto=123). Repetível."
+        [],
+        "--bind",
+        "-b",
+        help="Bind variables no formato nome=valor (ex: -b idDesconto=123). Repetível.",
     ),
     timeout: int = typer.Option(
-        None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile, default: 180)."
+        None,
+        "--timeout",
+        "-t",
+        help="Timeout em segundos (sobrescreve o do profile, default: 180).",
     ),
     normalized: bool = typer.Option(
-        False, "--normalized", "-n", help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' antes do parse. Auto-detectado se omitido."
+        False,
+        "--normalized",
+        "-n",
+        help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' antes do parse. Auto-detectado se omitido.",
     ),
     denorm_mode: str = typer.Option(
-        "literal", "--denorm-mode", help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...)."
+        "literal",
+        "--denorm-mode",
+        help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...).",
     ),
     verbosity: str = typer.Option(
-        "compact", "--verbosity", help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats)."
+        "compact",
+        "--verbosity",
+        help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats).",
     ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     from sqlmentor.collector import collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
-    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
+    from sqlmentor.parser import (
+        denormalize_sql,
+        detect_sql_binds,
+        is_normalized_sql,
+        parse_bind_values,
+        parse_sql,
+        remap_bind_params,
+    )
     from sqlmentor.report import to_json, to_markdown
 
     # Resolve conexão (explícita > default > erro)
@@ -145,7 +162,9 @@ def analyze(
     # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
     if not normalized and is_normalized_sql(sql_text):
         normalized = True
-        console.print("[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente.")
+        console.print(
+            "[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente."
+        )
 
     # Desnormaliza SQL se veio de ferramenta de monitoramento
     if normalized:
@@ -166,13 +185,17 @@ def analyze(
     parsed = parse_sql(sql_text, default_schema=effective_schema)
 
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
-    console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma identificada'}[/bold]")
+    console.print(
+        f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma identificada'}[/bold]"
+    )
 
     if parsed.parse_errors:
         console.print(f"  [yellow]⚠ Parse parcial:[/yellow] {'; '.join(parsed.parse_errors)}")
 
     if not parsed.tables:
-        console.print("[yellow]Aviso:[/yellow] Nenhuma tabela identificada. Gerando relatório parcial.")
+        console.print(
+            "[yellow]Aviso:[/yellow] Nenhuma tabela identificada. Gerando relatório parcial."
+        )
 
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
@@ -183,46 +206,18 @@ def analyze(
         raise typer.Exit(1)
 
     # Parseia bind variables (nome=valor → dict)
-    bind_params: dict[str, str] = {}
+    raw_binds: dict[str, str] = {}
     for b in bind:
         if "=" not in b:
             console.print(f"[red]Bind inválido:[/red] '{b}' — use formato nome=valor")
             raise typer.Exit(1)
         key, val = b.split("=", 1)
-        bind_params[key.strip()] = val.strip()
+        raw_binds[key.strip()] = val.strip()
+    bind_params = parse_bind_values(raw_binds)
 
     # Detecta binds no SQL e reconcilia nomes (case-insensitive)
-    import re
-    # Captura :param mas ignora ::cast e strings entre aspas
-    sql_bind_names = re.findall(r'(?<!:):([A-Za-z_]\w*)', sql_text)
-    # Deduplica preservando o case original do SQL (primeiro encontrado)
-    seen_upper: set[str] = set()
-    unique_sql_binds: list[str] = []
-    for name in sql_bind_names:
-        if name.upper() not in seen_upper:
-            seen_upper.add(name.upper())
-            unique_sql_binds.append(name)
-
-    # Remapeia bind_params pro case exato do SQL (Oracle é case-sensitive nos binds)
-    if bind_params and unique_sql_binds:
-        provided_upper = {k.upper(): v for k, v in bind_params.items()}
-        remapped: dict[str, str | int | float | None] = {}
-        for sql_name in unique_sql_binds:
-            if sql_name.upper() in provided_upper:
-                raw_val = provided_upper[sql_name.upper()]
-                # Trata null/None como Python None (Oracle NULL)
-                if raw_val.lower() in ("null", "none"):
-                    remapped[sql_name] = None
-                else:
-                    # Converte pra número se possível (evita ORA-01790 em UNION ALL)
-                    try:
-                        remapped[sql_name] = int(raw_val)
-                    except ValueError:
-                        try:
-                            remapped[sql_name] = float(raw_val)
-                        except ValueError:
-                            remapped[sql_name] = raw_val
-        bind_params = remapped
+    unique_sql_binds = detect_sql_binds(sql_text)
+    bind_params = remap_bind_params(bind_params, unique_sql_binds)
 
     # Avisa se faltam binds (só relevante com --execute)
     if execute and unique_sql_binds:
@@ -233,7 +228,8 @@ def analyze(
             # Monta comando sugerido com placeholders
             src_arg = str(sql_file) if sql_file else f'--sql "{sql_text[:60]}..."'
             bind_flags = " ".join(
-                f"-b {name}=<valor>" if name.upper() in missing
+                f"-b {name}=<valor>"
+                if name.upper() in missing
                 else f"-b {name}={bind_params.get(name, '')}"
                 for name in unique_sql_binds
             )
@@ -265,10 +261,7 @@ def analyze(
         oracle_conn.close()
 
     # Relatório
-    if format.lower() == "json":
-        report = to_json(ctx)
-    else:
-        report = to_markdown(ctx, verbosity=verbosity)
+    report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
 
     if output:
         out_path = output
@@ -280,10 +273,7 @@ def analyze(
         # Nome: report_<timestamp>_<filename ou hash>.ext
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
-        if sql_file:
-            base = sql_file.stem
-        else:
-            base = hashlib.md5(sql_text.encode()).hexdigest()[:8]
+        base = sql_file.stem if sql_file else hashlib.md5(sql_text.encode()).hexdigest()[:8]  # noqa: S324
         out_path = reports_dir / f"report_{ts}_{base}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
@@ -304,24 +294,18 @@ def analyze(
 
 @app.command()
 def inspect(
-    sql_id: str = typer.Argument(
-        ..., help="SQL_ID da query no shared pool Oracle."
-    ),
+    sql_id: str = typer.Argument(..., help="SQL_ID da query no shared pool Oracle."),
     conn: str = typer.Option(
         None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
     ),
     output: Path = typer.Option(
         None, "--output", "-o", help="Arquivo de saída. Se omitido, salva em reports/."
     ),
-    format: str = typer.Option(
-        "markdown", "--format", "-f", help="Formato: markdown ou json."
-    ),
+    format: str = typer.Option("markdown", "--format", "-f", help="Formato: markdown ou json."),
     schema: str = typer.Option(
         None, "--schema", "-s", help="Schema padrão (sobrescreve o do profile)."
     ),
-    deep: bool = typer.Option(
-        False, "--deep", "-d", help="Coleta extra: histogramas e partições."
-    ),
+    deep: bool = typer.Option(False, "--deep", "-d", help="Coleta extra: histogramas e partições."),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Imprime o relatório completo no console."
     ),
@@ -335,7 +319,9 @@ def inspect(
         None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile)."
     ),
     verbosity: str = typer.Option(
-        "compact", "--verbosity", help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats)."
+        "compact",
+        "--verbosity",
+        help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats).",
     ),
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
@@ -373,7 +359,9 @@ def inspect(
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
         if not row or not row[0]:
-            console.print(f"[red]Erro:[/red] SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).")
+            console.print(
+                f"[red]Erro:[/red] SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL)."
+            )
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
             oracle_conn.close()
             raise typer.Exit(1)
@@ -441,10 +429,7 @@ def inspect(
         ctx.runtime_stats = runtime_stats
 
     # Relatório
-    if format.lower() == "json":
-        report = to_json(ctx)
-    else:
-        report = to_markdown(ctx, verbosity=verbosity)
+    report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
 
     if output:
         out_path = output
@@ -546,7 +531,7 @@ def _print_summary(ctx) -> None:
     if ctx.errors:
         console.print("")
         for err in ctx.errors:
-            for line in err.split('\n'):
+            for line in err.split("\n"):
                 console.print(f"  [red]⚠[/red] {line}")
 
 
@@ -562,12 +547,8 @@ def config_add(
     port: int = typer.Option(1521, "--port", "-p", help="Porta."),
     service: str = typer.Option(..., "--service", "-s", help="Service name."),
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
-    password: str = typer.Option(
-        ..., "--password", prompt=True, hide_input=True, help="Senha."
-    ),
-    schema_name: str = typer.Option(
-        None, "--schema", help="Schema padrão (default: user)."
-    ),
+    password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
+    schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
     timeout: int = typer.Option(
         180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
     ),
@@ -591,6 +572,7 @@ def config_add(
     console.print("[cyan]Validando conexão...[/cyan]")
     try:
         from sqlmentor.connector import diagnose_connection
+
         info = diagnose_connection(name)
         console.print("[green]✓ Conectado![/green]")
         console.print(f"  Versão: {info['version']}")
@@ -615,7 +597,9 @@ def config_add(
         console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
     except Exception as e:
         console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
-        console.print(f"  Verifique host/porta/service/credenciais e re-teste com: sqlmentor config test -n {name}")
+        console.print(
+            f"  Verifique host/porta/service/credenciais e re-teste com: sqlmentor config test -n {name}"
+        )
 
 
 @config_app.command("list")
@@ -626,7 +610,9 @@ def config_list() -> None:
     connections = list_connections()
     if not connections:
         console.print("[yellow]Nenhuma conexão configurada.[/yellow]")
-        console.print("Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>")
+        console.print(
+            "Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>"
+        )
         return
 
     default_name = get_default_connection()
@@ -730,41 +716,52 @@ def doctor() -> None:
 
     # sqlmentor
     from sqlmentor import __version__
+
     console.print(f"  sqlmentor: [bold]{__version__}[/bold]")
 
     # Oracle Instant Client
     console.print("")
     console.print("[cyan]Oracle Instant Client:[/cyan]")
     from sqlmentor.connector import check_thick_mode_available
+
     thick_info = check_thick_mode_available()
     if thick_info["available"] == "True":
         console.print(f"  [green]✓ Disponível[/green] — {thick_info['detail']}")
     else:
         console.print("  [yellow]✗ Não encontrado[/yellow]")
         console.print("    Necessário apenas para Oracle < 12c (modo thick).")
-        console.print("    Download: https://www.oracle.com/database/technologies/instant-client.html")
+        console.print(
+            "    Download: https://www.oracle.com/database/technologies/instant-client.html"
+        )
 
     # Conexões
     console.print("")
     console.print("[cyan]Conexões:[/cyan]")
     from sqlmentor.connector import diagnose_connection, list_connections
+
     connections = list_connections()
     if not connections:
         console.print("  [yellow]Nenhuma conexão configurada.[/yellow]")
         return
 
     for name, cfg in connections.items():
-        console.print(f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{cfg.get('service', '?')})")
+        console.print(
+            f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{cfg.get('service', '?')})"
+        )
         try:
             info = diagnose_connection(name)
             major = int(info["major_version"])
-            mode_color = "green" if info["mode"] == "thin" or (info["mode"] == "thick" and major < 12) else "green"
+            mode_color = "green"
             console.print(f"    [green]✓ Conectado[/green] — {info['version']}")
-            console.print(f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]")
+            console.print(
+                f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]"
+            )
             if major > 0 and major < 12 and info["mode"] == "thick":
                 console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
             elif major > 0 and major < 12 and info["mode"] == "thin":
-                console.print(f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]")
+                console.print(
+                    f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]"
+                )
         except RuntimeError as e:
             console.print(f"    [red]✗ {e}[/red]")
         except Exception as e:
@@ -782,17 +779,18 @@ def parse(
         None,
         help="Arquivo .sql para parse.",
     ),
-    sql: str = typer.Option(
-        None, "--sql", help="SQL inline (alternativa ao arquivo)."
-    ),
-    schema: str = typer.Option(
-        None, "--schema", "-s", help="Schema padrão."
-    ),
+    sql: str = typer.Option(None, "--sql", help="SQL inline (alternativa ao arquivo)."),
+    schema: str = typer.Option(None, "--schema", "-s", help="Schema padrão."),
     normalized: bool = typer.Option(
-        False, "--normalized", "-n", help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' por literais dummy antes do parse."
+        False,
+        "--normalized",
+        "-n",
+        help="SQL normalizado (Datadog, OEM, etc.) — substitui '?' por literais dummy antes do parse.",
     ),
     denorm_mode: str = typer.Option(
-        "literal", "--denorm-mode", help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...)."
+        "literal",
+        "--denorm-mode",
+        help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...).",
     ),
 ) -> None:
     """Parse offline — mostra tabelas e colunas sem conectar no banco."""
@@ -803,24 +801,28 @@ def parse(
     # Auto-detecção de SQL normalizado
     if not normalized and is_normalized_sql(sql_text):
         normalized = True
-        console.print("[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente.")
+        console.print(
+            "[yellow]⚠ SQL normalizado detectado[/yellow] (placeholders '?' de Datadog/OEM). Desnormalizando automaticamente."
+        )
     if normalized:
         sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
     parsed = parse_sql(sql_text, default_schema=schema)
 
-    console.print(Panel.fit(
-        f"[bold]Tipo:[/bold] {parsed.sql_type}\n"
-        f"[bold]Tabelas:[/bold] {', '.join(parsed.table_names) or 'nenhuma'}\n"
-        f"[bold]WHERE cols:[/bold] {', '.join(parsed.where_columns) or 'nenhuma'}\n"
-        f"[bold]JOIN cols:[/bold] {', '.join(parsed.join_columns) or 'nenhuma'}\n"
-        f"[bold]ORDER BY cols:[/bold] {', '.join(parsed.order_columns) or 'nenhuma'}\n"
-        f"[bold]GROUP BY cols:[/bold] {', '.join(parsed.group_columns) or 'nenhuma'}\n"
-        f"[bold]Subqueries:[/bold] {parsed.subqueries}\n"
-        f"[bold]Parseable:[/bold] {'✓' if parsed.is_parseable else '✗'}",
-        title=f"Parse: {source_label}",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Tipo:[/bold] {parsed.sql_type}\n"
+            f"[bold]Tabelas:[/bold] {', '.join(parsed.table_names) or 'nenhuma'}\n"
+            f"[bold]WHERE cols:[/bold] {', '.join(parsed.where_columns) or 'nenhuma'}\n"
+            f"[bold]JOIN cols:[/bold] {', '.join(parsed.join_columns) or 'nenhuma'}\n"
+            f"[bold]ORDER BY cols:[/bold] {', '.join(parsed.order_columns) or 'nenhuma'}\n"
+            f"[bold]GROUP BY cols:[/bold] {', '.join(parsed.group_columns) or 'nenhuma'}\n"
+            f"[bold]Subqueries:[/bold] {parsed.subqueries}\n"
+            f"[bold]Parseable:[/bold] {'✓' if parsed.is_parseable else '✗'}",
+            title=f"Parse: {source_label}",
+            border_style="cyan",
+        )
+    )
 
     if parsed.parse_errors:
         for err in parsed.parse_errors:

@@ -41,31 +41,37 @@ def valid_plan_block() -> st.SearchStrategy[PlanBlock]:
     return st.builds(
         PlanBlock,
         id=st.from_regex(r"\d{1,3}", fullmatch=True),
-        operation=st.sampled_from([
-            "SORT AGGREGATE",
-            "INDEX RANGE SCAN",
-            "TABLE ACCESS FULL",
-            "NESTED LOOPS",
-            "HASH JOIN",
-            "VIEW",
-            "FILTER",
-            "SORT ORDER BY",
-        ]),
+        operation=st.sampled_from(
+            [
+                "SORT AGGREGATE",
+                "INDEX RANGE SCAN",
+                "TABLE ACCESS FULL",
+                "NESTED LOOPS",
+                "HASH JOIN",
+                "VIEW",
+                "FILTER",
+                "SORT ORDER BY",
+            ]
+        ),
         name=st.one_of(
             st.just(""),
-            st.sampled_from([
-                "IDX_ATTR_ENTITY_ID",
-                "PK_ATTR_CONFIG",
-                "UK_STATUS_TYPE_REF",
-                "IDX_STATUS_HIST_ENTITY",
-                "VW_CURRENT_USER",
-                "SOME_TABLE",
-            ]),
+            st.sampled_from(
+                [
+                    "IDX_ATTR_ENTITY_ID",
+                    "PK_ATTR_CONFIG",
+                    "UK_STATUS_TYPE_REF",
+                    "IDX_STATUS_HIST_ENTITY",
+                    "VW_CURRENT_USER",
+                    "SOME_TABLE",
+                ]
+            ),
         ),
         starts=st.integers(min_value=0, max_value=10_000),
         e_rows=st.one_of(st.none(), st.integers(min_value=0, max_value=1_000_000)),
         a_rows=st.integers(min_value=0, max_value=1_000_000),
-        a_time_ms=st.floats(min_value=0.0, max_value=100_000.0, allow_nan=False, allow_infinity=False),
+        a_time_ms=st.floats(
+            min_value=0.0, max_value=100_000.0, allow_nan=False, allow_infinity=False
+        ),
         buffers=st.integers(min_value=0, max_value=1_000_000),
         reads=st.integers(min_value=0, max_value=100_000),
         indent=st.integers(min_value=0, max_value=20),
@@ -133,6 +139,7 @@ def valid_collected_context():
 def _load_fixture(name: str) -> list[str]:
     """Carrega fixture de plano do diretório tests/fixtures/."""
     import os
+
     fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", name)
     with open(fixture_path, encoding="utf-8") as f:
         return f.read().splitlines()
@@ -180,9 +187,10 @@ def test_plan_block_round_trip(block: PlanBlock):
     # Arredonda para o centésimo de segundo mais próximo (10ms)
     expected_ms = round(block.a_time_ms / 10.0) * 10.0
     assert abs(p.a_time_ms - expected_ms) < 1.0, (
-        f"a_time_ms: esperado ~{expected_ms}, obtido {p.a_time_ms} "
-        f"(original: {block.a_time_ms})"
+        f"a_time_ms: esperado ~{expected_ms}, obtido {p.a_time_ms} (original: {block.a_time_ms})"
     )
+
+
 #
 # Tarefa 8.4 — Property 8: Thresholds determinísticos
 @given(block=valid_plan_block())
@@ -226,6 +234,8 @@ def test_thresholds_deterministic(block: PlanBlock):
         f"reads={block.reads}, buffers={block.buffers}, starts={block.starts}, "
         f"a_time_ms={block.a_time_ms}, e_rows={block.e_rows}, a_rows={block.a_rows}"
     )
+
+
 #
 # Tarefa 9.4 — Property 4: Imunidade preservada
 #   @given(blocks=st.lists(valid_plan_block(), min_size=1))
@@ -257,6 +267,8 @@ def test_minimum_group_sizes(blocks: list):
             f"_collapse_situation_history retornou grupo com {len(cr.collapsed_ids)} IDs "
             f"(mínimo esperado: 2): {cr.collapsed_ids}"
         )
+
+
 #
 # Tarefa 9.6 — Property 3: Nenhuma poda silenciosa
 @given(blocks=st.lists(valid_plan_block(), min_size=0, max_size=30))
@@ -284,20 +296,21 @@ def test_no_silent_pruning(blocks: list):
             f"CollapseResult com replacement_lines vazio: collapsed_ids={cr.collapsed_ids}"
         )
         assert cr.replacement_lines[0].startswith("[COLAPSADO:"), (
-            f"Primeira linha do resumo não começa com '[COLAPSADO:': "
-            f"{cr.replacement_lines[0]!r}"
+            f"Primeira linha do resumo não começa com '[COLAPSADO:': {cr.replacement_lines[0]!r}"
         )
+
+
 #
 # Tarefa 11.2 — Property 5: Consistência de predicados
 
 
 @given(
     pred_entries=st.lists(
-        st.from_regex(r'   \d{1,3} - (access|filter)\([^)]+\)', fullmatch=True),
+        st.from_regex(r"   \d{1,3} - (access|filter)\([^)]+\)", fullmatch=True),
         min_size=0,
         max_size=20,
     ),
-    collapsed_ids=st.frozensets(st.from_regex(r'\d{1,3}', fullmatch=True), max_size=5),
+    collapsed_ids=st.frozensets(st.from_regex(r"\d{1,3}", fullmatch=True), max_size=5),
 )
 @settings(max_examples=300)
 def test_predicate_consistency(pred_entries, collapsed_ids):
@@ -314,7 +327,7 @@ def test_predicate_consistency(pred_entries, collapsed_ids):
     result = _collapse_orphan_predicates_by_ids(predicate_lines, set(collapsed_ids))
     assert isinstance(result, list)
 
-    _PRED_ID = _re_module.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+    _PRED_ID = _re_module.compile(r"^\s*(\d+)\s*-\s*(access|filter)\(")
     for line in result:
         m = _PRED_ID.match(line.strip() if isinstance(line, str) else "")
         if m:
@@ -382,7 +395,7 @@ def test_collapsed_ids_absent_from_reconstructed_plan(blocks, verbosity):
     )
     all_collapsed_ids = {cid for cr in all_collapses for cid in cr.collapsed_ids}
 
-    _PLAN_ID_RE = _re_module.compile(r'\|\*?\s*(\d+)\s*\|')
+    _PLAN_ID_RE = _re_module.compile(r"\|\*?\s*(\d+)\s*\|")
     for line in result_plan:
         m = _PLAN_ID_RE.match(line)
         if m:
@@ -392,7 +405,8 @@ def test_collapsed_ids_absent_from_reconstructed_plan(blocks, verbosity):
 
     for cr in all_collapses:
         summary_count = sum(
-            1 for line in result_plan
+            1
+            for line in result_plan
             if line.startswith("[COLAPSADO:") and line in cr.replacement_lines
         )
         if cr.collapsed_ids:
@@ -418,6 +432,8 @@ def test_compress_never_crashes(plan_lines, pred_lines, verbosity):
     assert isinstance(result_preds, list)
     assert all(isinstance(line, str) for line in result_plan)
     assert all(isinstance(line, str) for line in result_preds)
+
+
 #
 # Tarefa 12.2 — Property 6: Verbosity inválido levanta erro
 #   @given(verbosity=st.text().filter(lambda s: s not in {"full", "compact", "minimal"}))
@@ -604,7 +620,9 @@ class TestApplyThresholds:
 # ─── Tarefa 9.1 — Testes unitários para _collapse_config_fields (R1) ─────────
 
 
-def _make_config_fields_group(n: int, start_id: int = 1, immune_idx: int | None = None) -> list[PlanBlock]:
+def _make_config_fields_group(
+    n: int, start_id: int = 1, immune_idx: int | None = None
+) -> list[PlanBlock]:
     """
     Monta n grupos SORT AGGREGATE com filhos IDX_ATTR_ENTITY_ID e PK_ATTR_CONFIG.
     immune_idx (0-based) indica qual grupo raiz deve ter immune=True.
@@ -612,12 +630,20 @@ def _make_config_fields_group(n: int, start_id: int = 1, immune_idx: int | None 
     blocks = []
     bid = start_id
     for i in range(n):
-        root = _make_block(id=str(bid), operation="SORT AGGREGATE", starts=1, indent=0,
-                           immune=(i == immune_idx))
+        root = _make_block(
+            id=str(bid), operation="SORT AGGREGATE", starts=1, indent=0, immune=(i == immune_idx)
+        )
         bid += 1
-        c1 = _make_block(id=str(bid), operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2)
+        c1 = _make_block(
+            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2
+        )
         bid += 1
-        c2 = _make_block(id=str(bid), operation="INDEX UNIQUE SCAN", name="PK_ATTR_CONFIG", indent=2)
+        c2 = _make_block(
+            id=str(bid),
+            operation="INDEX UNIQUE SCAN",
+            name="PK_ATTR_CONFIG",
+            indent=2,
+        )
         bid += 1
         blocks.extend([root, c1, c2])
     return blocks
@@ -638,7 +664,9 @@ class TestCollapseConfigFields:
         # 1 SORT AGGREGATE sem os dois índices alvo → não é candidato → grupo vazio → não colapsa.
         root = _make_block(id="1", operation="SORT AGGREGATE", starts=1, indent=0)
         # Filho com apenas um dos índices alvo (falta PK_ATTR_CONFIG)
-        child = _make_block(id="2", operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2)
+        child = _make_block(
+            id="2", operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2
+        )
         results = _collapse_config_fields([root, child])
         assert results == []
 
@@ -665,25 +693,36 @@ class TestCollapseConfigFields:
         assert len(results) == 1
         full_text = "\n".join(results[0].replacement_lines)
         # Deve conter aviso sobre obras com campos configurados
-        assert "obra" in full_text.lower() or "campo" in full_text.lower() or "configurad" in full_text.lower()
+        assert (
+            "obra" in full_text.lower()
+            or "campo" in full_text.lower()
+            or "configurad" in full_text.lower()
+        )
 
 
 # ─── Tarefa 9.2 — Testes unitários para _collapse_situation_history (R2) ─────
 
 
-def _make_situation_history_group(n: int, start_id: int = 1, immune_idx: int | None = None) -> list[PlanBlock]:
+def _make_situation_history_group(
+    n: int, start_id: int = 1, immune_idx: int | None = None
+) -> list[PlanBlock]:
     """
     Monta n grupos SORT AGGREGATE com filhos UK_STATUS_TYPE_REF e IDX_STATUS_HIST_ENTITY.
     """
     blocks = []
     bid = start_id
     for i in range(n):
-        root = _make_block(id=str(bid), operation="SORT AGGREGATE", starts=1, indent=0,
-                           immune=(i == immune_idx))
+        root = _make_block(
+            id=str(bid), operation="SORT AGGREGATE", starts=1, indent=0, immune=(i == immune_idx)
+        )
         bid += 1
-        c1 = _make_block(id=str(bid), operation="INDEX RANGE SCAN", name="UK_STATUS_TYPE_REF", indent=2)
+        c1 = _make_block(
+            id=str(bid), operation="INDEX RANGE SCAN", name="UK_STATUS_TYPE_REF", indent=2
+        )
         bid += 1
-        c2 = _make_block(id=str(bid), operation="INDEX RANGE SCAN", name="IDX_STATUS_HIST_ENTITY", indent=2)
+        c2 = _make_block(
+            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_STATUS_HIST_ENTITY", indent=2
+        )
         bid += 1
         blocks.extend([root, c1, c2])
     return blocks
@@ -745,12 +784,16 @@ class TestCollapseVwUsuarioNull:
 
     def test_immune_subtree_prevents_collapse(self):
         view = _make_block(id="10", operation="VIEW", name="VW_CURRENT_USER", a_rows=0, indent=0)
-        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2, immune=True)
+        child = _make_block(
+            id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2, immune=True
+        )
         results = _collapse_vw_usuario_null([view, child])
         assert results == []
 
     def test_from_subquery_pattern_collapses(self):
-        view = _make_block(id="20", operation="VIEW", name="FROM$_SUBQUERY$_001", a_rows=0, indent=0)
+        view = _make_block(
+            id="20", operation="VIEW", name="FROM$_SUBQUERY$_001", a_rows=0, indent=0
+        )
         child = _make_block(id="21", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
         results = _collapse_vw_usuario_null([view, child])
         assert len(results) == 1
@@ -763,7 +806,11 @@ class TestCollapseVwUsuarioNull:
         assert len(results) == 1
         full_text = "\n".join(results[0].replacement_lines)
         # Deve conter aviso sobre usuário não NULL
-        assert "usuário" in full_text.lower() or "usuario" in full_text.lower() or "null" in full_text.lower()
+        assert (
+            "usuário" in full_text.lower()
+            or "usuario" in full_text.lower()
+            or "null" in full_text.lower()
+        )
 
 
 # ─── Tarefa 9.4 — Property 4: Imunidade preservada ───────────────────────────
@@ -801,8 +848,8 @@ def test_immune_blocks_never_collapsed(blocks: list):
 class TestCollapseOrphanPredicates:
     PRED_HEADER = "Predicate Information (identified by operation id):"
     PRED_2 = "   2 - access(\"CAMPO\"='VALOR')"
-    PRED_3 = "   3 - filter(\"OUTRO_CAMPO\" IS NOT NULL)"
-    PRED_5 = "   5 - access(\"X\"=:B1)"
+    PRED_3 = '   3 - filter("OUTRO_CAMPO" IS NOT NULL)'
+    PRED_5 = '   5 - access("X"=:B1)'
 
     def test_collapsed_ids_removes_predicate_lines(self):
         lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
@@ -810,7 +857,7 @@ class TestCollapseOrphanPredicates:
         ids_in_result = {
             m.group(1)
             for line in result
-            for m in [re.match(r'^\s*(\d+)\s*-\s*(access|filter)\(', line.strip())]
+            for m in [re.match(r"^\s*(\d+)\s*-\s*(access|filter)\(", line.strip())]
             if m
         }
         assert "2" not in ids_in_result
@@ -821,7 +868,7 @@ class TestCollapseOrphanPredicates:
         ids_in_result = {
             m.group(1)
             for line in result
-            for m in [re.match(r'^\s*(\d+)\s*-\s*(access|filter)\(', line.strip())]
+            for m in [re.match(r"^\s*(\d+)\s*-\s*(access|filter)\(", line.strip())]
             if m
         }
         assert "3" in ids_in_result
@@ -903,7 +950,7 @@ def _make_config_fields_plan_lines(n_groups: int) -> list[str]:
 class TestCompressPlan:
     def test_full_verbosity_returns_unchanged(self):
         plan = _make_config_fields_plan_lines(3)
-        preds = ["   1 - access(\"X\"=:B1)"]
+        preds = ['   1 - access("X"=:B1)']
         result_plan, result_preds = _compress_plan(plan, preds, "full")
         assert result_plan == plan
         assert result_preds == preds
@@ -919,13 +966,8 @@ class TestCompressPlan:
         plan = _make_config_fields_plan_lines(3)
         result_plan, _preds = _compress_plan(plan, [], "compact")
         # IDs 1–9 devem ter sido colapsados; nenhum deve aparecer como linha de plano normal
-        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
-        ids_in_result = {
-            m.group(1)
-            for line in result_plan
-            for m in [_PLAN_ID_RE.match(line)]
-            if m
-        }
+        _PLAN_ID_RE = re.compile(r"\|\*?\s*(\d+)\s*\|")
+        ids_in_result = {m.group(1) for line in result_plan for m in [_PLAN_ID_RE.match(line)] if m}
         # Deve haver pelo menos um bloco [COLAPSADO:] no resultado
         assert any(line.startswith("[COLAPSADO:") for line in result_plan)
         # Nenhum ID original deve aparecer como linha de plano normal
@@ -965,8 +1007,8 @@ def _make_runtime_plan_with_collapses() -> list[str]:
     for _ in range(3):
         lines += [
             f"|   {bid} | SORT AGGREGATE          |                               |      1 |        |      0 |00:00:00.01 |       3 |      0 |",
-            f"|   {bid+1} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID            |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
-            f"|   {bid+2} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
+            f"|   {bid + 1} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID            |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
+            f"|   {bid + 2} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
         ]
         bid += 3
     return lines
@@ -1009,6 +1051,7 @@ class TestToMarkdownVerbosity:
 
     def test_minimal_has_no_ddl(self):
         from sqlmentor.collector import TableContext
+
         table = TableContext(
             schema="SCHEMA",
             name="MINHA_TABELA",
@@ -1106,6 +1149,7 @@ def test_compression_monotonic_without_plan():
 def _strip_timestamps(text: str) -> str:
     """Remove timestamps do output para comparação de idempotência."""
     import re
+
     # Padrão: datas como "2025-01-25 18:12:21" ou "25 18:12:21"
     return re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", "TIMESTAMP", text)
 
@@ -1229,18 +1273,17 @@ class TestIntegrationRealPlan:
         full deve preservar todos os IDs do plano original sem remoção.
         """
         import re
+
         plan_lines = self._load_plan_lines()
         plan_only, pred_lines = _split_plan_predicates(plan_lines)
 
-        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
+        _PLAN_ID_RE = re.compile(r"\|\*?\s*(\d+)\s*\|")
         original_ids = {m.group(1) for line in plan_only for m in [_PLAN_ID_RE.match(line)] if m}
 
         full_plan, _ = _compress_plan(plan_only, pred_lines, "full")
         full_ids = {m.group(1) for line in full_plan for m in [_PLAN_ID_RE.match(line)] if m}
 
-        assert original_ids == full_ids, (
-            f"full removeu IDs: {original_ids - full_ids}"
-        )
+        assert original_ids == full_ids, f"full removeu IDs: {original_ids - full_ids}"
 
     def test_compact_removes_collapsed_ids_from_plan(self):
         """
@@ -1272,8 +1315,10 @@ class TestIntegrationRealPlan:
 
         compact_plan, _ = _compress_plan(plan_only, pred_lines, "compact")
 
-        _PLAN_ID_RE = re.compile(r'\|\*?\s*(\d+)\s*\|')
-        ids_in_compact = {m.group(1) for line in compact_plan for m in [_PLAN_ID_RE.match(line)] if m}
+        _PLAN_ID_RE = re.compile(r"\|\*?\s*(\d+)\s*\|")
+        ids_in_compact = {
+            m.group(1) for line in compact_plan for m in [_PLAN_ID_RE.match(line)] if m
+        }
 
         overlap = all_collapsed_ids & ids_in_compact
         assert not overlap, f"IDs colapsados ainda presentes no plano compact: {overlap}"

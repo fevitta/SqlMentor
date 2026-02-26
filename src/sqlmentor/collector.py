@@ -70,9 +70,7 @@ class CollectedContext:
     errors: list[str] = field(default_factory=list)
 
 
-def _execute_query(
-    cursor: oracledb.Cursor, sql: str, params: dict
-) -> list[dict[str, Any]]:
+def _execute_query(cursor: oracledb.Cursor, sql: str, params: dict) -> list[dict[str, Any]]:
     """Executa query e retorna resultado como lista de dicts."""
     cursor.execute(sql, params)
     columns = [col[0].lower() for col in cursor.description or []]
@@ -180,9 +178,7 @@ def collect_context(
         # Deep mode: partitions + histograms
         if deep:
             tctx.partitions = _collect_partitions(cursor, schema, name, ctx)
-            tctx.histograms = _collect_histograms(
-                cursor, schema, name, parsed, tctx.columns, ctx
-            )
+            tctx.histograms = _collect_histograms(cursor, schema, name, parsed, tctx.columns, ctx)
 
         ctx.tables.append(tctx)
 
@@ -233,9 +229,7 @@ def collect_context(
     return ctx
 
 
-def _collect_db_version(
-    cursor: oracledb.Cursor, ctx: CollectedContext
-) -> str | None:
+def _collect_db_version(cursor: oracledb.Cursor, ctx: CollectedContext) -> str | None:
     """Coleta versão do banco Oracle."""
     try:
         sql, params = db_version()
@@ -259,6 +253,7 @@ def _detect_object_type(
         return "TABLE"
     except Exception:
         return "TABLE"
+
 
 def _collect_view_expansion(
     cursor: oracledb.Cursor, schema: str, name: str, ctx: CollectedContext
@@ -297,7 +292,7 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
     if as_pos == -1:
         return []
 
-    select_sql = ddl_text[as_pos + 3:].strip().rstrip(";").strip()
+    select_sql = ddl_text[as_pos + 3 :].strip().rstrip(";").strip()
     if not select_sql:
         return []
 
@@ -306,11 +301,12 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
     except sqlglot.errors.ParseError:
         # Fallback: regex simples pra FROM/JOIN
         import re
+
         tables = set()
         for match in re.finditer(
             r'\b(?:FROM|JOIN)\s+("?\w+"?\.)?"?(\w+)"?', select_sql, re.IGNORECASE
         ):
-            schema_part = (match.group(1) or "").strip('.').strip('"')
+            schema_part = (match.group(1) or "").strip(".").strip('"')
             table_name = match.group(2).strip('"')
             if schema_part:
                 tables.add(f"{schema_part}.{table_name}")
@@ -331,7 +327,6 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
                 else:
                     tables.add(tname)
     return sorted(tables)
-
 
 
 def _inline_binds(sql_text: str, bind_params: dict | None) -> str:
@@ -356,15 +351,17 @@ def _inline_binds(sql_text: str, bind_params: dict | None) -> str:
                 if isinstance(v, (int, float)):
                     return str(v)
                 # String: escapa aspas simples
-                return f"'{str(v).replace(chr(39), chr(39)+chr(39))}'"
+                return f"'{str(v).replace(chr(39), chr(39) + chr(39))}'"
         # Bind não fornecido — substitui por NULL pra não quebrar o EXPLAIN
         return "NULL"
 
-    return re.sub(r'(?<!:):([A-Za-z_]\w*)', _replacer, sql_text)
+    return re.sub(r"(?<!:):([A-Za-z_]\w*)", _replacer, sql_text)
 
 
 def _collect_explain_plan(
-    cursor: oracledb.Cursor, sql_text: str, ctx: CollectedContext,
+    cursor: oracledb.Cursor,
+    sql_text: str,
+    ctx: CollectedContext,
     bind_params: dict[str, str] | None = None,
 ) -> list[str] | None:
     """Coleta o plano de execução.
@@ -394,7 +391,7 @@ def _collect_explain_plan(
     except Exception as e:
         msg = f"Erro ao coletar EXPLAIN PLAN: {e}"
         # Extrai offset do erro Oracle pra indicar a linha problemática
-        if hasattr(e, 'args') and e.args and hasattr(e.args[0], 'offset'):
+        if hasattr(e, "args") and e.args and hasattr(e.args[0], "offset"):
             offset = e.args[0].offset
             if offset and offset > 0:
                 # O offset é relativo ao explain_stmt completo
@@ -404,16 +401,16 @@ def _collect_explain_plan(
                 if 0 <= adj_offset < len(inlined_sql):
                     # Calcula linha e coluna no SQL com binds inlined
                     before = inlined_sql[:adj_offset]
-                    line_no = before.count('\n') + 1
-                    line_start = before.rfind('\n') + 1
-                    line_end = inlined_sql.find('\n', adj_offset)
+                    line_no = before.count("\n") + 1
+                    line_start = before.rfind("\n") + 1
+                    line_end = inlined_sql.find("\n", adj_offset)
                     if line_end == -1:
                         line_end = len(inlined_sql)
                     offending_line = inlined_sql[line_start:line_end].strip()
                     msg += f'\n- Line {line_no}: "{offending_line}"'
 
         # Sugere GRANTs de EXECUTE pra funções PL/SQL quando ORA-01031
-        err_code = getattr(e.args[0], 'code', 0) if e.args else 0
+        err_code = getattr(e.args[0], "code", 0) if e.args else 0
         if err_code == 1031 and ctx.parsed_sql.functions:
             msg += "\nHelp: https://docs.oracle.com/error-help/db/ora-01031/"
             msg += "\nFix: conceda EXECUTE nas funções PL/SQL referenciadas:"
@@ -445,9 +442,7 @@ def _collect_runtime_execution(
         cursor.execute("ALTER SESSION SET STATISTICS_LEVEL = ALL")
 
         # Pega SID antes de executar a query
-        cursor.execute(
-            "SELECT sid FROM v$mystat WHERE ROWNUM = 1"
-        )
+        cursor.execute("SELECT sid FROM v$mystat WHERE ROWNUM = 1")
         row = cursor.fetchone()
         sid = row[0] if row else None
 
@@ -457,8 +452,7 @@ def _collect_runtime_execution(
 
         # Pega sql_id da query que acabou de rodar (prev_sql_id = a anterior à atual)
         cursor.execute(
-            "SELECT prev_sql_id FROM v$session "
-            "WHERE sid = SYS_CONTEXT('USERENV', 'SID')"
+            "SELECT prev_sql_id FROM v$session WHERE sid = SYS_CONTEXT('USERENV', 'SID')"
         )
         row = cursor.fetchone()
         sql_id = row[0] if row else None
@@ -603,9 +597,7 @@ def _collect_histograms(
     return result
 
 
-def _collect_optimizer_params(
-    cursor: oracledb.Cursor, ctx: CollectedContext
-) -> dict[str, str]:
+def _collect_optimizer_params(cursor: oracledb.Cursor, ctx: CollectedContext) -> dict[str, str]:
     """Coleta parâmetros do otimizador."""
     try:
         sql, params = optimizer_params()

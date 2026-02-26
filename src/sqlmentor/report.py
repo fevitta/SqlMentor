@@ -14,9 +14,11 @@ from sqlmentor.collector import CollectedContext, TableContext
 
 # ─── Dataclasses para compressão do plano ────────────────────────
 
+
 @dataclass
 class PlanBlock:
     """Representa uma operação do plano de execução Oracle."""
+
     id: str
     operation: str
     name: str
@@ -34,6 +36,7 @@ class PlanBlock:
 @dataclass
 class CollapseResult:
     """Resultado de um colapso de blocos do plano."""
+
     collapsed_ids: set[str]
     replacement_lines: list[str]
 
@@ -42,34 +45,34 @@ class CollapseResult:
 # Colunas: Id | Operation | Name | Starts | E-Rows | A-Rows | A-Time | Buffers | Reads
 # Captura indentação da coluna Operation separadamente para inferir hierarquia
 _PLAN_ROW = re.compile(
-    r'\|\*?\s*(\d+)\s*\|'           # Id
-    r'(\s*)(\S[^|]*?)\s*\|'         # (indent_spaces)(Operation) — captura espaços iniciais
-    r'\s*(.*?)\s*\|'                 # Name
-    r'\s*(\d+)\s*\|'                 # Starts
-    r'\s*(\d*)\s*\|'                 # E-Rows (pode estar vazio)
-    r'\s*(\d+)\s*\|'                 # A-Rows
-    r'\s*(\d+:\d+:\d+\.\d+)\s*\|'  # A-Time
-    r'\s*(\d+[KMG]?)\s*\|'          # Buffers
-    r'\s*(\d+)\s*\|',               # Reads
+    r"\|\*?\s*(\d+)\s*\|"  # Id
+    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation) — captura espaços iniciais
+    r"\s*(.*?)\s*\|"  # Name
+    r"\s*(\d+)\s*\|"  # Starts
+    r"\s*(\d*)\s*\|"  # E-Rows (pode estar vazio)
+    r"\s*(\d+)\s*\|"  # A-Rows
+    r"\s*(\d+:\d+:\d+\.\d+)\s*\|"  # A-Time
+    r"\s*(\d+[KMG]?)\s*\|"  # Buffers
+    r"\s*(\d+)\s*\|",  # Reads
 )
 
 # Regex para parsear linha do plano EXPLAIN PLAN (estimado)
 # Colunas: Id | Operation | Name | Rows | Bytes | Cost (%CPU) | Time
 _PLAN_ROW_ESTIMATED = re.compile(
-    r'\|\*?\s*(\d+)\s*\|'           # Id
-    r'(\s*)(\S[^|]*?)\s*\|'         # (indent_spaces)(Operation)
-    r'\s*(.*?)\s*\|'                 # Name
-    r'\s*(\d*)\s*\|'                 # Rows (pode estar vazio)
-    r'\s*(\d*[KMG]?)\s*\|'          # Bytes (pode estar vazio)
-    r'\s*(\d*)\s*[^|]*\|'           # Cost (%CPU) — ignora o (%CPU)
-    r'\s*(\d+:\d+:\d+)?\s*\|',      # Time (pode estar vazio)
+    r"\|\*?\s*(\d+)\s*\|"  # Id
+    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation)
+    r"\s*(.*?)\s*\|"  # Name
+    r"\s*(\d*)\s*\|"  # Rows (pode estar vazio)
+    r"\s*(\d*[KMG]?)\s*\|"  # Bytes (pode estar vazio)
+    r"\s*(\d*)\s*[^|]*\|"  # Cost (%CPU) — ignora o (%CPU)
+    r"\s*(\d+:\d+:\d+)?\s*\|",  # Time (pode estar vazio)
 )
 
 _BUFFERS_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
 # Regex genérico para extrair apenas o Id de qualquer linha de plano Oracle
 # Funciona tanto com ALLSTATS quanto com EXPLAIN PLAN
-_PLAN_ROW_ID = re.compile(r'^\|\*?\s*(\d+)\s*\|')
+_PLAN_ROW_ID = re.compile(r"^\|\*?\s*(\d+)\s*\|")
 
 # Thresholds de proteção (R5)
 _THRESHOLD_BUFFERS = 1_000
@@ -115,18 +118,20 @@ def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
         if m:
             indent = len(m.group(2))
             e_rows_str = m.group(6).strip()
-            blocks.append(PlanBlock(
-                id=m.group(1),
-                operation=m.group(3).strip(),
-                name=m.group(4).strip(),
-                starts=int(m.group(5)),
-                e_rows=int(e_rows_str) if e_rows_str else None,
-                a_rows=int(m.group(7)),
-                a_time_ms=_parse_atime_ms(m.group(8)),
-                buffers=_parse_buffers(m.group(9)),
-                reads=int(m.group(10)),
-                indent=indent,
-            ))
+            blocks.append(
+                PlanBlock(
+                    id=m.group(1),
+                    operation=m.group(3).strip(),
+                    name=m.group(4).strip(),
+                    starts=int(m.group(5)),
+                    e_rows=int(e_rows_str) if e_rows_str else None,
+                    a_rows=int(m.group(7)),
+                    a_time_ms=_parse_atime_ms(m.group(8)),
+                    buffers=_parse_buffers(m.group(9)),
+                    reads=int(m.group(10)),
+                    indent=indent,
+                )
+            )
             continue
 
         # Tenta formato EXPLAIN PLAN (estimado)
@@ -134,18 +139,20 @@ def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
         if m2:
             indent = len(m2.group(2))
             e_rows_str = m2.group(5).strip()
-            blocks.append(PlanBlock(
-                id=m2.group(1),
-                operation=m2.group(3).strip(),
-                name=m2.group(4).strip(),
-                starts=0,           # não disponível no plano estimado
-                e_rows=int(e_rows_str) if e_rows_str else None,
-                a_rows=0,           # não disponível no plano estimado
-                a_time_ms=0.0,      # não disponível no plano estimado
-                buffers=0,          # não disponível no plano estimado
-                reads=0,            # não disponível no plano estimado
-                indent=indent,
-            ))
+            blocks.append(
+                PlanBlock(
+                    id=m2.group(1),
+                    operation=m2.group(3).strip(),
+                    name=m2.group(4).strip(),
+                    starts=0,  # não disponível no plano estimado
+                    e_rows=int(e_rows_str) if e_rows_str else None,
+                    a_rows=0,  # não disponível no plano estimado
+                    a_time_ms=0.0,  # não disponível no plano estimado
+                    buffers=0,  # não disponível no plano estimado
+                    reads=0,  # não disponível no plano estimado
+                    indent=indent,
+                )
+            )
 
     return blocks
 
@@ -191,11 +198,15 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
                 all_ids = {b.id for b in group}
                 total_buffers = sum(b.buffers for b in group)
                 total_reads = sum(b.reads for b in group)
-                a_rows_nonzero = [b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0]
+                a_rows_nonzero = [
+                    b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0
+                ]
                 lines = [
                     f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — campos configurados por obra]",
                     "  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
-                    "  Resultado: A-Rows=0 em todos" if not a_rows_nonzero else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
+                    "  Resultado: A-Rows=0 em todos"
+                    if not a_rows_nonzero
+                    else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
                     f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
                     "  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
                 ]
@@ -311,9 +322,8 @@ def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        is_view_node = (
-            "VIEW" in b.operation.upper()
-            and ("VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper())
+        is_view_node = "VIEW" in b.operation.upper() and (
+            "VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper()
         )
         if is_view_node and b.a_rows == 0:
             j = i + 1
@@ -354,9 +364,8 @@ def _collapse_vw_usuario_estimated(blocks: list[PlanBlock]) -> list[CollapseResu
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        is_view_node = (
-            "VIEW" in b.operation.upper()
-            and ("VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper())
+        is_view_node = "VIEW" in b.operation.upper() and (
+            "VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper()
         )
         if is_view_node:
             j = i + 1
@@ -401,7 +410,7 @@ def _build_predicate_map(plan_lines: list[str]) -> dict[str, list[str]]:
     pred_map: dict[str, list[str]] = {}
     in_predicates = False
     current_id: str | None = None
-    _PRED_ID = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\((.+)')
+    _PRED_ID = re.compile(r"^\s*(\d+)\s*-\s*(access|filter)\((.+)")
 
     for line in plan_lines:
         stripped = line.strip()
@@ -415,7 +424,7 @@ def _build_predicate_map(plan_lines: list[str]) -> dict[str, list[str]]:
             current_id = m.group(1)
             pred_map.setdefault(current_id, []).append(m.group(3))
         elif current_id and stripped and not stripped.startswith("---"):
-            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+            if re.match(r"^[A-Z]", stripped) and not stripped[0].isdigit():
                 in_predicates = False
                 current_id = None
             else:
@@ -434,7 +443,7 @@ def _add_nonsequential_id_note(plan_lines: list[str]) -> list[str]:
         if m:
             ids.append(int(m.group(1)))
 
-    has_gaps = any(ids[i+1] - ids[i] > 1 for i in range(len(ids) - 1)) if len(ids) > 1 else False
+    has_gaps = any(ids[i + 1] - ids[i] > 1 for i in range(len(ids) - 1)) if len(ids) > 1 else False
     if not has_gaps:
         return plan_lines
 
@@ -447,9 +456,7 @@ def _add_nonsequential_id_note(plan_lines: list[str]) -> list[str]:
             result.append(
                 "ℹ️ IDs não sequenciais são normais — operações internas de views/subqueries"
             )
-            result.append(
-                "   são numeradas pelo Oracle mas omitidas do DBMS_XPLAN."
-            )
+            result.append("   são numeradas pelo Oracle mas omitidas do DBMS_XPLAN.")
             inserted = True
     return result
 
@@ -559,9 +566,7 @@ def _compress_plan(
     return new_plan, new_preds
 
 
-def _collapse_orphan_predicates_by_ids(
-    plan_lines: list[str], collapsed_ids: set[str]
-) -> list[str]:
+def _collapse_orphan_predicates_by_ids(plan_lines: list[str], collapsed_ids: set[str]) -> list[str]:
     """
     Remove predicados cujos IDs foram colapsados.
     Adiciona nota de quantos foram omitidos.
@@ -573,7 +578,7 @@ def _collapse_orphan_predicates_by_ids(
     pruned = 0
     in_predicates = False
     skipping = False
-    _PRED_ID = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+    _PRED_ID = re.compile(r"^\s*(\d+)\s*-\s*(access|filter)\(")
 
     for line in plan_lines:
         stripped = line.strip()
@@ -599,7 +604,7 @@ def _collapse_orphan_predicates_by_ids(
                 continue
 
         if skipping and stripped and not stripped.startswith("---"):
-            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+            if re.match(r"^[A-Z]", stripped) and not stripped[0].isdigit():
                 in_predicates = False
                 skipping = False
                 result.append(line)
@@ -669,13 +674,19 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
     lines.append(f"**Tabelas referenciadas:** {', '.join(ctx.parsed_sql.table_names)}")
 
     if ctx.parsed_sql.where_columns:
-        lines.append(f"**Colunas em WHERE:** {', '.join(sorted(set(ctx.parsed_sql.where_columns)))}")
+        lines.append(
+            f"**Colunas em WHERE:** {', '.join(sorted(set(ctx.parsed_sql.where_columns)))}"
+        )
     if ctx.parsed_sql.join_columns:
         lines.append(f"**Colunas em JOIN:** {', '.join(sorted(set(ctx.parsed_sql.join_columns)))}")
     if ctx.parsed_sql.order_columns:
-        lines.append(f"**Colunas em ORDER BY:** {', '.join(sorted(set(ctx.parsed_sql.order_columns)))}")
+        lines.append(
+            f"**Colunas em ORDER BY:** {', '.join(sorted(set(ctx.parsed_sql.order_columns)))}"
+        )
     if ctx.parsed_sql.group_columns:
-        lines.append(f"**Colunas em GROUP BY:** {', '.join(sorted(set(ctx.parsed_sql.group_columns)))}")
+        lines.append(
+            f"**Colunas em GROUP BY:** {', '.join(sorted(set(ctx.parsed_sql.group_columns)))}"
+        )
     if ctx.parsed_sql.subqueries:
         lines.append(f"**Subqueries:** {ctx.parsed_sql.subqueries}")
     if ctx.parsed_sql.functions:
@@ -707,12 +718,16 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
     # ─── Runtime: Plano Real ──────────────────────────────────────
     if ctx.runtime_plan:
         lines.append(f"## {section}. Runtime Execution Plan (ALLSTATS LAST)")
-        lines.append("> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
-                      "O plano mostra a última execução (LAST).")
+        lines.append(
+            "> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
+            "O plano mostra a última execução (LAST)."
+        )
         executions = ctx.runtime_stats.get("executions", 1) if ctx.runtime_stats else 1
         if executions and executions > 1:
-            lines.append(f"> ⚠️ SQL_ID já existia no shared pool com {executions} execuções. "
-                          "Stats de V$SQL são acumuladas, mas o plano ALLSTATS LAST é da última execução.")
+            lines.append(
+                f"> ⚠️ SQL_ID já existia no shared pool com {executions} execuções. "
+                "Stats de V$SQL são acumuladas, mas o plano ALLSTATS LAST é da última execução."
+            )
         lines.append("")
         lines.append("```")
         plan_cleaned = _strip_sql_from_plan(ctx.runtime_plan)
@@ -789,7 +804,9 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
             if in_plan:
                 lines.append(f"- Acessadas no plano: {', '.join(in_plan)}")
             if not_in_plan:
-                lines.append(f"- Não acessadas (join elimination ou não necessárias): {', '.join(not_in_plan)}")
+                lines.append(
+                    f"- Não acessadas (join elimination ou não necessárias): {', '.join(not_in_plan)}"
+                )
             lines.append("")
 
         # Tabelas compartilhadas entre views
@@ -934,6 +951,8 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
         lines.append("")
 
     return "\n".join(lines)
+
+
 def _strip_sql_from_plan(plan_lines: list[str]) -> list[str]:
     """Remove o SQL repetido do output do DISPLAY_CURSOR.
 
@@ -956,14 +975,13 @@ def _strip_sql_from_plan(plan_lines: list[str]) -> list[str]:
                 result.append(line)
                 continue
             # Pula linhas de separação (----) antes do plan hash
-            if stripped and all(c == '-' for c in stripped):
+            if stripped and all(c == "-" for c in stripped):
                 continue
             # Pula o SQL repetido
             continue
         result.append(line)
     # Fallback: se não achou Plan hash value, retorna tudo
     return result if found_plan_hash else plan_lines
-
 
 
 def _prune_dead_operations(plan_lines: list[str]) -> tuple[list[str], set[str]]:
@@ -979,14 +997,14 @@ def _prune_dead_operations(plan_lines: list[str]) -> tuple[list[str], set[str]]:
     result = []
     pruned = 0
     pruned_ids: set[str] = set()
-    id_pattern = re.compile(r'\|\*?\s*(\d+)\s*\|')
+    id_pattern = re.compile(r"\|\*?\s*(\d+)\s*\|")
     dead_pattern = re.compile(
-        r'\|\*?\s*\d+\s*\|'     # Id
-        r'\s*.+?\s*\|'          # Operation
-        r'\s*.*?\s*\|'          # Name
-        r'\s*0\s*\|'            # Starts = 0
-        r'\s*\d*\s*\|'          # E-Rows (qualquer)
-        r'\s*0\s*\|'            # A-Rows = 0
+        r"\|\*?\s*\d+\s*\|"  # Id
+        r"\s*.+?\s*\|"  # Operation
+        r"\s*.*?\s*\|"  # Name
+        r"\s*0\s*\|"  # Starts = 0
+        r"\s*\d*\s*\|"  # E-Rows (qualquer)
+        r"\s*0\s*\|"  # A-Rows = 0
     )
     for line in plan_lines:
         if dead_pattern.match(line):
@@ -1022,7 +1040,7 @@ def _prune_orphan_predicates(plan_lines: list[str], pruned_ids: set[str]) -> lis
     pruned_preds = 0
     in_predicates = False
     skipping = False
-    pred_id_pattern = re.compile(r'^\s*(\d+)\s*-\s*(access|filter)\(')
+    pred_id_pattern = re.compile(r"^\s*(\d+)\s*-\s*(access|filter)\(")
 
     for line in plan_lines:
         stripped = line.strip()
@@ -1055,7 +1073,7 @@ def _prune_orphan_predicates(plan_lines: list[str], pruned_ids: set[str]) -> lis
         if skipping and stripped and not stripped.startswith("---"):
             # Continuação de predicado órfão — pula
             # Mas se parece início de nova seção, para de pular
-            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+            if re.match(r"^[A-Z]", stripped) and not stripped[0].isdigit():
                 in_predicates = False
                 skipping = False
                 result.append(line)
@@ -1072,7 +1090,6 @@ def _prune_orphan_predicates(plan_lines: list[str], pruned_ids: set[str]) -> lis
     return result
 
 
-
 def _strip_view_column_list(ddl: str) -> str:
     """Remove a lista de colunas do CREATE VIEW (...) AS e linhas vazias.
 
@@ -1086,10 +1103,10 @@ def _strip_view_column_list(ddl: str) -> str:
     # Padrão: CREATE [OR REPLACE] [FORCE] VIEW "SCHEMA"."NAME" (col1, col2, ...) AS\n  SELECT
     # Queremos trocar tudo até "AS\n" por uma versão sem a lista de colunas
     match = re.match(
-        r'(CREATE\s+(?:OR\s+REPLACE\s+)?(?:FORCE\s+)?VIEW\s+'
+        r"(CREATE\s+(?:OR\s+REPLACE\s+)?(?:FORCE\s+)?VIEW\s+"
         r'["\w.]+(?:\s*\.\s*["\w.]+)*)'  # CREATE ... VIEW "SCHEMA"."NAME"
-        r'\s*\([^)]+\)'                    # (col1, col2, ...) — lista de colunas
-        r'\s+AS\b',                        # AS
+        r"\s*\([^)]+\)"  # (col1, col2, ...) — lista de colunas
+        r"\s+AS\b",  # AS
         ddl,
         re.IGNORECASE | re.DOTALL,
     )
@@ -1144,7 +1161,10 @@ def _filter_columns_by_sql(
 # Parâmetros do otimizador relevantes pra tuning com seus defaults Oracle
 _OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
     "optimizer_mode": ("ALL_ROWS", "Modo do otimizador"),
-    "optimizer_index_cost_adj": ("100", "Ajuste de custo de índice (default 100, <100 favorece índices)"),
+    "optimizer_index_cost_adj": (
+        "100",
+        "Ajuste de custo de índice (default 100, <100 favorece índices)",
+    ),
     "optimizer_index_caching": ("0", "% estimado de índice em cache (default 0)"),
     "optimizer_dynamic_sampling": ("2", "Nível de amostragem dinâmica"),
     "optimizer_features_enable": (None, "Versão de features do otimizador"),
@@ -1169,7 +1189,10 @@ def _format_optimizer_params(params: dict[str, str]) -> str:
         line = f"- **{name}:** {value}"
 
         # Detecta valores não-default que merecem atenção
-        if default_val is not None and str(value).strip().upper() != str(default_val).strip().upper():
+        if (
+            default_val is not None
+            and str(value).strip().upper() != str(default_val).strip().upper()
+        ):
             line += f" ⚠️ (default: {default_val})"
             # Warnings específicos
             if name == "optimizer_index_cost_adj":
@@ -1222,7 +1245,9 @@ def to_json(ctx: CollectedContext) -> str:
         "wait_events": ctx.wait_events,
         "view_expansions": ctx.view_expansions,
         "function_ddls": ctx.function_ddls,
-        "tables": [_table_to_dict(t) for t in sorted(ctx.tables, key=lambda t: f"{t.schema}.{t.name}")],
+        "tables": [
+            _table_to_dict(t) for t in sorted(ctx.tables, key=lambda t: f"{t.schema}.{t.name}")
+        ],
         "optimizer_params": ctx.optimizer_params,
         "errors": ctx.errors,
     }
@@ -1249,9 +1274,17 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     """Formata stats de tabela como texto compacto."""
     parts = []
     if stats.get("num_rows") is not None:
-        parts.append(f"**Rows:** {stats['num_rows']:,}" if isinstance(stats['num_rows'], (int, float)) else f"**Rows:** {stats['num_rows']}")
+        parts.append(
+            f"**Rows:** {stats['num_rows']:,}"
+            if isinstance(stats["num_rows"], (int, float))
+            else f"**Rows:** {stats['num_rows']}"
+        )
     if stats.get("blocks"):
-        parts.append(f"**Blocks:** {stats['blocks']:,}" if isinstance(stats['blocks'], (int, float)) else f"**Blocks:** {stats['blocks']}")
+        parts.append(
+            f"**Blocks:** {stats['blocks']:,}"
+            if isinstance(stats["blocks"], (int, float))
+            else f"**Blocks:** {stats['blocks']}"
+        )
     if stats.get("avg_row_len"):
         parts.append(f"**Avg Row Len:** {stats['avg_row_len']}")
     if stats.get("last_analyzed"):
@@ -1261,7 +1294,11 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     sample = stats.get("sample_size")
     if sample is not None and num_rows > 0:
         pct = (sample / num_rows) * 100 if num_rows else 0
-        sample_str = f"**Sample Size:** {sample:,} ({pct:.0f}%)" if isinstance(sample, (int, float)) else f"**Sample Size:** {sample}"
+        sample_str = (
+            f"**Sample Size:** {sample:,} ({pct:.0f}%)"
+            if isinstance(sample, (int, float))
+            else f"**Sample Size:** {sample}"
+        )
         if pct < 10:
             sample_str += " ⚠️"
         parts.append(sample_str)
@@ -1274,7 +1311,9 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
-def _format_column_stats(columns: list[dict[str, Any]], fk_map: dict[str, str] | None = None) -> str:
+def _format_column_stats(
+    columns: list[dict[str, Any]], fk_map: dict[str, str] | None = None
+) -> str:
     """Formata estatísticas de colunas como tabela markdown, com indicação de FK."""
     fk_map = fk_map or {}
     lines = [
@@ -1285,13 +1324,19 @@ def _format_column_stats(columns: list[dict[str, Any]], fk_map: dict[str, str] |
         name = col.get("column_name", "?")
         dtype = col.get("data_type", "?")
         length = col.get("data_length", "")
-        dtype_full = f"{dtype}({length})" if length and dtype in ("VARCHAR2", "CHAR", "RAW", "NUMBER") else dtype
+        dtype_full = (
+            f"{dtype}({length})"
+            if length and dtype in ("VARCHAR2", "CHAR", "RAW", "NUMBER")
+            else dtype
+        )
         nullable = col.get("nullable", "?")
         distinct = col.get("num_distinct", "?")
         nulls = col.get("num_nulls", "?")
         hist = col.get("histogram", "NONE")
         fk_ref = fk_map.get(name.upper(), "")
-        lines.append(f"| {name} | {dtype_full} | {nullable} | {distinct} | {nulls} | {hist} | {fk_ref} |")
+        lines.append(
+            f"| {name} | {dtype_full} | {nullable} | {distinct} | {nulls} | {hist} | {fk_ref} |"
+        )
     return "\n".join(lines)
 
 
@@ -1305,7 +1350,11 @@ def _format_column_structure(columns: list[dict[str, Any]]) -> str:
         name = col.get("column_name", "?")
         dtype = col.get("data_type", "?")
         length = col.get("data_length", "")
-        dtype_full = f"{dtype}({length})" if length and dtype in ("VARCHAR2", "CHAR", "RAW", "NUMBER") else dtype
+        dtype_full = (
+            f"{dtype}({length})"
+            if length and dtype in ("VARCHAR2", "CHAR", "RAW", "NUMBER")
+            else dtype
+        )
         nullable = col.get("nullable", "?")
         lines.append(f"| {name} | {dtype_full} | {nullable} |")
     return "\n".join(lines)
@@ -1329,7 +1378,9 @@ def _format_indexes(idxs: list[dict[str, Any]]) -> str:
         status = idx.get("status", "?")
         # blevel > 3 é red flag
         bl_str = f"{blevel} ⚠️" if isinstance(blevel, (int, float)) and blevel > 3 else str(blevel)
-        lines.append(f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |")
+        lines.append(
+            f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
+        )
     return "\n".join(lines)
 
 
@@ -1360,6 +1411,8 @@ def _build_fk_map(constraints: list[dict[str, Any]]) -> dict[str, str]:
             if col:
                 fk_map[col] = ref
     return fk_map
+
+
 def _format_small_table(table: TableContext) -> str:
     """Formato compacto pra tabelas pequenas — uma linha com o essencial."""
     parts = [f"**{table.schema}.{table.name}**"]
@@ -1398,6 +1451,7 @@ def _format_partitions(parts: list[dict[str, Any]]) -> str:
         lines.append(f"| {name} | {pos} | {rows} | {analyzed} |")
     return "\n".join(lines)
 
+
 def _format_runtime_stats(stats: dict[str, Any]) -> str:
     """Formata métricas de execução de V$SQL com warnings de saúde."""
     lines = []
@@ -1427,15 +1481,21 @@ def _format_runtime_stats(stats: dict[str, Any]) -> str:
     warnings = []
     loads = stats.get("loads", 0) or 0
     if loads > 1:
-        warnings.append(f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente")
+        warnings.append(
+            f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente"
+        )
 
     invalidations = stats.get("invalidations", 0) or 0
     if invalidations > 0:
-        warnings.append(f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas")
+        warnings.append(
+            f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas"
+        )
 
     version_count = stats.get("version_count", 0) or 0
     if version_count > 5:
-        warnings.append(f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch")
+        warnings.append(
+            f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch"
+        )
 
     parse_calls = stats.get("parse_calls", 0) or 0
     executions = stats.get("executions", 0) or 0
@@ -1457,7 +1517,7 @@ def _format_runtime_stats(stats: dict[str, Any]) -> str:
             )
         elif cpu_pct < 50:
             warnings.append(
-                f"⚠️ Query é I/O-bound ({cpu_pct:.0f}% CPU, {100-cpu_pct:.0f}% wait) — investigar wait events"
+                f"⚠️ Query é I/O-bound ({cpu_pct:.0f}% CPU, {100 - cpu_pct:.0f}% wait) — investigar wait events"
             )
 
     avg_buffer_gets = stats.get("avg_buffer_gets", 0) or 0
@@ -1493,6 +1553,7 @@ def _format_wait_events(events: list[dict[str, Any]]) -> str:
         lines.append(f"| {event} | {waits} | {time_ms} | {avg} |")
     return "\n".join(lines)
 
+
 def _parse_plan_operations(plan_lines: list[str]) -> list[dict[str, Any]]:
     """Parseia linhas do DISPLAY_CURSOR e extrai operações com métricas."""
     ops = []
@@ -1501,33 +1562,34 @@ def _parse_plan_operations(plan_lines: list[str]) -> list[dict[str, Any]]:
     for line in plan_lines:
         # Linha de operação: começa com | seguido de * ou espaço e número
         match = re.match(
-            r'\|\*?\s*(\d+)\s*\|'       # Id
-            r'\s*(.+?)\s*\|'             # Operation
-            r'\s*(.*?)\s*\|'             # Name
-            r'\s*(\d+)\s*\|'             # Starts
-            r'\s*(\d*)\s*\|'             # E-Rows (pode estar vazio)
-            r'\s*(\d+)\s*\|'             # A-Rows
-            r'\s*(\d+:\d+:\d+\.\d+)\s*\|'  # A-Time
-            r'\s*(\d+)\s*\|',            # Buffers
+            r"\|\*?\s*(\d+)\s*\|"  # Id
+            r"\s*(.+?)\s*\|"  # Operation
+            r"\s*(.*?)\s*\|"  # Name
+            r"\s*(\d+)\s*\|"  # Starts
+            r"\s*(\d*)\s*\|"  # E-Rows (pode estar vazio)
+            r"\s*(\d+)\s*\|"  # A-Rows
+            r"\s*(\d+:\d+:\d+\.\d+)\s*\|"  # A-Time
+            r"\s*(\d+)\s*\|",  # Buffers
             line,
         )
         if match:
             e_rows_str = match.group(5).strip()
-            ops.append({
-                "id": int(match.group(1)),
-                "operation": match.group(2).strip(),
-                "name": match.group(3).strip(),
-                "starts": int(match.group(4)),
-                "e_rows": int(e_rows_str) if e_rows_str else 0,
-                "a_rows": int(match.group(6)),
-                "a_time": match.group(7),
-                "buffers": int(match.group(8)),
-            })
+            ops.append(
+                {
+                    "id": int(match.group(1)),
+                    "operation": match.group(2).strip(),
+                    "name": match.group(3).strip(),
+                    "starts": int(match.group(4)),
+                    "e_rows": int(e_rows_str) if e_rows_str else 0,
+                    "a_rows": int(match.group(6)),
+                    "a_time": match.group(7),
+                    "buffers": int(match.group(8)),
+                }
+            )
     return ops
 
-def _extract_plan_tables(
-    ops: list[dict[str, Any]], index_table_map: dict[str, str]
-) -> set[str]:
+
+def _extract_plan_tables(ops: list[dict[str, Any]], index_table_map: dict[str, str]) -> set[str]:
     """
     Extrai nomes de tabelas acessadas no plano.
 
@@ -1549,6 +1611,7 @@ def _extract_plan_tables(
                 tables.add(resolved)
     return tables
 
+
 def _extract_implicit_conversions(plan_lines: list[str]) -> list[dict[str, str]]:
     """Extrai conversões implícitas (TO_NUMBER, TO_CHAR, TO_DATE) da Predicate Information."""
     conversions = []
@@ -1567,10 +1630,10 @@ def _extract_implicit_conversions(plan_lines: list[str]) -> list[dict[str, str]]
         if stripped.startswith("---"):
             continue
         # Linha de predicado: "  12 - filter(TO_NUMBER("FNC_HIERARCHY")=1)"
-        pred_match = re.match(r'\s*(\d+)\s*-\s*(access|filter)\((.+)\)', stripped)
+        pred_match = re.match(r"\s*(\d+)\s*-\s*(access|filter)\((.+)\)", stripped)
         if not pred_match:
             # Pode ser continuação ou outra seção
-            if re.match(r'^[A-Z]', stripped) and not stripped[0].isdigit():
+            if re.match(r"^[A-Z]", stripped) and not stripped[0].isdigit():
                 in_predicates = False
             continue
 
@@ -1584,13 +1647,9 @@ def _extract_implicit_conversions(plan_lines: list[str]) -> list[dict[str, str]]
         ):
             func = conv_match.group(1)
             col = conv_match.group(2)
-            conversions.append({"id": pred_id, "function": f'{func}({col})'})
+            conversions.append({"id": pred_id, "function": f"{func}({col})"})
 
     return conversions
-
-
-
-
 
 
 def _time_to_seconds(time_str: str) -> float:
@@ -1641,8 +1700,12 @@ def _format_hotspots(plan_lines: list[str]) -> str:
 
         sorted_groups = sorted(grouped.values(), key=lambda g: g["starts"], reverse=True)
         lines.append("### Operações com efeito multiplicador (Starts ≥ 10)")
-        lines.append("| Operation | Name | Ocorrências | Starts (total) | A-Rows (total) | Buffers (total) |")
-        lines.append("|-----------|------|-------------|----------------|----------------|-----------------|")
+        lines.append(
+            "| Operation | Name | Ocorrências | Starts (total) | A-Rows (total) | Buffers (total) |"
+        )
+        lines.append(
+            "|-----------|------|-------------|----------------|----------------|-----------------|"
+        )
         for g in sorted_groups:
             occ = f"{g['occurrences']}×" if g["occurrences"] > 1 else "1"
             lines.append(
@@ -1695,6 +1758,3 @@ def _format_hotspots(plan_lines: list[str]) -> str:
         lines.append("")
 
     return "\n".join(lines)
-
-
-
