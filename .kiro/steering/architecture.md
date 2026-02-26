@@ -189,6 +189,50 @@ Exceções: `config` e `doctor` são só CLI. `list_connections` e `test_connect
 - [ ] Garantir que `cr.replacement_lines[0]` começa com `[COLAPSADO:`
 - [ ] Adicionar testes unitários e atualizar esta documentação
 
+### Formato dos blocos colapsados
+
+Todo colapso é explícito — nenhuma omissão silenciosa. O primeiro elemento de `replacement_lines` sempre começa com `[COLAPSADO:`. Exemplos por regra:
+
+**R1 — campos configurados:**
+```
+[COLAPSADO: N scalar subqueries — campos configurados por obra]
+  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG
+  Resultado: A-Rows=0 em todos  (ou: N com A-Rows>0)
+  Custo total: X buffers, Y reads
+  ⚠️ Em obras com campos configurados, esses blocos terão custo real.
+```
+
+**R2 — histórico de situação:**
+```
+[COLAPSADO: N scalar subqueries DATA_ALT_SIT_* — histórico de situações]
+  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY
+  | Tipo | A-Rows | Buffers |
+  |------|--------|---------|
+  | STATUS_ACTIVE | 3 | 10 |
+  Custo total: X buffers
+```
+
+**R3 — VW_CURRENT_USER nula (runtime):**
+```
+[COLAPSADO: VW_CURRENT_USER — A-Rows=0, X buffers — usuário NULL nesta execução]
+  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.
+```
+
+**R4 — predicados órfãos:**
+```
+(N predicados de blocos colapsados omitidos — ver resumos acima)
+```
+
+**R6 — IDs não sequenciais:**
+```
+ℹ️ IDs não sequenciais são normais — operações internas de views/subqueries
+   são numeradas pelo Oracle mas omitidas do DBMS_XPLAN.
+```
+
+### Decisão de design: `verbosity` como nível, não flags booleanos
+
+`verbosity` é um nível (`full` / `compact` / `minimal`), não um conjunto de flags por feature (`--collapse-subqueries`, `--collapse-predicates`, etc.). Motivo: flags individuais criam combinações inválidas e transferem complexidade para o usuário. O nível é uma abstração coerente — o usuário escolhe quanto quer ver, não quais algoritmos ativar.
+
 ### Ao adicionar nova query Oracle
 
 - [ ] Implementar em `src/sqlmentor/queries/__init__.py` retornando `tuple[str, dict]`

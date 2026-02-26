@@ -27,6 +27,7 @@ dev = [
     "pytest-cov>=4.0",
     "taskipy>=1.12.0",
     "ruff>=0.4.0",
+    "build>=1.0.0",
 ]
 
 [tool.ruff]
@@ -68,6 +69,8 @@ test-q   = "pytest tests/ -q"
 lint     = "ruff check src/ tests/"
 lint-fix = "ruff check src/ tests/ --fix"
 format   = "ruff format src/ tests/"
+build-dev    = "pip install -e .[dev]"
+build-deploy = "python -m build --wheel --outdir dist/"
 
 [tool.setuptools.packages.find]
 where = ["src"]

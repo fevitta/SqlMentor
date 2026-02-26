@@ -22,11 +22,11 @@ pip install -e .
 ```bash
 sqlmentor config add \
   --name producao \
-  --host 10.0.1.50 \
+  --host 192.168.0.1 \
   --port 1521 \
   --service PROD \
-  --user ANALISTA \
-  --schema TELTELECOM
+  --user SQLMENTOR \
+  --schema SQLMENTOR
 # (senha será solicitada de forma segura)
 
 # Definir como conexão padrão (dispensa --conn nos comandos)
@@ -67,7 +67,7 @@ sqlmentor analyze minha_query.sql --conn producao --output meu_relatorio.md
 ### 3. Parse offline (sem conexão)
 
 ```bash
-sqlmentor parse minha_query.sql --schema TELTELECOM
+sqlmentor parse minha_query.sql --schema SCHEMA
 ```
 
 ### 4. Gerenciar conexões
