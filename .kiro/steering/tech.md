@@ -1,13 +1,14 @@
 # Tech Stack
 
-- **Linguagem:** Python 3.9+
+- **Linguagem:** Python 3.10+
 - **Build:** setuptools (pyproject.toml)
 - **CLI:** Typer com Rich para output formatado
 - **MCP Server:** FastMCP (mcp SDK Python) via stdio
 - **SQL parsing:** sqlglot (dialeto Oracle)
 - **DB driver:** oracledb (modo thin, sem Oracle Client)
 - **Config:** PyYAML (conexões em ~/.sqlmentor/connections.yaml)
-- **Testes:** pytest + hypothesis (property-based), taskipy (task runner), ruff (lint/format)
+- **Testes:** pytest + hypothesis (property-based) + pytest-cov (cobertura), taskipy (task runner), ruff (lint/format)
+- **CI:** GitHub Actions (Python 3.10/3.12) — lint, format check, testes
 
 ## Comandos
 

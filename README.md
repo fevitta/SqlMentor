@@ -12,7 +12,7 @@ pip install -e .
 
 ### Pré-requisitos
 
-- Python 3.9+
+- Python 3.10+
 - Acesso a um Oracle 11g+ (driver `oracledb` em modo thin, sem Oracle Client)
 
 ## Uso Rápido
@@ -191,12 +191,36 @@ Para times que usam Kiro, o Power em `powers/sqlmentor/` empacota o MCP Server +
 
 O Power inclui um steering file (`analysis.md`) com a metodologia completa de análise de DBA sênior Oracle, carregado sob demanda quando a IA vai analisar um relatório.
 
+## Desenvolvimento
+
+```bash
+# Instalar em modo dev (inclui pytest, ruff, hypothesis, etc.)
+pip install -e ".[dev]"
+
+# Rodar testes
+task test            # pytest -v
+task test-cov        # pytest com cobertura
+
+# Lint e formatação
+task lint            # ruff check src/ tests/
+ruff format src/ tests/
+```
+
+### CI
+
+GitHub Actions roda automaticamente em push/PR para `master`:
+- Matrix: Python 3.10, 3.12
+- Steps: ruff check, ruff format --check, pytest
+
 ## Estrutura do Projeto
 
 ```
 sqlmentor/
 ├── pyproject.toml
 ├── connections.example.yaml
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # GitHub Actions CI
 ├── scripts/
 │   └── oracle_create_user.sql
 ├── reports/                    # Relatórios gerados
@@ -206,6 +230,14 @@ sqlmentor/
 │       ├── mcp.json
 │       └── steering/
 │           └── analysis.md     # Metodologia de análise Oracle
+├── tests/
+│   ├── conftest.py             # Fixtures compartilhadas
+│   ├── test_parser.py          # Testes do parser SQL
+│   ├── test_connector.py       # Testes do CRUD de conexões
+│   ├── test_cli.py             # Testes da CLI (Typer)
+│   ├── test_mcp_server.py      # Testes do MCP Server
+│   ├── test_report_prune.py    # Testes do relatório e pruning
+│   └── test_plan_compression.py # Testes de compressão do plano
 └── src/sqlmentor/
     ├── __init__.py
     ├── cli.py                  # Entry point CLI (sqlmentor)
