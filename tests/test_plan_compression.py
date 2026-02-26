@@ -7,12 +7,16 @@ Estrutura:
   - Placeholders indicando onde cada property test será adicionado (tarefas 8–12)
 """
 
+import re
+import re as _re_module
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from sqlmentor.collector import CollectedContext
+from sqlmentor.parser import ParsedSQL
 from sqlmentor.report import (
-    CollapseResult,
     PlanBlock,
     _add_nonsequential_id_note,
     _apply_thresholds,
@@ -23,6 +27,7 @@ from sqlmentor.report import (
     _compress_plan,
     _detect_plan_blocks,
     _split_plan_predicates,
+    to_markdown,
 )
 
 # ─── Estratégias Hypothesis ───────────────────────────────────────
@@ -284,7 +289,6 @@ def test_no_silent_pruning(blocks: list):
         )
 #
 # Tarefa 11.2 — Property 5: Consistência de predicados
-import re as _re_module
 
 
 @given(
@@ -793,8 +797,6 @@ def test_immune_blocks_never_collapsed(blocks: list):
 
 # ─── Tarefa 11.1 — Testes unitários para _collapse_orphan_predicates_by_ids ──
 
-import re
-
 
 class TestCollapseOrphanPredicates:
     PRED_HEADER = "Predicate Information (identified by operation id):"
@@ -860,8 +862,8 @@ class TestAddNonsequentialIdNote:
     def test_note_position_after_plan_hash(self):
         lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_3]
         result = _add_nonsequential_id_note(lines)
-        hash_idx = next(i for i, l in enumerate(result) if "Plan hash value" in l)
-        note_idx = next((i for i, l in enumerate(result) if "IDs não sequenciais" in l), None)
+        hash_idx = next(i for i, ln in enumerate(result) if "Plan hash value" in ln)
+        note_idx = next((i for i, ln in enumerate(result) if "IDs não sequenciais" in ln), None)
         assert note_idx is not None
         assert note_idx == hash_idx + 1
 
@@ -939,10 +941,6 @@ class TestCompressPlan:
 
 
 # ─── Tarefa 12 — Testes para to_markdown e integração CLI/MCP ────
-
-from sqlmentor.collector import CollectedContext
-from sqlmentor.parser import ParsedSQL
-from sqlmentor.report import to_markdown
 
 
 def _make_minimal_ctx(**kwargs) -> CollectedContext:
@@ -1251,6 +1249,7 @@ class TestIntegrationRealPlan:
         compact não deve conter nenhum ID que foi colapsado.
         """
         import re
+
         from sqlmentor.report import (
             _apply_thresholds,
             _collapse_config_fields,

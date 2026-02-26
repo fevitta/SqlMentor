@@ -511,24 +511,24 @@ def _print_summary(ctx) -> None:
             "[green]✓[/green]",
         )
         table.add_row(
-            f"  DDL",
+            "  DDL",
             "[green]✓[/green]" if t.ddl else "[red]✗[/red]",
         )
         if not is_view:
             table.add_row(
-                f"  Stats",
+                "  Stats",
                 "[green]✓[/green]" if t.stats else "[red]✗[/red]",
             )
         table.add_row(
-            f"  Colunas",
+            "  Colunas",
             f"[green]{len(t.columns)}[/green]" if t.columns else "[red]✗[/red]",
         )
         table.add_row(
-            f"  Índices",
+            "  Índices",
             f"[green]{len(t.indexes)}[/green]" if t.indexes else "[yellow]0[/yellow]",
         )
         table.add_row(
-            f"  Constraints",
+            "  Constraints",
             f"[green]{len(t.constraints)}[/green]" if t.constraints else "[yellow]0[/yellow]",
         )
 
@@ -588,11 +588,11 @@ def config_add(
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
 
     # Valida conexão e detecta versão/modo automaticamente
-    console.print(f"[cyan]Validando conexão...[/cyan]")
+    console.print("[cyan]Validando conexão...[/cyan]")
     try:
         from sqlmentor.connector import diagnose_connection
         info = diagnose_connection(name)
-        console.print(f"[green]✓ Conectado![/green]")
+        console.print("[green]✓ Conectado![/green]")
         console.print(f"  Versão: {info['version']}")
         console.print(f"  Schema: {info['schema']}")
         console.print(f"  Modo: [bold]{info['mode']}[/bold]")
@@ -603,7 +603,7 @@ def config_add(
                 f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
             )
             if info["mode"] == "thick":
-                console.print(f"  [green]✓ Thick mode ativo — tudo certo.[/green]")
+                console.print("  [green]✓ Thick mode ativo — tudo certo.[/green]")
             else:
                 console.print(
                     f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
@@ -682,7 +682,7 @@ def config_test(
     console.print(f"[cyan]Testando:[/cyan] {name}...")
     try:
         info = test_connection(name)
-        console.print(f"[green]✓ Conectado![/green]")
+        console.print("[green]✓ Conectado![/green]")
         console.print(f"  Versão: {info['version']}")
         console.print(f"  Schema: {info['schema']}")
     except Exception as e:
@@ -711,8 +711,8 @@ def config_remove(
 @app.command()
 def doctor() -> None:
     """Diagnóstico do ambiente: Python, oracledb, Instant Client, conexões."""
-    import platform
     import importlib.metadata
+    import platform
 
     console.print(Panel.fit("[bold]sqlmentor doctor[/bold]", border_style="cyan"))
 
@@ -740,14 +740,14 @@ def doctor() -> None:
     if thick_info["available"] == "True":
         console.print(f"  [green]✓ Disponível[/green] — {thick_info['detail']}")
     else:
-        console.print(f"  [yellow]✗ Não encontrado[/yellow]")
-        console.print(f"    Necessário apenas para Oracle < 12c (modo thick).")
-        console.print(f"    Download: https://www.oracle.com/database/technologies/instant-client.html")
+        console.print("  [yellow]✗ Não encontrado[/yellow]")
+        console.print("    Necessário apenas para Oracle < 12c (modo thick).")
+        console.print("    Download: https://www.oracle.com/database/technologies/instant-client.html")
 
     # Conexões
     console.print("")
     console.print("[cyan]Conexões:[/cyan]")
-    from sqlmentor.connector import list_connections, diagnose_connection
+    from sqlmentor.connector import diagnose_connection, list_connections
     connections = list_connections()
     if not connections:
         console.print("  [yellow]Nenhuma conexão configurada.[/yellow]")

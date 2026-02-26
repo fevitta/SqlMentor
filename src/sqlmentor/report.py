@@ -12,7 +12,6 @@ from typing import Any
 
 from sqlmentor.collector import CollectedContext, TableContext
 
-
 # ─── Dataclasses para compressão do plano ────────────────────────
 
 @dataclass
@@ -39,7 +38,8 @@ class CollapseResult:
     replacement_lines: list[str]
 
 
-# Regex para parsear linha do plano ALLSTATS
+# Regex para parsear linha do plano ALLSTATS (runtime)
+# Colunas: Id | Operation | Name | Starts | E-Rows | A-Rows | A-Time | Buffers | Reads
 # Captura indentação da coluna Operation separadamente para inferir hierarquia
 _PLAN_ROW = re.compile(
     r'\|\*?\s*(\d+)\s*\|'           # Id
@@ -53,7 +53,23 @@ _PLAN_ROW = re.compile(
     r'\s*(\d+)\s*\|',               # Reads
 )
 
+# Regex para parsear linha do plano EXPLAIN PLAN (estimado)
+# Colunas: Id | Operation | Name | Rows | Bytes | Cost (%CPU) | Time
+_PLAN_ROW_ESTIMATED = re.compile(
+    r'\|\*?\s*(\d+)\s*\|'           # Id
+    r'(\s*)(\S[^|]*?)\s*\|'         # (indent_spaces)(Operation)
+    r'\s*(.*?)\s*\|'                 # Name
+    r'\s*(\d*)\s*\|'                 # Rows (pode estar vazio)
+    r'\s*(\d*[KMG]?)\s*\|'          # Bytes (pode estar vazio)
+    r'\s*(\d*)\s*[^|]*\|'           # Cost (%CPU) — ignora o (%CPU)
+    r'\s*(\d+:\d+:\d+)?\s*\|',      # Time (pode estar vazio)
+)
+
 _BUFFERS_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
+
+# Regex genérico para extrair apenas o Id de qualquer linha de plano Oracle
+# Funciona tanto com ALLSTATS quanto com EXPLAIN PLAN
+_PLAN_ROW_ID = re.compile(r'^\|\*?\s*(\d+)\s*\|')
 
 # Thresholds de proteção (R5)
 _THRESHOLD_BUFFERS = 1_000
@@ -84,29 +100,53 @@ def _parse_atime_ms(s: str) -> float:
 def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
     """
     Parseia o plano em lista plana de PlanBlock.
+    Suporta dois formatos Oracle:
+    - ALLSTATS LAST (runtime): colunas Starts/E-Rows/A-Rows/A-Time/Buffers/Reads
+    - EXPLAIN PLAN (estimado): colunas Rows/Bytes/Cost/Time
+
+    No formato estimado, campos de runtime (starts, a_rows, buffers, reads, a_time_ms)
+    ficam zerados — R5 (imunidade por threshold) fica inativo, mas R1/R2/R3 funcionam.
     A indentação da coluna Operation é preservada em PlanBlock.indent.
     """
     blocks: list[PlanBlock] = []
     for line in plan_lines:
+        # Tenta formato ALLSTATS primeiro
         m = _PLAN_ROW.match(line)
-        if not m:
+        if m:
+            indent = len(m.group(2))
+            e_rows_str = m.group(6).strip()
+            blocks.append(PlanBlock(
+                id=m.group(1),
+                operation=m.group(3).strip(),
+                name=m.group(4).strip(),
+                starts=int(m.group(5)),
+                e_rows=int(e_rows_str) if e_rows_str else None,
+                a_rows=int(m.group(7)),
+                a_time_ms=_parse_atime_ms(m.group(8)),
+                buffers=_parse_buffers(m.group(9)),
+                reads=int(m.group(10)),
+                indent=indent,
+            ))
             continue
-        # grupos: 1=id, 2=indent_spaces, 3=operation, 4=name,
-        #         5=starts, 6=e_rows, 7=a_rows, 8=a_time, 9=buffers, 10=reads
-        indent = len(m.group(2))
-        e_rows_str = m.group(6).strip()
-        blocks.append(PlanBlock(
-            id=m.group(1),
-            operation=m.group(3).strip(),
-            name=m.group(4).strip(),
-            starts=int(m.group(5)),
-            e_rows=int(e_rows_str) if e_rows_str else None,
-            a_rows=int(m.group(7)),
-            a_time_ms=_parse_atime_ms(m.group(8)),
-            buffers=_parse_buffers(m.group(9)),
-            reads=int(m.group(10)),
-            indent=indent,
-        ))
+
+        # Tenta formato EXPLAIN PLAN (estimado)
+        m2 = _PLAN_ROW_ESTIMATED.match(line)
+        if m2:
+            indent = len(m2.group(2))
+            e_rows_str = m2.group(5).strip()
+            blocks.append(PlanBlock(
+                id=m2.group(1),
+                operation=m2.group(3).strip(),
+                name=m2.group(4).strip(),
+                starts=0,           # não disponível no plano estimado
+                e_rows=int(e_rows_str) if e_rows_str else None,
+                a_rows=0,           # não disponível no plano estimado
+                a_time_ms=0.0,      # não disponível no plano estimado
+                buffers=0,          # não disponível no plano estimado
+                reads=0,            # não disponível no plano estimado
+                indent=indent,
+            ))
+
     return blocks
 
 
@@ -154,10 +194,10 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
                 a_rows_nonzero = [b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0]
                 lines = [
                     f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — campos configurados por obra]",
-                    f"  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
-                    f"  Resultado: A-Rows=0 em todos" if not a_rows_nonzero else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
+                    "  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
+                    "  Resultado: A-Rows=0 em todos" if not a_rows_nonzero else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
                     f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
-                    f"  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
+                    "  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
                 ]
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
         group.clear()
@@ -166,7 +206,7 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if b.operation == "SORT AGGREGATE" and b.starts == 1:
+        if b.operation == "SORT AGGREGATE" and b.starts <= 1:
             j = i + 1
             child_names: set[str] = set()
             child_blocks: list[PlanBlock] = [b]
@@ -227,9 +267,9 @@ def _collapse_situation_history(
 
                 lines = [
                     f"[COLAPSADO: {len(group_entries)} scalar subqueries DATA_ALT_SIT_* — histórico de situações]",
-                    f"  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY",
-                    f"  | Tipo | A-Rows | Buffers |",
-                    f"  |------|--------|---------|",
+                    "  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY",
+                    "  | Tipo | A-Rows | Buffers |",
+                    "  |------|--------|---------|",
                 ]
                 for tps, ar, buf in table_rows:
                     lines.append(f"  | {tps} | {ar} | {buf} |")
@@ -240,7 +280,7 @@ def _collapse_situation_history(
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if b.operation == "SORT AGGREGATE" and b.starts == 1:
+        if b.operation == "SORT AGGREGATE" and b.starts <= 1:
             j = i + 1
             child_names: set[str] = set()
             child_blocks: list[PlanBlock] = [b]
@@ -265,18 +305,17 @@ def _collapse_situation_history(
 def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
     """
     Detecta e colapsa expansões de VW_CURRENT_USER com A-Rows=0 no nó pai (R3).
+    Só aplicada em planos runtime — no estimado use _collapse_vw_usuario_estimated.
     """
     results: list[CollapseResult] = []
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        # Procura nó VIEW com nome VW_CURRENT_USER (ou from$_subquery$_)
         is_view_node = (
             "VIEW" in b.operation.upper()
             and ("VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper())
         )
         if is_view_node and b.a_rows == 0:
-            # Coleta toda a subárvore
             j = i + 1
             subtree: list[PlanBlock] = [b]
             while j < len(blocks) and blocks[j].indent > b.indent:
@@ -288,12 +327,70 @@ def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
                 total_buffers = sum(sb.buffers for sb in subtree)
                 lines = [
                     f"[COLAPSADO: {b.name} — A-Rows=0, {total_buffers:,} buffers — usuário NULL nesta execução]",
-                    f"  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.",
+                    "  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.",
                 ]
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
                 i = j
                 continue
         i += 1
+    return results
+
+
+def _collapse_vw_usuario_estimated(blocks: list[PlanBlock]) -> list[CollapseResult]:
+    """
+    Colapsa expansões repetidas de VW_CURRENT_USER no plano estimado (R3-est).
+
+    No plano estimado não há a_rows, então não podemos filtrar por A-Rows=0.
+    Em vez disso, colapsamos todas as subárvores VIEW de VW_CURRENT_USER/FROM$_SUBQUERY$_
+    que tenham a mesma estrutura de índices (IDX_FUN_ESP / IDX_ESP_USER_ACCT),
+    mantendo apenas a primeira como referência e colapsando as demais.
+
+    Mínimo: ≥ 2 ocorrências da mesma view para colapsar.
+    """
+    results: list[CollapseResult] = []
+
+    # Coleta todas as subárvores VIEW de VW_CURRENT_USER
+    view_subtrees: list[tuple[PlanBlock, list[PlanBlock]]] = []
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        is_view_node = (
+            "VIEW" in b.operation.upper()
+            and ("VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper())
+        )
+        if is_view_node:
+            j = i + 1
+            subtree: list[PlanBlock] = [b]
+            while j < len(blocks) and blocks[j].indent > b.indent:
+                subtree.append(blocks[j])
+                j += 1
+            view_subtrees.append((b, subtree))
+            i = j
+        else:
+            i += 1
+
+    if len(view_subtrees) < 2:
+        return results
+
+    # Colapsa todas exceto a primeira (que serve de referência)
+    first_root, first_subtree = view_subtrees[0]
+    first_size = len(first_subtree)
+
+    for root, subtree in view_subtrees[1:]:
+        immune_any = any(sb.immune for sb in subtree)
+        if immune_any:
+            continue
+        # Só colapsa se a subárvore tem tamanho similar à primeira (mesma estrutura)
+        size_ratio = len(subtree) / first_size if first_size > 0 else 1
+        if 0.5 <= size_ratio <= 2.0:
+            all_ids = {sb.id for sb in subtree}
+            lines = [
+                f"[COLAPSADO: {root.name} — expansão repetida de VW_CURRENT_USER (plano estimado)]",
+                f"  Estrutura idêntica ao Id {first_root.id} ({first_size} operações).",
+                "  ⚠️ Custo real depende de quantos usuários retornam em runtime.",
+            ]
+            results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
+
     return results
 
 
@@ -333,7 +430,7 @@ def _add_nonsequential_id_note(plan_lines: list[str]) -> list[str]:
     """
     ids = []
     for line in plan_lines:
-        m = _PLAN_ROW.match(line)
+        m = _PLAN_ROW_ID.match(line)
         if m:
             ids.append(int(m.group(1)))
 
@@ -371,6 +468,25 @@ def _split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]:
     return lines, []
 
 
+def _is_estimated_plan(plan_lines: list[str]) -> bool:
+    """
+    Detecta se o plano é EXPLAIN PLAN (estimado) ou ALLSTATS LAST (runtime).
+    O plano estimado tem cabeçalho com colunas 'Rows | Bytes | Cost'.
+    """
+    for line in plan_lines:
+        if "| Rows  |" in line or "| Rows |" in line:
+            return True
+        if "| Starts |" in line:
+            return False
+    # Fallback: tenta parsear a primeira linha de dados
+    for line in plan_lines:
+        if _PLAN_ROW.match(line):
+            return False
+        if _PLAN_ROW_ESTIMATED.match(line):
+            return True
+    return False
+
+
 def _compress_plan(
     plan_lines: list[str],
     predicate_lines: list[str],
@@ -381,6 +497,8 @@ def _compress_plan(
     Retorna (plano_comprimido, predicados_comprimidos).
 
     Orquestra R1–R6 em sequência.
+    R3 (colapso de VW_CURRENT_USER com a_rows=0) só é aplicada em planos runtime,
+    pois no plano estimado a_rows é sempre 0 — colapsar seria incorreto.
     """
     if verbosity == "full":
         return plan_lines, predicate_lines
@@ -388,12 +506,17 @@ def _compress_plan(
     blocks = _detect_plan_blocks(plan_lines)
     _apply_thresholds(blocks)
     pred_map = _build_predicate_map(plan_lines)
+    is_estimated = _is_estimated_plan(plan_lines)
 
     # Coleta todos os colapsos
     all_collapses: list[CollapseResult] = []
     all_collapses.extend(_collapse_config_fields(blocks))
     all_collapses.extend(_collapse_situation_history(blocks, pred_map))
-    all_collapses.extend(_collapse_vw_usuario_null(blocks))
+    # R3 só faz sentido em planos runtime — no estimado a_rows é sempre 0
+    if not is_estimated:
+        all_collapses.extend(_collapse_vw_usuario_null(blocks))
+    else:
+        all_collapses.extend(_collapse_vw_usuario_estimated(blocks))
 
     # Conjunto de todos os IDs colapsados
     all_collapsed_ids: set[str] = set()
@@ -414,7 +537,7 @@ def _compress_plan(
     new_plan: list[str] = []
     emitted_collapses: set[int] = set()  # id(CollapseResult) já emitidos
     for line in plan_lines:
-        m = _PLAN_ROW.match(line)
+        m = _PLAN_ROW_ID.match(line)
         if m:
             line_id = m.group(1)
             if line_id in all_collapsed_ids:
@@ -1038,7 +1161,7 @@ def _format_optimizer_params(params: dict[str, str]) -> str:
     lines = []
     warnings = []
 
-    for name, (default_val, description) in _OPTIMIZER_DEFAULTS.items():
+    for name, (default_val, _description) in _OPTIMIZER_DEFAULTS.items():
         value = params.get(name)
         if value is None:
             continue

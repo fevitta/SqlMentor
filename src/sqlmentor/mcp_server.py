@@ -9,8 +9,6 @@ Entry point: sqlmentor-mcp
 
 import json
 import logging
-import sys
-from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
@@ -30,7 +28,8 @@ def list_connections() -> str:
     de todas as conexões salvas em ~/.sqlmentor/connections.yaml.
     Use antes de analyze_sql para saber qual profile usar.
     """
-    from sqlmentor.connector import get_default_connection, list_connections as _list
+    from sqlmentor.connector import get_default_connection
+    from sqlmentor.connector import list_connections as _list
 
     connections = _list()
     if not connections:
@@ -83,7 +82,8 @@ def parse_sql(sql_text: str, schema: str = "", denorm_mode: str = "literal") -> 
         schema: Schema padrão para tabelas não qualificadas (opcional).
         denorm_mode: Estratégia de desnormalização se SQL normalizado: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...).
     """
-    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql as _parse
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql
+    from sqlmentor.parser import parse_sql as _parse
 
     # Auto-detecção de SQL normalizado (Datadog, OEM, etc.)
     if is_normalized_sql(sql_text):
@@ -144,7 +144,8 @@ def analyze_sql(
 
     from sqlmentor.collector import collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
-    from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql as _parse
+    from sqlmentor.parser import denormalize_sql, is_normalized_sql
+    from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.report import to_json, to_markdown
 
     # Resolve conexão (explícita > default > erro)

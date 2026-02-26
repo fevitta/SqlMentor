@@ -14,7 +14,7 @@ def test_prune_dead_operations():
     ]
     result, pruned_ids = _prune_dead_operations(plan)
     # Deve manter linhas 0, 1, 381 (Starts>0) e remover 26, 27 (Starts=0, A-Rows=0)
-    kept_ids = [l for l in result if l.startswith("|")]
+    kept_ids = [ln for ln in result if ln.startswith("|")]
     assert len(kept_ids) == 3, f"Esperava 3 linhas, got {len(kept_ids)}: {kept_ids}"
     assert "omitidas" in result[-1]
     print("P1 OK: 2 operações mortas removidas")
