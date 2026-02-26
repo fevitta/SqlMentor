@@ -55,16 +55,7 @@ def valid_plan_block() -> st.SearchStrategy[PlanBlock]:
         ),
         name=st.one_of(
             st.just(""),
-            st.sampled_from(
-                [
-                    "IDX_ATTR_ENTITY_ID",
-                    "PK_ATTR_CONFIG",
-                    "UK_STATUS_TYPE_REF",
-                    "IDX_STATUS_HIST_ENTITY",
-                    "VW_CURRENT_USER",
-                    "SOME_TABLE",
-                ]
-            ),
+            st.from_regex(r"[A-Z][A-Z0-9_]{2,20}", fullmatch=True),
         ),
         starts=st.integers(min_value=0, max_value=10_000),
         e_rows=st.one_of(st.none(), st.integers(min_value=0, max_value=1_000_000)),
@@ -624,7 +615,8 @@ def _make_config_fields_group(
     n: int, start_id: int = 1, immune_idx: int | None = None
 ) -> list[PlanBlock]:
     """
-    Monta n grupos SORT AGGREGATE com filhos IDX_ATTR_ENTITY_ID e PK_ATTR_CONFIG.
+    Monta n grupos SORT AGGREGATE com filhos INDEX SCAN genéricos (≥2 índices).
+    Padrão agnóstico — sem nomes de objetos reais.
     immune_idx (0-based) indica qual grupo raiz deve ter immune=True.
     """
     blocks = []
@@ -635,13 +627,13 @@ def _make_config_fields_group(
         )
         bid += 1
         c1 = _make_block(
-            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2
+            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_GENERIC_A", indent=2
         )
         bid += 1
         c2 = _make_block(
             id=str(bid),
             operation="INDEX UNIQUE SCAN",
-            name="PK_ATTR_CONFIG",
+            name="IDX_GENERIC_B",
             indent=2,
         )
         bid += 1
@@ -659,13 +651,10 @@ class TestCollapseConfigFields:
         assert cr.replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_group_of_2_does_not_collapse(self):
-        # A implementação conta blocos totais (raiz + filhos) no grupo acumulado.
-        # Para não colapsar, o grupo precisa ter < 3 blocos totais.
-        # 1 SORT AGGREGATE sem os dois índices alvo → não é candidato → grupo vazio → não colapsa.
+        # 1 SORT AGGREGATE com apenas 1 filho INDEX → não atinge mínimo de 2 índices → não é candidato
         root = _make_block(id="1", operation="SORT AGGREGATE", starts=1, indent=0)
-        # Filho com apenas um dos índices alvo (falta PK_ATTR_CONFIG)
         child = _make_block(
-            id="2", operation="INDEX RANGE SCAN", name="IDX_ATTR_ENTITY_ID", indent=2
+            id="2", operation="INDEX RANGE SCAN", name="IDX_GENERIC_A", indent=2
         )
         results = _collapse_config_fields([root, child])
         assert results == []
@@ -692,12 +681,8 @@ class TestCollapseConfigFields:
         results = _collapse_config_fields(blocks)
         assert len(results) == 1
         full_text = "\n".join(results[0].replacement_lines)
-        # Deve conter aviso sobre obras com campos configurados
-        assert (
-            "obra" in full_text.lower()
-            or "campo" in full_text.lower()
-            or "configurad" in full_text.lower()
-        )
+        # Deve conter aviso genérico sobre custo potencial
+        assert "⚠️" in full_text or "verifique" in full_text.lower() or "custo" in full_text.lower()
 
 
 # ─── Tarefa 9.2 — Testes unitários para _collapse_situation_history (R2) ─────
@@ -707,7 +692,8 @@ def _make_situation_history_group(
     n: int, start_id: int = 1, immune_idx: int | None = None
 ) -> list[PlanBlock]:
     """
-    Monta n grupos SORT AGGREGATE com filhos UK_STATUS_TYPE_REF e IDX_STATUS_HIST_ENTITY.
+    Monta n grupos SORT AGGREGATE com filhos INDEX SCAN genéricos (≥2 índices).
+    Padrão agnóstico — sem nomes de objetos reais.
     """
     blocks = []
     bid = start_id
@@ -717,11 +703,11 @@ def _make_situation_history_group(
         )
         bid += 1
         c1 = _make_block(
-            id=str(bid), operation="INDEX RANGE SCAN", name="UK_STATUS_TYPE_REF", indent=2
+            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_GENERIC_C", indent=2
         )
         bid += 1
         c2 = _make_block(
-            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_STATUS_HIST_ENTITY", indent=2
+            id=str(bid), operation="INDEX RANGE SCAN", name="IDX_GENERIC_D", indent=2
         )
         bid += 1
         blocks.extend([root, c1, c2])
@@ -753,11 +739,11 @@ class TestCollapseSituationHistory:
         results = _collapse_situation_history(blocks, {})
         assert len(results) == 1
         full_text = "\n".join(results[0].replacement_lines)
-        assert "| Tipo |" in full_text
+        assert "| Filtro |" in full_text
         assert "| A-Rows |" in full_text
 
     def test_tps_referencia_fallback(self):
-        # Sem predicate_map → coluna Tipo deve usar "?"
+        # Sem predicate_map → coluna Filtro deve usar "?"
         blocks = _make_situation_history_group(2)
         results = _collapse_situation_history(blocks, {})
         assert len(results) == 1
@@ -770,53 +756,47 @@ class TestCollapseSituationHistory:
 
 class TestCollapseVwUsuarioNull:
     def test_view_arows_zero_collapses(self):
-        view = _make_block(id="10", operation="VIEW", name="VW_CURRENT_USER", a_rows=0, indent=0)
-        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2)
+        view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
+        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
         results = _collapse_vw_usuario_null([view, child])
         assert len(results) == 1
         assert results[0].replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_view_arows_nonzero_does_not_collapse(self):
-        view = _make_block(id="10", operation="VIEW", name="VW_CURRENT_USER", a_rows=1, indent=0)
-        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2)
+        view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=1, indent=0)
+        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
         results = _collapse_vw_usuario_null([view, child])
         assert results == []
 
     def test_immune_subtree_prevents_collapse(self):
-        view = _make_block(id="10", operation="VIEW", name="VW_CURRENT_USER", a_rows=0, indent=0)
+        view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
         child = _make_block(
-            id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2, immune=True
+            id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2, immune=True
         )
         results = _collapse_vw_usuario_null([view, child])
         assert results == []
 
-    def test_from_subquery_pattern_collapses(self):
-        view = _make_block(
-            id="20", operation="VIEW", name="FROM$_SUBQUERY$_001", a_rows=0, indent=0
-        )
+    def test_view_without_name_collapses(self):
+        # VIEW sem nome também deve ser colapsada — agnóstico ao nome
+        view = _make_block(id="20", operation="VIEW", name="", a_rows=0, indent=0)
         child = _make_block(id="21", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
         results = _collapse_vw_usuario_null([view, child])
         assert len(results) == 1
         assert results[0].replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_replacement_contains_warning(self):
-        view = _make_block(id="10", operation="VIEW", name="VW_CURRENT_USER", a_rows=0, indent=0)
-        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="USER_ACCTS", indent=2)
+        view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
+        child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
         results = _collapse_vw_usuario_null([view, child])
         assert len(results) == 1
         full_text = "\n".join(results[0].replacement_lines)
-        # Deve conter aviso sobre usuário não NULL
-        assert (
-            "usuário" in full_text.lower()
-            or "usuario" in full_text.lower()
-            or "null" in full_text.lower()
-        )
+        assert "⚠️" in full_text or "custo" in full_text.lower()
 
 
 # ─── Tarefa 9.4 — Property 4: Imunidade preservada ───────────────────────────
 
 
-@given(blocks=st.lists(valid_plan_block(), min_size=0, max_size=30))
+@given(blocks=st.lists(valid_plan_block(), min_size=0, max_size=30, unique_by=lambda b: b.id))
 @settings(max_examples=200)
 def test_immune_blocks_never_collapsed(blocks: list):
     """
@@ -925,7 +905,7 @@ class TestAddNonsequentialIdNote:
 
 
 def _make_config_fields_plan_lines(n_groups: int) -> list[str]:
-    """Gera linhas de plano com n_groups de campos configurados."""
+    """Gera linhas de plano com n_groups de scalar subqueries com padrão index lookup."""
     lines = ["Plan hash value: 1234567890"]
     bid = 1
     for _ in range(n_groups):
@@ -935,12 +915,12 @@ def _make_config_fields_plan_lines(n_groups: int) -> list[str]:
         )
         bid += 1
         lines.append(
-            f"|   {bid} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID           |"
+            f"|   {bid} |  INDEX RANGE SCAN       | IDX_GENERIC_A                |"
             f"     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
         )
         bid += 1
         lines.append(
-            f"|   {bid} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|"
+            f"|   {bid} |  INDEX UNIQUE SCAN      | IDX_GENERIC_B                |"
             f"     1 |     1 |      0 |00:00:00.01 |       1 |       0 |"
         )
         bid += 1
@@ -1007,8 +987,8 @@ def _make_runtime_plan_with_collapses() -> list[str]:
     for _ in range(3):
         lines += [
             f"|   {bid} | SORT AGGREGATE          |                               |      1 |        |      0 |00:00:00.01 |       3 |      0 |",
-            f"|   {bid + 1} |  INDEX RANGE SCAN       | IDX_ATTR_ENTITY_ID            |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
-            f"|   {bid + 2} |  INDEX UNIQUE SCAN      | PK_ATTR_CONFIG|      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
+            f"|   {bid + 1} |  INDEX RANGE SCAN       | IDX_GENERIC_A                 |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
+            f"|   {bid + 2} |  INDEX UNIQUE SCAN      | IDX_GENERIC_B                 |      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
         ]
         bid += 3
     return lines
@@ -1068,8 +1048,8 @@ class TestToMarkdownVerbosity:
 
     def test_default_verbosity_is_compact(self):
         ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
-        result_default = to_markdown(ctx)
-        result_compact = to_markdown(ctx, verbosity="compact")
+        result_default = _strip_timestamps(to_markdown(ctx))
+        result_compact = _strip_timestamps(to_markdown(ctx, verbosity="compact"))
         assert result_default == result_compact
 
     def test_full_returns_string(self):

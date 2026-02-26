@@ -110,11 +110,13 @@ Um bloco com `immune=True` nunca é colapsado por nenhuma regra.
 
 | Regra | Função | Padrão detectado | Mínimo para colapsar |
 |-------|--------|-----------------|----------------------|
-| R1 | `_collapse_config_fields` | `SORT AGGREGATE` → `IDX_ATTR_ENTITY_ID` + `PK_ATTR_CONFIG` | ≥ 3 blocos consecutivos |
-| R2 | `_collapse_situation_history` | `SORT AGGREGATE` → `UK_STATUS_TYPE_REF` + `IDX_STATUS_HIST_ENTITY` | ≥ 2 blocos consecutivos |
-| R3 | `_collapse_vw_usuario_null` | `VIEW` com nome `VW_CURRENT_USER` ou `FROM$_SUBQUERY$_*` e `a_rows == 0` | subárvore inteira sem imune |
+| R1 | `_collapse_config_fields` | `SORT AGGREGATE` (starts≤1) com ≥2 filhos INDEX SCAN consecutivos | ≥ 3 grupos consecutivos |
+| R2 | `_collapse_situation_history` | `SORT AGGREGATE` (starts≤1) com ≥2 filhos INDEX SCAN consecutivos | ≥ 2 grupos consecutivos |
+| R3 | `_collapse_vw_usuario_null` | `VIEW` com `a_rows == 0` (qualquer nome) | subárvore inteira sem imune |
 | R4 | `_collapse_orphan_predicates_by_ids` | predicados de IDs colapsados por R1/R2/R3 | qualquer ID colapsado |
 | R6 | `_add_nonsequential_id_note` | salto > 1 entre IDs consecutivos | qualquer salto |
+
+> ⚠️ Regra de ouro: nenhuma regra pode usar nomes de tabelas, índices, views ou qualquer objeto do schema como critério de detecção. Padrões são baseados exclusivamente em indicadores estruturais do plano (operação, cardinalidade, starts, indent).
 
 ## Contrato de Dados — Dataclasses Principais
 
@@ -188,34 +190,33 @@ Exceções: `config` e `doctor` são só CLI. `list_connections` e `test_connect
 - [ ] Garantir que nenhum bloco com `immune=True` é incluído em `cr.collapsed_ids`
 - [ ] Garantir que `cr.replacement_lines[0]` começa com `[COLAPSADO:`
 - [ ] Adicionar testes unitários e atualizar esta documentação
+- [ ] ⚠️ PROIBIDO usar nomes de objetos do schema (tabelas, índices, views) como critério de detecção — usar apenas indicadores estruturais do plano
 
 ### Formato dos blocos colapsados
 
 Todo colapso é explícito — nenhuma omissão silenciosa. O primeiro elemento de `replacement_lines` sempre começa com `[COLAPSADO:`. Exemplos por regra:
 
-**R1 — campos configurados:**
+**R1 — scalar subqueries com index lookup repetido (≥3 grupos):**
 ```
-[COLAPSADO: N scalar subqueries — campos configurados por obra]
-  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG
+[COLAPSADO: N scalar subqueries — padrão index lookup repetido]
   Resultado: A-Rows=0 em todos  (ou: N com A-Rows>0)
   Custo total: X buffers, Y reads
-  ⚠️ Em obras com campos configurados, esses blocos terão custo real.
+  ⚠️ Verifique se esses lookups têm custo real nos seus dados.
 ```
 
-**R2 — histórico de situação:**
+**R2 — scalar subqueries com index lookup repetido (≥2 grupos):**
 ```
-[COLAPSADO: N scalar subqueries DATA_ALT_SIT_* — histórico de situações]
-  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY
-  | Tipo | A-Rows | Buffers |
-  |------|--------|---------|
-  | STATUS_ACTIVE | 3 | 10 |
+[COLAPSADO: N scalar subqueries — padrão index lookup repetido]
+  | Filtro | A-Rows | Buffers |
+  |--------|--------|---------|
+  | COL=VALOR | 3 | 10 |
   Custo total: X buffers
 ```
 
-**R3 — VW_CURRENT_USER nula (runtime):**
+**R3 — VIEW com A-Rows=0 (runtime):**
 ```
-[COLAPSADO: VW_CURRENT_USER — A-Rows=0, X buffers — usuário NULL nesta execução]
-  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.
+[COLAPSADO: VIEW 'NOME_VIEW' — A-Rows=0, X buffers]
+  ⚠️ Esta subárvore pode ter custo significativo com outros dados de entrada.
 ```
 
 **R4 — predicados órfãos:**

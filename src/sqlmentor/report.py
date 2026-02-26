@@ -178,17 +178,44 @@ def _apply_thresholds(blocks: list[PlanBlock]) -> None:
                 b.immune = True
 
 
+def _is_scalar_index_subquery(b: PlanBlock, blocks: list[PlanBlock], i: int) -> tuple[bool, list[PlanBlock]]:
+    """
+    Verifica se o bloco b é raiz de uma scalar subquery com filhos exclusivamente INDEX SCAN.
+    Retorna (é_candidato, child_blocks_incluindo_raiz).
+    Critérios agnósticos:
+    - b.operation == "SORT AGGREGATE" e b.starts <= 1
+    - Todos os filhos diretos (indent > b.indent) são operações INDEX (RANGE/UNIQUE/FULL SCAN)
+    - Há pelo menos 2 filhos INDEX
+    """
+    if b.operation != "SORT AGGREGATE" or b.starts > 1:
+        return False, []
+    j = i + 1
+    child_blocks: list[PlanBlock] = [b]
+    index_children = 0
+    while j < len(blocks) and blocks[j].indent > b.indent:
+        child = blocks[j]
+        child_blocks.append(child)
+        if "INDEX" in child.operation.upper():
+            index_children += 1
+        elif child.operation.upper() not in ("NESTED LOOPS", "NESTED LOOPS OUTER"):
+            # Filho não-index e não-join → não é o padrão esperado
+            return False, []
+        j += 1
+    if index_children >= 2:
+        return True, child_blocks
+    return False, []
+
+
 def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
     """
-    Detecta e colapsa grupos de scalar subqueries de campos configurados (R1).
-    Padrão: SORT AGGREGATE → NESTED LOOPS → IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG
-    Mínimo: ≥ 3 grupos SORT AGGREGATE consecutivos com o padrão.
+    Detecta e colapsa grupos de scalar subqueries com padrão de índices (R1).
+    Padrão agnóstico: SORT AGGREGATE (starts≤1) cujos filhos são todos INDEX SCAN (≥2 índices).
+    Mínimo: ≥ 3 grupos consecutivos com o padrão.
     """
     results: list[CollapseResult] = []
-    target_indexes = {"IDX_ATTR_ENTITY_ID", "PK_ATTR_CONFIG"}
 
     group: list[PlanBlock] = []
-    group_root_ids: list[str] = []  # só os IDs dos SORT AGGREGATE raiz
+    group_root_ids: list[str] = []
 
     def _flush_group():
         nonlocal group, group_root_ids
@@ -202,13 +229,12 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
                     b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0
                 ]
                 lines = [
-                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — campos configurados por obra]",
-                    "  Índices: IDX_ATTR_ENTITY_ID → PK_ATTR_CONFIG",
+                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — padrão index lookup repetido]",
                     "  Resultado: A-Rows=0 em todos"
                     if not a_rows_nonzero
                     else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
                     f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
-                    "  ⚠️ Em obras com campos configurados, esses blocos terão custo real.",
+                    "  ⚠️ Verifique se esses lookups têm custo real nos seus dados.",
                 ]
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
         group.clear()
@@ -217,21 +243,12 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if b.operation == "SORT AGGREGATE" and b.starts <= 1:
-            j = i + 1
-            child_names: set[str] = set()
-            child_blocks: list[PlanBlock] = [b]
-            while j < len(blocks) and blocks[j].indent > b.indent:
-                child_names.add(blocks[j].name.upper())
-                child_blocks.append(blocks[j])
-                j += 1
-            if target_indexes.issubset(child_names):
-                group.extend(child_blocks)
-                group_root_ids.append(b.id)
-                i = j
-                continue
-            else:
-                _flush_group()
+        is_candidate, child_blocks = _is_scalar_index_subquery(b, blocks, i)
+        if is_candidate:
+            group.extend(child_blocks)
+            group_root_ids.append(b.id)
+            i += len(child_blocks)
+            continue
         else:
             _flush_group()
         i += 1
@@ -244,14 +261,15 @@ def _collapse_situation_history(
     blocks: list[PlanBlock], predicate_map: dict[str, list[str]]
 ) -> list[CollapseResult]:
     """
-    Detecta e colapsa scalar subqueries de histórico de situação (R2).
-    Padrão: SORT AGGREGATE → NESTED LOOPS → UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY
+    Detecta e colapsa scalar subqueries repetidas com padrão de index lookup (R2).
+    Padrão agnóstico: SORT AGGREGATE (starts≤1) cujos filhos são todos INDEX SCAN (≥2 índices).
+    Mínimo: ≥ 2 grupos consecutivos com o padrão.
+    Extrai valor de filtro de igualdade dos predicados para exibir na tabela resumo.
     """
     results: list[CollapseResult] = []
-    target_indexes = {"UK_STATUS_TYPE_REF", "IDX_STATUS_HIST_ENTITY"}
-    _TPS_REF = re.compile(r"TYPE_REF\s*=\s*'([^']+)'")
+    # Regex genérico: captura qualquer coluna = 'valor' nos predicados
+    _FILTER_VAL = re.compile(r"(\w+)\s*=\s*'([^']+)'")
 
-    # Cada entrada: (root_block, child_blocks_including_root)
     group_entries: list[tuple[PlanBlock, list[PlanBlock]]] = []
 
     def _flush():
@@ -264,26 +282,25 @@ def _collapse_situation_history(
                 total_buffers = sum(b.buffers for b in all_blocks)
                 table_rows = []
                 for root_block, child_blocks in group_entries:
-                    # Busca TYPE_REF só nos predicados dos filhos deste root
-                    tps_val = "?"
+                    # Busca primeiro filtro de igualdade nos predicados dos filhos
+                    filter_val = "?"
                     for b in child_blocks:
                         for p in predicate_map.get(b.id, []):
-                            m = _TPS_REF.search(p)
+                            m = _FILTER_VAL.search(p)
                             if m:
-                                tps_val = m.group(1)
+                                filter_val = f"{m.group(1)}={m.group(2)}"
                                 break
-                        if tps_val != "?":
+                        if filter_val != "?":
                             break
-                    table_rows.append((tps_val, root_block.a_rows, root_block.buffers))
+                    table_rows.append((filter_val, root_block.a_rows, root_block.buffers))
 
                 lines = [
-                    f"[COLAPSADO: {len(group_entries)} scalar subqueries DATA_ALT_SIT_* — histórico de situações]",
-                    "  Padrão: UK_STATUS_TYPE_REF → IDX_STATUS_HIST_ENTITY",
-                    "  | Tipo | A-Rows | Buffers |",
-                    "  |------|--------|---------|",
+                    f"[COLAPSADO: {len(group_entries)} scalar subqueries — padrão index lookup repetido]",
+                    "  | Filtro | A-Rows | Buffers |",
+                    "  |--------|--------|---------|",
                 ]
-                for tps, ar, buf in table_rows:
-                    lines.append(f"  | {tps} | {ar} | {buf} |")
+                for fval, ar, buf in table_rows:
+                    lines.append(f"  | {fval} | {ar} | {buf} |")
                 lines.append(f"  Custo total: {total_buffers:,} buffers")
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
         group_entries.clear()
@@ -291,20 +308,11 @@ def _collapse_situation_history(
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if b.operation == "SORT AGGREGATE" and b.starts <= 1:
-            j = i + 1
-            child_names: set[str] = set()
-            child_blocks: list[PlanBlock] = [b]
-            while j < len(blocks) and blocks[j].indent > b.indent:
-                child_names.add(blocks[j].name.upper())
-                child_blocks.append(blocks[j])
-                j += 1
-            if target_indexes.issubset(child_names):
-                group_entries.append((b, child_blocks))
-                i = j
-                continue
-            else:
-                _flush()
+        is_candidate, child_blocks = _is_scalar_index_subquery(b, blocks, i)
+        if is_candidate:
+            group_entries.append((b, child_blocks))
+            i += len(child_blocks)
+            continue
         else:
             _flush()
         i += 1
@@ -315,17 +323,15 @@ def _collapse_situation_history(
 
 def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
     """
-    Detecta e colapsa expansões de VW_CURRENT_USER com A-Rows=0 no nó pai (R3).
-    Só aplicada em planos runtime — no estimado use _collapse_vw_usuario_estimated.
+    Detecta e colapsa subárvores VIEW com A-Rows=0 (R3).
+    Padrão agnóstico: qualquer operação VIEW com a_rows == 0 e subtree sem imunes.
+    Só aplicada em planos runtime — no estimado a_rows é sempre 0.
     """
     results: list[CollapseResult] = []
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        is_view_node = "VIEW" in b.operation.upper() and (
-            "VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper()
-        )
-        if is_view_node and b.a_rows == 0:
+        if "VIEW" in b.operation.upper() and b.a_rows == 0:
             j = i + 1
             subtree: list[PlanBlock] = [b]
             while j < len(blocks) and blocks[j].indent > b.indent:
@@ -335,9 +341,10 @@ def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
             if not immune_any:
                 all_ids = {sb.id for sb in subtree}
                 total_buffers = sum(sb.buffers for sb in subtree)
+                view_label = b.name if b.name else b.operation
                 lines = [
-                    f"[COLAPSADO: {b.name} — A-Rows=0, {total_buffers:,} buffers — usuário NULL nesta execução]",
-                    "  ⚠️ Quando o usuário não é NULL, esta subárvore pode ter custo significativo.",
+                    f"[COLAPSADO: VIEW '{view_label}' — A-Rows=0, {total_buffers:,} buffers]",
+                    "  ⚠️ Esta subárvore pode ter custo significativo com outros dados de entrada.",
                 ]
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
                 i = j
