@@ -346,63 +346,6 @@ def _collapse_vw_usuario_null(blocks: list[PlanBlock]) -> list[CollapseResult]:
     return results
 
 
-def _collapse_vw_usuario_estimated(blocks: list[PlanBlock]) -> list[CollapseResult]:
-    """
-    Colapsa expansões repetidas de VW_CURRENT_USER no plano estimado (R3-est).
-
-    No plano estimado não há a_rows, então não podemos filtrar por A-Rows=0.
-    Em vez disso, colapsamos todas as subárvores VIEW de VW_CURRENT_USER/FROM$_SUBQUERY$_
-    que tenham a mesma estrutura de índices (IDX_FUN_ESP / IDX_ESP_USER_ACCT),
-    mantendo apenas a primeira como referência e colapsando as demais.
-
-    Mínimo: ≥ 2 ocorrências da mesma view para colapsar.
-    """
-    results: list[CollapseResult] = []
-
-    # Coleta todas as subárvores VIEW de VW_CURRENT_USER
-    view_subtrees: list[tuple[PlanBlock, list[PlanBlock]]] = []
-    i = 0
-    while i < len(blocks):
-        b = blocks[i]
-        is_view_node = "VIEW" in b.operation.upper() and (
-            "VW_CURRENT_USER" in b.name.upper() or "FROM$_SUBQUERY$_" in b.name.upper()
-        )
-        if is_view_node:
-            j = i + 1
-            subtree: list[PlanBlock] = [b]
-            while j < len(blocks) and blocks[j].indent > b.indent:
-                subtree.append(blocks[j])
-                j += 1
-            view_subtrees.append((b, subtree))
-            i = j
-        else:
-            i += 1
-
-    if len(view_subtrees) < 2:
-        return results
-
-    # Colapsa todas exceto a primeira (que serve de referência)
-    first_root, first_subtree = view_subtrees[0]
-    first_size = len(first_subtree)
-
-    for root, subtree in view_subtrees[1:]:
-        immune_any = any(sb.immune for sb in subtree)
-        if immune_any:
-            continue
-        # Só colapsa se a subárvore tem tamanho similar à primeira (mesma estrutura)
-        size_ratio = len(subtree) / first_size if first_size > 0 else 1
-        if 0.5 <= size_ratio <= 2.0:
-            all_ids = {sb.id for sb in subtree}
-            lines = [
-                f"[COLAPSADO: {root.name} — expansão repetida de VW_CURRENT_USER (plano estimado)]",
-                f"  Estrutura idêntica ao Id {first_root.id} ({first_size} operações).",
-                "  ⚠️ Custo real depende de quantos usuários retornam em runtime.",
-            ]
-            results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
-
-    return results
-
-
 def _build_predicate_map(plan_lines: list[str]) -> dict[str, list[str]]:
     """
     Constrói mapa id → lista de predicados a partir da seção Predicate Information.
@@ -522,8 +465,6 @@ def _compress_plan(
     # R3 só faz sentido em planos runtime — no estimado a_rows é sempre 0
     if not is_estimated:
         all_collapses.extend(_collapse_vw_usuario_null(blocks))
-    else:
-        all_collapses.extend(_collapse_vw_usuario_estimated(blocks))
 
     # Conjunto de todos os IDs colapsados
     all_collapsed_ids: set[str] = set()
