@@ -4,7 +4,13 @@ import json
 from unittest.mock import MagicMock, patch
 
 from sqlmentor.collector import CollectedContext
-from sqlmentor.mcp_server import analyze_sql, inspect_sql, list_connections, parse_sql
+from sqlmentor.mcp_server import (
+    _validate_timeout_mcp,
+    analyze_sql,
+    inspect_sql,
+    list_connections,
+    parse_sql,
+)
 from sqlmentor.mcp_server import test_connection as mcp_test_connection
 from sqlmentor.parser import ParsedSQL
 
@@ -561,3 +567,62 @@ class TestMCPInspectSqlSuccess:
         ):
             inspect_sql("abc123def456", conn="dev")
             mock_conn.close.assert_called()
+
+
+# ─── timeout validation MCP ──────────────────────────────────────────────────
+
+
+class TestMCPValidateTimeout:
+    def test_negative_timeout_returns_error(self):
+        """timeout -1 → JSON error."""
+        result = _validate_timeout_mcp(-1)
+        assert result is not None
+        data = json.loads(result)
+        assert "error" in data
+
+    def test_too_large_timeout_returns_error(self):
+        """timeout 5000 → JSON error."""
+        result = _validate_timeout_mcp(5000)
+        assert result is not None
+        data = json.loads(result)
+        assert "error" in data
+
+    def test_zero_timeout_passes(self):
+        """timeout 0 (default) → None."""
+        assert _validate_timeout_mcp(0) is None
+
+    def test_valid_timeout_passes(self):
+        """timeout 300 → None."""
+        assert _validate_timeout_mcp(300) is None
+
+    def test_analyze_sql_rejects_invalid_timeout(self, tmp_connections_file):
+        """analyze_sql with timeout=-1 → JSON error, no connection attempt."""
+        result = json.loads(analyze_sql("SELECT 1", timeout=-1))
+        assert "error" in result
+
+    def test_inspect_sql_rejects_invalid_timeout(self, tmp_connections_file):
+        """inspect_sql with timeout=5000 → JSON error."""
+        result = json.loads(inspect_sql("abc123def456", timeout=5000))
+        assert "error" in result
+
+
+# ─── get_status ──────────────────────────────────────────────────────────────
+
+
+class TestMCPGetStatus:
+    def test_returns_valid_json(self):
+        """get_status returns valid JSON with version and status."""
+        from sqlmentor.mcp_server import get_status
+
+        result = json.loads(get_status())
+        assert result["status"] == "ok"
+        assert "version" in result
+
+    def test_cache_reflects_state(self):
+        """After populating cache, get_status reports counts."""
+        from sqlmentor.collector import TableContext, _table_cache
+        from sqlmentor.mcp_server import get_status
+
+        _table_cache.put("HR.TEST", TableContext(name="TEST", schema="HR"))
+        result = json.loads(get_status())
+        assert result["cache"]["tables"] >= 1

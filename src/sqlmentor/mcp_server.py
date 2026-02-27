@@ -21,6 +21,15 @@ mcp = FastMCP(
 )
 
 
+def _validate_timeout_mcp(timeout: int) -> str | None:
+    """Valida timeout MCP: deve ser 0 (default) ou entre 1 e 3600."""
+    if timeout != 0 and (timeout < 1 or timeout > 3600):
+        return json.dumps(
+            {"error": f"Timeout inválido: {timeout}. Deve ser 0 (default) ou entre 1 e 3600."}
+        )
+    return None
+
+
 @mcp.tool()
 def list_connections() -> str:
     """Lista os profiles de conexão Oracle configurados.
@@ -164,6 +173,9 @@ def analyze_sql(
     from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.report import to_json, to_markdown
 
+    if err := _validate_timeout_mcp(timeout):
+        return err
+
     if no_cache:
         clear_cache()
 
@@ -297,6 +309,9 @@ def inspect_sql(
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
 
+    if err := _validate_timeout_mcp(timeout):
+        return err
+
     if no_cache:
         clear_cache()
 
@@ -392,6 +407,27 @@ def inspect_sql(
             )
         return to_json(ctx)
     return to_markdown(ctx, verbosity=verbosity)
+
+
+@mcp.tool()
+def get_status() -> str:
+    """Retorna status do servidor MCP: versão, estado e estatísticas de cache.
+    Não requer conexão Oracle. Útil para health-check.
+    """
+    from sqlmentor import __version__
+    from sqlmentor.collector import _index_map_cache, _optimizer_cache, _table_cache
+
+    return json.dumps(
+        {
+            "version": __version__,
+            "status": "ok",
+            "cache": {
+                "tables": len(_table_cache),
+                "optimizer": len(_optimizer_cache),
+                "index_maps": len(_index_map_cache),
+            },
+        }
+    )
 
 
 def main():

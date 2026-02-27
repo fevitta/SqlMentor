@@ -379,3 +379,136 @@ def dangerous_roles() -> tuple[str, dict]:
         """,
         {},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Batch queries — coleta de múltiplas tabelas em uma só query
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _build_tuple_in_clause(
+    pairs: list[tuple[str, str]],
+) -> tuple[str, dict[str, str]]:
+    """Constrói cláusula (owner, table_name) IN ((:o0,:t0), ...) com params.
+
+    Args:
+        pairs: Lista de (owner, table_name).
+
+    Returns:
+        (sql_fragment, params_dict).
+    """
+    parts = []
+    params: dict[str, str] = {}
+    for i, (owner, table_name) in enumerate(pairs):
+        parts.append(f"(:o{i}, :t{i})")
+        params[f"o{i}"] = owner.upper()
+        params[f"t{i}"] = table_name.upper()
+    return ", ".join(parts), params
+
+
+def batch_table_stats(
+    pairs: list[tuple[str, str]],
+) -> tuple[str, dict[str, str]]:
+    """Estatísticas de múltiplas tabelas em uma query."""
+    if not pairs:
+        return "SELECT 1 FROM DUAL WHERE 1=0", {}
+    in_clause, params = _build_tuple_in_clause(pairs)
+    return (
+        f"""
+        SELECT owner, table_name, num_rows, blocks, avg_row_len,
+               last_analyzed, sample_size, partitioned, temporary,
+               degree, compression
+        FROM all_tables
+        WHERE (owner, table_name) IN ({in_clause})
+        """,  # noqa: S608
+        params,
+    )
+
+
+def batch_column_stats(
+    pairs: list[tuple[str, str]],
+) -> tuple[str, dict[str, str]]:
+    """Estatísticas de colunas de múltiplas tabelas em uma query."""
+    if not pairs:
+        return "SELECT 1 FROM DUAL WHERE 1=0", {}
+    in_clause, params = _build_tuple_in_clause(pairs)
+    return (
+        f"""
+        SELECT c.owner, c.table_name,
+               c.column_name, c.data_type, c.data_length, c.nullable,
+               s.num_distinct, s.num_nulls, s.density, s.histogram,
+               s.num_buckets, s.last_analyzed, s.sample_size,
+               c.data_default
+        FROM all_tab_columns c
+        LEFT JOIN all_tab_col_statistics s
+            ON s.owner = c.owner
+            AND s.table_name = c.table_name
+            AND s.column_name = c.column_name
+        WHERE (c.owner, c.table_name) IN ({in_clause})
+        ORDER BY c.owner, c.table_name, c.column_id
+        """,  # noqa: S608
+        params,
+    )
+
+
+def batch_indexes(
+    pairs: list[tuple[str, str]],
+) -> tuple[str, dict[str, str]]:
+    """Índices de múltiplas tabelas em uma query."""
+    if not pairs:
+        return "SELECT 1 FROM DUAL WHERE 1=0", {}
+    in_clause, params = _build_tuple_in_clause(pairs)
+    return (
+        f"""
+        SELECT i.table_owner AS owner, i.table_name,
+               i.index_name, i.index_type, i.uniqueness, i.status,
+               i.num_rows, i.distinct_keys, i.clustering_factor,
+               i.last_analyzed, i.blevel, i.leaf_blocks,
+               LISTAGG(ic.column_name, ', ')
+                   WITHIN GROUP (ORDER BY ic.column_position) AS columns
+        FROM all_indexes i
+        JOIN all_ind_columns ic
+            ON ic.index_owner = i.owner
+            AND ic.index_name = i.index_name
+        WHERE (i.table_owner, i.table_name) IN ({in_clause})
+        GROUP BY i.table_owner, i.table_name,
+                 i.index_name, i.index_type, i.uniqueness, i.status,
+                 i.num_rows, i.distinct_keys, i.clustering_factor,
+                 i.last_analyzed, i.blevel, i.leaf_blocks
+        ORDER BY i.table_owner, i.table_name, i.index_name
+        """,  # noqa: S608
+        params,
+    )
+
+
+def batch_constraints(
+    pairs: list[tuple[str, str]],
+) -> tuple[str, dict[str, str]]:
+    """Constraints de múltiplas tabelas em uma query."""
+    if not pairs:
+        return "SELECT 1 FROM DUAL WHERE 1=0", {}
+    in_clause, params = _build_tuple_in_clause(pairs)
+    return (
+        f"""
+        SELECT c.owner, c.table_name,
+               c.constraint_name, c.constraint_type, c.status,
+               c.validated, c.r_constraint_name,
+               r.table_name AS r_table_name,
+               r.owner AS r_owner,
+               LISTAGG(cc.column_name, ', ')
+                   WITHIN GROUP (ORDER BY cc.position) AS columns
+        FROM all_constraints c
+        LEFT JOIN all_cons_columns cc
+            ON cc.owner = c.owner
+            AND cc.constraint_name = c.constraint_name
+        LEFT JOIN all_constraints r
+            ON r.owner = c.r_owner
+            AND r.constraint_name = c.r_constraint_name
+        WHERE (c.owner, c.table_name) IN ({in_clause})
+        GROUP BY c.owner, c.table_name,
+                 c.constraint_name, c.constraint_type, c.status,
+                 c.validated, c.r_constraint_name, r.table_name, r.owner
+        ORDER BY c.owner, c.table_name, c.constraint_type, c.constraint_name
+        """,  # noqa: S608
+        params,
+    )

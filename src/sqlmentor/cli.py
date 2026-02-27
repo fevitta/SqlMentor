@@ -15,7 +15,9 @@ Uso:
 
 import hashlib
 import logging
+import re
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -52,6 +54,46 @@ def _configure_debug(debug: bool) -> None:
             level=logging.DEBUG,
             format="%(name)s %(levelname)s: %(message)s",
         )
+
+
+def _validate_timeout(timeout: int | None) -> None:
+    """Valida timeout explícito: deve estar entre 1 e 3600 segundos."""
+    if timeout is not None and (timeout < 1 or timeout > 3600):
+        console.print(
+            f"[red]Erro:[/red] Timeout deve estar entre 1 e 3600 segundos (recebido: {timeout})."
+        )
+        raise typer.Exit(1)
+
+
+class _StepTimer:
+    """Mede tempo de cada etapa do fluxo CLI."""
+
+    def __init__(self) -> None:
+        self._steps: list[tuple[str, float]] = []
+        self._start = time.perf_counter()
+        self._last = self._start
+
+    def mark(self, name: str) -> None:
+        now = time.perf_counter()
+        self._steps.append((name, now - self._last))
+        self._last = now
+
+    def print_summary(self) -> None:
+        total = time.perf_counter() - self._start
+        parts = []
+        for name, elapsed in self._steps:
+            parts.append(
+                f"{name}: {elapsed * 1000:.0f}ms" if elapsed < 1 else f"{name}: {elapsed:.1f}s"
+            )
+        parts.append(f"Total: {total * 1000:.0f}ms" if total < 1 else f"Total: {total:.1f}s")
+        console.print(f"\n[dim]Tempo: {' | '.join(parts)}[/dim]")
+
+
+def _safe_filename_part(s: str, max_len: int = 20) -> str:
+    """Sanitiza string para uso seguro em nomes de arquivo."""
+    s = re.sub(r"[^a-z0-9_]", "_", s.lower().strip())
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s[:max_len]
 
 
 def _resolve_sql_input(sql_file: Path | None, sql_inline: str | None) -> tuple[str, str]:
@@ -158,6 +200,7 @@ def analyze(
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     _configure_debug(debug)
+    _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import (
@@ -169,6 +212,8 @@ def analyze(
         remap_bind_params,
     )
     from sqlmentor.report import to_json, to_markdown
+
+    timer = _StepTimer()
 
     if no_cache:
         clear_cache()
@@ -207,6 +252,7 @@ def analyze(
     # Parse
     console.print(f"[cyan]Parsing:[/cyan] {source_label}")
     parsed = parse_sql(sql_text, default_schema=effective_schema)
+    timer.mark("Parse")
 
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
     console.print(
@@ -228,6 +274,7 @@ def analyze(
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
+    timer.mark("Connect")
 
     # Parseia bind variables (nome=valor → dict)
     raw_binds: dict[str, str] = {}
@@ -284,10 +331,14 @@ def analyze(
         raise typer.Exit(1)
     finally:
         oracle_conn.close()
+    timer.mark("Collect")
 
     # Relatório
     report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
+    timer.mark("Render")
 
+    conn_part = _safe_filename_part(conn)
+    schema_part = _safe_filename_part(effective_schema)
     if output:
         out_path = output
     else:
@@ -295,13 +346,14 @@ def analyze(
         reports_dir = Path("reports")
         reports_dir.mkdir(exist_ok=True)
 
-        # Nome: report_<timestamp>_<filename ou hash>.ext
+        # Nome: report_<timestamp>_<conn>_<schema>_<filename ou hash>.ext
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
         base = sql_file.stem if sql_file else hashlib.md5(sql_text.encode()).hexdigest()[:8]  # noqa: S324
-        out_path = reports_dir / f"report_{ts}_{base}.{ext}"
+        out_path = reports_dir / f"report_{ts}_{conn_part}_{schema_part}_{base}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
+    timer.mark("Save")
     console.print(f"[green]✓[/green] Relatório salvo em [bold]{out_path}[/bold]")
 
     if verbose:
@@ -310,6 +362,7 @@ def analyze(
 
     # Resumo
     _print_summary(ctx)
+    timer.print_summary()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -361,11 +414,14 @@ def inspect(
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
     _configure_debug(debug)
+    _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
+
+    timer = _StepTimer()
 
     if no_cache:
         clear_cache()
@@ -388,6 +444,7 @@ def inspect(
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
+    timer.mark("Connect")
 
     cursor = oracle_conn.cursor()
 
@@ -411,6 +468,7 @@ def inspect(
         console.print(f"[red]Erro ao buscar SQL:[/red] {e}")
         oracle_conn.close()
         raise typer.Exit(1)
+    timer.mark("Fetch SQL")
 
     console.print(f"[green]✓[/green] SQL recuperado ({len(sql_text)} chars)")
 
@@ -418,6 +476,7 @@ def inspect(
     parsed = parse_sql(sql_text, default_schema=effective_schema)
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
+    timer.mark("Parse")
 
     # Coleta plano real via sql_id (sem re-executar)
     console.print("[cyan]Coletando plano real...[/cyan]")
@@ -440,6 +499,7 @@ def inspect(
     except Exception as e:
         console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
         runtime_stats = None
+    timer.mark("Runtime")
 
     cursor.close()
 
@@ -461,6 +521,7 @@ def inspect(
         raise typer.Exit(1)
     finally:
         oracle_conn.close()
+    timer.mark("Collect")
 
     # Injeta plano real e métricas coletados via sql_id
     if runtime_plan_lines:
@@ -470,7 +531,10 @@ def inspect(
 
     # Relatório
     report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
+    timer.mark("Render")
 
+    conn_part = _safe_filename_part(conn)
+    schema_part = _safe_filename_part(effective_schema)
     if output:
         out_path = output
     else:
@@ -478,9 +542,10 @@ def inspect(
         reports_dir.mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
-        out_path = reports_dir / f"report_{ts}_inspect_{sql_id}.{ext}"
+        out_path = reports_dir / f"report_{ts}_{conn_part}_{schema_part}_inspect_{sql_id}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
+    timer.mark("Save")
     console.print(f"[green]✓[/green] Relatório salvo em [bold]{out_path}[/bold]")
 
     if verbose:
@@ -488,6 +553,7 @@ def inspect(
         console.print(Panel(report, title="SQL Tuning Context", border_style="blue"))
 
     _print_summary(ctx)
+    timer.print_summary()
 
 
 def _print_summary(ctx) -> None:
@@ -594,6 +660,7 @@ def config_add(
     ),
 ) -> None:
     """Adiciona um profile de conexão Oracle."""
+    _validate_timeout(timeout)
     from sqlmentor.connector import add_connection
 
     add_connection(

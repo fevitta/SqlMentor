@@ -282,3 +282,26 @@ Remove cláusulas STORAGE(...), TABLESPACE, PCTFREE, INITRANS, LOGGING etc. da D
 - [ ] Atualizar `collector.py` (coleta)
 - [ ] Atualizar `report.py` (formatação no Markdown/JSON)
 - [ ] Verificar se `to_json` em `report.py` serializa o novo campo corretamente
+
+## Cache TTL + LRU (`collector.py`)
+
+O cache de metadata usa `_LRUCache[T]` com TTL de 5 minutos e máximo de 500 entradas:
+
+- `_table_cache: _LRUCache[TableContext]` — contexto por tabela/view
+- `_optimizer_cache: _LRUCache[dict[str, str]]` — parâmetros do otimizador (key: "global")
+- `_index_map_cache: _LRUCache[dict[str, str]]` — mapa index→table por schema
+
+Comportamento:
+- **TTL**: Entradas expiram após `_CACHE_TTL_SECONDS` (300s). `get()` retorna `None` para expiradas.
+- **LRU eviction**: Ao atingir `_CACHE_MAX_ENTRIES` (500), a entrada mais antiga (por `created_at`) é removida.
+- **`--no-cache`**: Chama `clear_cache()` que limpa os 3 caches.
+- **`__contains__`**: Verifica via `get()` (respeitando TTL).
+
+## Batch Collection (`collector.py`)
+
+Para queries com muitas tabelas, `collect_context` usa coleta em duas fases:
+
+1. **Fase 1 (per-table)**: Detecta `object_type`, coleta DDL via `DBMS_METADATA`, marca tabelas para batch.
+2. **Fase 2 (batch)**: Executa 4 queries batch (`batch_table_stats`, `batch_column_stats`, `batch_indexes`, `batch_constraints`) e distribui resultados por `SCHEMA.TABLE`.
+3. **Fallback**: Se batch falhar (ex: Oracle 11g sem suporte a tuple IN), usa coleta per-table (funções existentes).
+4. **Deep mode**: Partitions e histograms permanecem per-table após batch (dependem de colunas coletadas).

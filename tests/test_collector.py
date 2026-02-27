@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from sqlmentor.collector import (
     CollectedContext,
     TableContext,
+    _batch_collect_tables,
     _collect_column_stats,
     _collect_constraints,
     _collect_db_version,
@@ -21,6 +22,7 @@ from sqlmentor.collector import (
     _execute_query,
     _index_map_cache,
     _inline_binds,
+    _LRUCache,
     _optimizer_cache,
     _parse_view_tables,
     _table_cache,
@@ -28,6 +30,7 @@ from sqlmentor.collector import (
     collect_context,
 )
 from sqlmentor.parser import ParsedSQL
+from sqlmentor.queries import _build_tuple_in_clause
 
 # ---------------------------------------------------------------------------
 # Helper: make_cursor_dispatch
@@ -1145,17 +1148,17 @@ class TestClearCache:
     """Testes de clear_cache."""
 
     def test_clears_all_caches(self):
-        _table_cache["HR.T"] = TableContext(name="T", schema="HR")
-        _optimizer_cache["global"] = {"optimizer_mode": "ALL_ROWS"}
-        _index_map_cache["HR"] = {"IDX1": "T"}
+        _table_cache.put("HR.T", TableContext(name="T", schema="HR"))
+        _optimizer_cache.put("global", {"optimizer_mode": "ALL_ROWS"})
+        _index_map_cache.put("HR", {"IDX1": "T"})
         clear_cache()
-        assert _table_cache == {}
-        assert _optimizer_cache == {}
-        assert _index_map_cache == {}
+        assert len(_table_cache) == 0
+        assert len(_optimizer_cache) == 0
+        assert len(_index_map_cache) == 0
 
     def test_clear_empty_is_noop(self):
         clear_cache()
-        assert _table_cache == {}
+        assert len(_table_cache) == 0
 
 
 class TestCacheHitMiss:
@@ -1224,3 +1227,177 @@ class TestCacheHitMiss:
         ctx2 = collect_context(simple_parsed_sql, conn2, "HR", deep=True, use_cache=True)
         # Deve ter re-coletado (partitions agora presentes)
         assert ctx2.tables[0].partitions is not None
+
+
+# ---------------------------------------------------------------------------
+# 5. _LRUCache
+# ---------------------------------------------------------------------------
+
+
+class TestLRUCache:
+    """Testes de _LRUCache: put/get, TTL, eviction, contains, clear."""
+
+    def test_put_get(self):
+        cache: _LRUCache[str] = _LRUCache()
+        cache.put("a", "val_a")
+        assert cache.get("a") == "val_a"
+        assert cache.get("b") is None
+
+    def test_ttl_expiration(self):
+        """Entradas expiradas retornam None."""
+        import time
+
+        cache: _LRUCache[str] = _LRUCache(ttl=0.01)
+        cache.put("a", "val_a")
+        time.sleep(0.02)
+        assert cache.get("a") is None
+
+    def test_eviction_oldest(self):
+        """Ao atingir max_entries, entrada mais antiga é removida."""
+        cache: _LRUCache[str] = _LRUCache(max_entries=3)
+        cache.put("a", "1")
+        cache.put("b", "2")
+        cache.put("c", "3")
+        cache.put("d", "4")  # evicta "a"
+        assert cache.get("a") is None
+        assert cache.get("b") == "2"
+        assert cache.get("d") == "4"
+
+    def test_contains(self):
+        cache: _LRUCache[str] = _LRUCache()
+        cache.put("x", "val")
+        assert "x" in cache
+        assert "y" not in cache
+
+    def test_clear(self):
+        cache: _LRUCache[str] = _LRUCache()
+        cache.put("a", "1")
+        cache.put("b", "2")
+        cache.clear()
+        assert len(cache) == 0
+        assert cache.get("a") is None
+
+    def test_len(self):
+        cache: _LRUCache[int] = _LRUCache()
+        assert len(cache) == 0
+        cache.put("a", 1)
+        cache.put("b", 2)
+        assert len(cache) == 2
+
+    def test_overwrite_existing_key(self):
+        """put com chave existente atualiza valor sem eviction."""
+        cache: _LRUCache[str] = _LRUCache(max_entries=2)
+        cache.put("a", "old")
+        cache.put("b", "val_b")
+        cache.put("a", "new")  # atualiza, não evicta
+        assert cache.get("a") == "new"
+        assert cache.get("b") == "val_b"
+        assert len(cache) == 2
+
+
+# ---------------------------------------------------------------------------
+# 6. Batch collection
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTupleInClause:
+    """Testes de _build_tuple_in_clause."""
+
+    def test_single_pair(self):
+        sql, params = _build_tuple_in_clause([("HR", "USERS")])
+        assert "(:o0, :t0)" in sql
+        assert params == {"o0": "HR", "t0": "USERS"}
+
+    def test_multiple_pairs(self):
+        sql, params = _build_tuple_in_clause([("HR", "USERS"), ("HR", "ORDERS")])
+        assert ":o0" in sql
+        assert ":o1" in sql
+        assert params["o0"] == "HR"
+        assert params["t1"] == "ORDERS"
+
+    def test_empty_pairs(self):
+        sql, params = _build_tuple_in_clause([])
+        assert sql == ""
+        assert params == {}
+
+    def test_uppercases_values(self):
+        _sql, params = _build_tuple_in_clause([("hr", "users")])
+        assert params["o0"] == "HR"
+        assert params["t0"] == "USERS"
+
+
+class TestBatchCollectTables:
+    """Testes de _batch_collect_tables."""
+
+    def test_empty_list_returns_empty(self):
+        """Lista vazia → dict vazio."""
+        ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
+        cursor = MagicMock()
+        result = _batch_collect_tables(cursor, [], ctx)
+        assert result == {}
+
+    def test_distributes_results(self):
+        """Batch rows distribuídos por schema.table key."""
+        ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
+        cursor = MagicMock()
+
+        # Mock _execute_query return values for each batch call
+        call_count = [0]
+        original_execute = cursor.execute
+
+        def mock_execute(sql, params=None):
+            return original_execute(sql, params)
+
+        cursor.execute = mock_execute
+
+        # We need to mock at module level
+        from sqlmentor import collector as collector_mod
+
+        original_exec_query = collector_mod._execute_query
+
+        def mock_exec_query(cur, sql, params):
+            call_count[0] += 1
+            if call_count[0] == 1:  # batch_table_stats
+                return [{"owner": "HR", "table_name": "USERS", "num_rows": 100}]
+            if call_count[0] == 2:  # batch_column_stats
+                return [
+                    {
+                        "owner": "HR",
+                        "table_name": "USERS",
+                        "column_name": "ID",
+                        "data_type": "NUMBER",
+                    },
+                ]
+            if call_count[0] == 3:  # batch_indexes
+                return []
+            if call_count[0] == 4:  # batch_constraints
+                return []
+            return []
+
+        collector_mod._execute_query = mock_exec_query
+        try:
+            result = _batch_collect_tables(cursor, [("HR", "USERS")], ctx)
+            assert "HR.USERS" in result
+            assert result["HR.USERS"]["stats"]["num_rows"] == 100
+            assert len(result["HR.USERS"]["columns"]) == 1
+        finally:
+            collector_mod._execute_query = original_exec_query
+
+    def test_batch_fallback_on_exception(self):
+        """Batch levanta exceção → retorna dict vazio (sinaliza fallback)."""
+        ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
+
+        from sqlmentor import collector as collector_mod
+
+        original_exec_query = collector_mod._execute_query
+
+        def mock_exec_query(cur, sql, params):
+            raise RuntimeError("ORA-00942: table or view does not exist")
+
+        collector_mod._execute_query = mock_exec_query
+        try:
+            result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx)
+            assert result == {}
+            assert any("fallback" in e.lower() for e in ctx.errors)
+        finally:
+            collector_mod._execute_query = original_exec_query

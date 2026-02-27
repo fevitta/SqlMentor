@@ -6,6 +6,7 @@ para que uma IA possa analisar e sugerir melhorias.
 """
 
 import logging
+import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -15,6 +16,10 @@ from sqlglot import exp
 
 from sqlmentor.parser import ParsedSQL
 from sqlmentor.queries import (
+    batch_column_stats,
+    batch_constraints,
+    batch_indexes,
+    batch_table_stats,
     column_stats,
     constraints,
     db_version,
@@ -35,10 +40,59 @@ from sqlmentor.queries import (
 
 logger = logging.getLogger(__name__)
 
-# ── Cache in-memory (persiste entre chamadas na mesma sessão) ──────────
-_table_cache: dict[str, "TableContext"] = {}
-_optimizer_cache: dict[str, dict[str, str]] = {}  # key: "global"
-_index_map_cache: dict[str, dict[str, str]] = {}  # key: schema
+# ── Cache TTL + LRU ──────────────────────────────────────────────────
+
+_CACHE_TTL_SECONDS: int = 300  # 5 minutos
+_CACHE_MAX_ENTRIES: int = 500
+
+
+@dataclass
+class _CacheEntry[T]:
+    value: T
+    created_at: float = field(default_factory=_time.monotonic)
+
+    def is_expired(self, ttl: float) -> bool:
+        return (_time.monotonic() - self.created_at) > ttl
+
+
+class _LRUCache[T]:
+    """Cache in-memory com TTL e eviction LRU por created_at."""
+
+    def __init__(
+        self, max_entries: int = _CACHE_MAX_ENTRIES, ttl: float = _CACHE_TTL_SECONDS
+    ) -> None:
+        self._store: dict[str, _CacheEntry[T]] = {}
+        self._max_entries = max_entries
+        self._ttl = ttl
+
+    def get(self, key: str) -> T | None:
+        entry = self._store.get(key)
+        if entry is None:
+            return None
+        if entry.is_expired(self._ttl):
+            del self._store[key]
+            return None
+        return entry.value
+
+    def put(self, key: str, value: T) -> None:
+        if key not in self._store and len(self._store) >= self._max_entries:
+            oldest = min(self._store, key=lambda k: self._store[k].created_at)
+            del self._store[oldest]
+        self._store[key] = _CacheEntry(value=value)
+
+    def __contains__(self, key: str) -> bool:
+        return self.get(key) is not None
+
+    def __len__(self) -> int:
+        return len(self._store)
+
+    def clear(self) -> None:
+        self._store.clear()
+
+
+_table_cache: _LRUCache["TableContext"] = _LRUCache()
+_optimizer_cache: _LRUCache[dict[str, str]] = _LRUCache()
+_index_map_cache: _LRUCache[dict[str, str]] = _LRUCache()
 
 
 def clear_cache() -> None:
@@ -98,6 +152,67 @@ def _execute_query(cursor: oracledb.Cursor, sql: str, params: dict) -> list[dict
     return rows
 
 
+def _batch_collect_tables(
+    cursor: oracledb.Cursor,
+    pairs: list[tuple[str, str]],
+    ctx: CollectedContext,
+) -> dict[str, dict[str, Any]]:
+    """Coleta stats, columns, indexes e constraints para múltiplas tabelas em batch.
+
+    Args:
+        cursor: Cursor Oracle ativo.
+        pairs: Lista de (schema, table_name).
+        ctx: Contexto para registro de erros.
+
+    Returns:
+        Dict keyed por "SCHEMA.TABLE" com sub-dicts: stats, columns, indexes, constraints.
+    """
+    if not pairs:
+        return {}
+
+    result: dict[str, dict[str, Any]] = {f"{s}.{n}": {} for s, n in pairs}
+
+    try:
+        # Table stats
+        sql, params = batch_table_stats(pairs)
+        rows = _execute_query(cursor, sql, params)
+        for row in rows:
+            key = f"{row.get('owner', '')}.{row.get('table_name', '')}"
+            if key in result:
+                result[key]["stats"] = row
+
+        # Column stats
+        sql, params = batch_column_stats(pairs)
+        rows = _execute_query(cursor, sql, params)
+        for row in rows:
+            key = f"{row.get('owner', '')}.{row.get('table_name', '')}"
+            if key in result:
+                result[key].setdefault("columns", []).append(row)
+
+        # Indexes
+        sql, params = batch_indexes(pairs)
+        rows = _execute_query(cursor, sql, params)
+        for row in rows:
+            key = f"{row.get('owner', '')}.{row.get('table_name', '')}"
+            if key in result:
+                result[key].setdefault("indexes", []).append(row)
+
+        # Constraints
+        sql, params = batch_constraints(pairs)
+        rows = _execute_query(cursor, sql, params)
+        for row in rows:
+            key = f"{row.get('owner', '')}.{row.get('table_name', '')}"
+            if key in result:
+                result[key].setdefault("constraints", []).append(row)
+
+    except Exception as e:
+        logger.warning("Batch collection failed, will fallback to per-table: %s", e)
+        ctx.errors.append(f"Batch collection fallback: {e}")
+        return {}  # Empty dict signals caller to use per-table fallback
+
+    return result
+
+
 def collect_context(
     parsed: ParsedSQL,
     conn: oracledb.Connection,
@@ -146,8 +261,10 @@ def collect_context(
         # (v2 - por ora só coleta metadata das tabelas)
         pass
 
-    # 2. Metadata de cada tabela (deduplica por schema.name)
+    # 2. Metadata de cada tabela — two-phase: detect+DDL per-table, then batch
     collected_objects: set[str] = set()
+    # Phase 1: detect object type, collect DDL, identify tables for batch
+    tables_for_batch: list[tuple[str, str, str, TableContext]] = []  # (schema, name, key, tctx)
     for table in parsed.tables:
         schema = (table.get("schema") or default_schema).upper()
         name = table["name"].upper()
@@ -159,16 +276,14 @@ def collect_context(
         collected_objects.add(obj_key)
 
         # Cache hit: retorna TableContext cacheado se disponível
-        if use_cache and obj_key in _table_cache:
-            cached = _table_cache[obj_key]
-            # Se deep=True mas cache não tem histograms/partitions, re-coletar
-            if not deep or (cached.histograms or cached.partitions):
-                logger.info(f"Cache hit: {obj_key}")
-                ctx.tables.append(cached)
-                # View expansion pode estar cacheada junto, mas precisamos garantir
-                if cached.object_type == "VIEW":
-                    _collect_view_expansion(cursor, schema, name, ctx)
-                continue
+        cached = _table_cache.get(obj_key) if use_cache else None
+        if cached is not None and (not deep or (cached.histograms or cached.partitions)):
+            logger.info(f"Cache hit: {obj_key}")
+            ctx.tables.append(cached)
+            # View expansion pode estar cacheada junto, mas precisamos garantir
+            if cached.object_type == "VIEW":
+                _collect_view_expansion(cursor, schema, name, ctx)
+            continue
 
         logger.info(f"Coletando contexto: {schema}.{name}")
         tctx = TableContext(name=name, schema=schema)
@@ -183,32 +298,44 @@ def collect_context(
         # Views: só coleta detalhes se --expand-views foi passado
         if tctx.object_type == "VIEW" and not expand_views:
             if use_cache:
-                _table_cache[obj_key] = tctx
+                _table_cache.put(obj_key, tctx)
             ctx.tables.append(tctx)
             continue
 
-        # DDL
+        # DDL (per-table, uses DBMS_METADATA)
         tctx.ddl = _collect_ddl(cursor, schema, name, ctx)
 
-        # Table stats
-        tctx.stats = _collect_table_stats(cursor, schema, name, ctx)
+        # Mark for batch collection of stats/columns/indexes/constraints
+        tables_for_batch.append((schema, name, obj_key, tctx))
 
-        # Column stats
-        tctx.columns = _collect_column_stats(cursor, schema, name, ctx)
+    # Phase 2: Batch-query stats/columns/indexes/constraints
+    batch_pairs = [(s, n) for s, n, _k, _t in tables_for_batch]
+    batch_data = _batch_collect_tables(cursor, batch_pairs, ctx) if batch_pairs else {}
 
-        # Indexes
-        tctx.indexes = _collect_indexes(cursor, schema, name, ctx)
+    for schema, name, obj_key, tctx in tables_for_batch:
+        key = f"{schema}.{name}"
+        data = batch_data.get(key)
 
-        # Constraints
-        tctx.constraints = _collect_constraints(cursor, schema, name, ctx)
+        if data:
+            # Batch succeeded — use batch results
+            tctx.stats = data.get("stats")
+            tctx.columns = data.get("columns", [])
+            tctx.indexes = data.get("indexes", [])
+            tctx.constraints = data.get("constraints", [])
+        else:
+            # Fallback to per-table collection
+            tctx.stats = _collect_table_stats(cursor, schema, name, ctx)
+            tctx.columns = _collect_column_stats(cursor, schema, name, ctx)
+            tctx.indexes = _collect_indexes(cursor, schema, name, ctx)
+            tctx.constraints = _collect_constraints(cursor, schema, name, ctx)
 
-        # Deep mode: partitions + histograms
+        # Deep mode: partitions + histograms (always per-table)
         if deep:
             tctx.partitions = _collect_partitions(cursor, schema, name, ctx)
             tctx.histograms = _collect_histograms(cursor, schema, name, parsed, tctx.columns, ctx)
 
         if use_cache:
-            _table_cache[obj_key] = tctx
+            _table_cache.put(obj_key, tctx)
         ctx.tables.append(tctx)
 
     # 3. Mapa index_name → table_name (pra cruzar plano com view expansion)
@@ -224,9 +351,10 @@ def collect_context(
         for t in ctx.tables:
             schemas_to_map.add(t.schema)
         for schema in schemas_to_map:
-            if use_cache and schema in _index_map_cache:
+            cached_map = _index_map_cache.get(schema) if use_cache else None
+            if cached_map is not None:
                 logger.info(f"Cache hit: index_map({schema})")
-                ctx.index_table_map.update(_index_map_cache[schema])
+                ctx.index_table_map.update(cached_map)
                 continue
             try:
                 sql, params = index_to_table_map(schema)
@@ -239,7 +367,7 @@ def collect_context(
                         schema_map[idx_name.upper()] = tbl_name.upper()
                 ctx.index_table_map.update(schema_map)
                 if use_cache:
-                    _index_map_cache[schema] = schema_map
+                    _index_map_cache.put(schema, schema_map)
             except Exception as e:
                 ctx.errors.append(f"Erro ao coletar mapa de índices ({schema}): {e}")
 
@@ -260,13 +388,14 @@ def collect_context(
                 ctx.errors.append(f"Erro ao coletar DDL de {func_key}: {e}")
 
     # 5. Optimizer params
-    if use_cache and "global" in _optimizer_cache:
+    cached_opt = _optimizer_cache.get("global") if use_cache else None
+    if cached_opt is not None:
         logger.info("Cache hit: optimizer_params")
-        ctx.optimizer_params = _optimizer_cache["global"]
+        ctx.optimizer_params = cached_opt
     else:
         ctx.optimizer_params = _collect_optimizer_params(cursor, ctx)
         if use_cache and ctx.optimizer_params:
-            _optimizer_cache["global"] = ctx.optimizer_params
+            _optimizer_cache.put("global", ctx.optimizer_params)
 
     cursor.close()
     return ctx

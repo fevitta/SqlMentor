@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
-from sqlmentor.cli import app
+from sqlmentor.cli import _safe_filename_part, _StepTimer, _validate_timeout, app
 from sqlmentor.collector import CollectedContext, TableContext
 from sqlmentor.parser import ParsedSQL
 
@@ -957,3 +957,126 @@ class TestInspectSuccess:
         )
         assert result.exit_code == 0
         mocks["to_json"].assert_called_once()
+
+
+# ─── timeout validation ──────────────────────────────────────────────────────
+
+
+class TestValidateTimeout:
+    def test_negative_timeout_exits(self):
+        """Timeout -5 → typer.Exit(1)."""
+        import pytest
+        import typer
+
+        with pytest.raises(typer.Exit):
+            _validate_timeout(-5)
+
+    def test_too_large_timeout_exits(self):
+        """Timeout 9999 → typer.Exit(1)."""
+        import pytest
+        import typer
+
+        with pytest.raises(typer.Exit):
+            _validate_timeout(9999)
+
+    def test_valid_timeout_passes(self):
+        """Timeout 300 → no exception."""
+        _validate_timeout(300)
+
+    def test_none_timeout_passes(self):
+        """Timeout None → no exception."""
+        _validate_timeout(None)
+
+    def test_boundary_1_passes(self):
+        """Timeout 1 → ok."""
+        _validate_timeout(1)
+
+    def test_boundary_3600_passes(self):
+        """Timeout 3600 → ok."""
+        _validate_timeout(3600)
+
+    def test_analyze_rejects_invalid_timeout(self, monkeypatch, tmp_path):
+        """analyze --timeout -5 → exit 1."""
+        sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "--timeout",
+                "-5",
+                "--output",
+                str(out_file),
+            ],
+        )
+        assert result.exit_code == 1
+
+    def test_inspect_rejects_invalid_timeout(self, monkeypatch, tmp_path):
+        """inspect --timeout 9999 → exit 1."""
+        out_file, _mocks = _inspect_patches(monkeypatch, tmp_path)
+        result = runner.invoke(
+            app,
+            [
+                "inspect",
+                "abc123",
+                "--conn",
+                "test",
+                "--timeout",
+                "9999",
+                "--output",
+                str(out_file),
+            ],
+        )
+        assert result.exit_code == 1
+
+
+# ─── _StepTimer ──────────────────────────────────────────────────────────────
+
+
+class TestStepTimer:
+    def test_mark_and_durations(self):
+        """mark 2 steps → durations > 0."""
+        timer = _StepTimer()
+        timer.mark("Step1")
+        timer.mark("Step2")
+        assert len(timer._steps) == 2
+        for _name, elapsed in timer._steps:
+            assert elapsed >= 0
+
+    def test_print_summary_contains_total(self, capsys):
+        """print_summary → output contains 'Total'."""
+        timer = _StepTimer()
+        timer.mark("Parse")
+        timer.print_summary()
+        captured = capsys.readouterr()
+        assert "Total" in captured.out
+
+
+# ─── _safe_filename_part ─────────────────────────────────────────────────────
+
+
+class TestSafeFilenamePart:
+    def test_basic_sanitization(self):
+        """'PROD.HR' → 'prod_hr'."""
+        assert _safe_filename_part("PROD.HR") == "prod_hr"
+
+    def test_truncation(self):
+        """String longer than max_len is truncated."""
+        result = _safe_filename_part("a" * 50, max_len=10)
+        assert len(result) == 10
+
+    def test_special_chars(self):
+        """Special chars replaced with underscore."""
+        result = _safe_filename_part("my@conn!name")
+        assert result == "my_conn_name"
+
+    def test_empty_string(self):
+        """Empty string → empty."""
+        assert _safe_filename_part("") == ""
+
+    def test_leading_trailing_underscores_stripped(self):
+        """Leading/trailing underscores stripped."""
+        result = _safe_filename_part("..test..")
+        assert result == "test"
