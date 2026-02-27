@@ -314,8 +314,8 @@ ALLSTATS_PLAN_LINES = [
     "Predicate Information (identified by operation id):",
     "---------------------------------------------------",
     "",
-    "   3 - access(\"U\".\"ID\"=\"O\".\"USER_ID\")",
-    "   3 - filter(TO_NUMBER(\"O\".\"STATUS\")=1)",
+    '   3 - access("U"."ID"="O"."USER_ID")',
+    '   3 - filter(TO_NUMBER("O"."STATUS")=1)',
 ]
 
 
@@ -390,7 +390,9 @@ def rich_collected_context(
         },
         index_table_map={"IDX_ORD_USER": "ORDERS", "PK_USERS": "USERS"},
         tables=[rich_table_context, small_table_context],
-        function_ddls={"HR.FN_CALC": "CREATE FUNCTION HR.FN_CALC(p_id NUMBER) RETURN NUMBER IS BEGIN RETURN p_id * 2; END;"},
+        function_ddls={
+            "HR.FN_CALC": "CREATE FUNCTION HR.FN_CALC(p_id NUMBER) RETURN NUMBER IS BEGIN RETURN p_id * 2; END;"
+        },
         optimizer_params={
             "optimizer_mode": "ALL_ROWS",
             "optimizer_index_cost_adj": "10",

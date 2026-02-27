@@ -140,15 +140,15 @@ class TestParseViewTables:
 
     def test_join_view(self):
         ddl = (
-            'CREATE VIEW v_test\nAS\n'
-            'SELECT a.id, b.name FROM orders a JOIN customers b ON a.cust_id = b.id'
+            "CREATE VIEW v_test\nAS\n"
+            "SELECT a.id, b.name FROM orders a JOIN customers b ON a.cust_id = b.id"
         )
         tables = _parse_view_tables(ddl)
         assert "CUSTOMERS" in tables
         assert "ORDERS" in tables
 
     def test_schema_qualified(self):
-        ddl = 'CREATE VIEW v\nAS\nSELECT * FROM hr.employees'
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM hr.employees"
         tables = _parse_view_tables(ddl)
         assert "HR.EMPLOYEES" in tables
 
@@ -159,19 +159,13 @@ class TestParseViewTables:
 
     def test_fallback_regex_on_parse_error(self):
         # SQL inválido que sqlglot não consegue parsear mas regex captura
-        ddl = (
-            'CREATE VIEW v\nAS\n'
-            'SELECT * FROM mytable WHERE @@@invalid_syntax'
-        )
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM mytable WHERE @@@invalid_syntax"
         tables = _parse_view_tables(ddl)
         # Pode ou não capturar — importante é não levantar exceção
         assert isinstance(tables, list)
 
     def test_result_sorted(self):
-        ddl = (
-            'CREATE VIEW v\nAS\n'
-            'SELECT * FROM zebra z JOIN apple a ON z.id = a.id'
-        )
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM zebra z JOIN apple a ON z.id = a.id"
         tables = _parse_view_tables(ddl)
         assert tables == sorted(tables)
 
@@ -192,12 +186,14 @@ class TestExecuteQuery:
     """Testes de _execute_query."""
 
     def test_returns_list_of_dicts(self):
-        cursor = make_cursor_dispatch({
-            "SELECT": {
-                "description": [("id",), ("name",)],
-                "rows": [(1, "Alice"), (2, "Bob")],
+        cursor = make_cursor_dispatch(
+            {
+                "SELECT": {
+                    "description": [("id",), ("name",)],
+                    "rows": [(1, "Alice"), (2, "Bob")],
+                }
             }
-        })
+        )
         result = _execute_query(cursor, "SELECT id, name FROM t", {})
         assert result == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
@@ -209,9 +205,7 @@ class TestExecuteQuery:
     def test_lob_read(self):
         lob = MagicMock()
         lob.read.return_value = "LOB content"
-        cursor = make_cursor_dispatch({
-            "SELECT": {"description": [("ddl",)], "rows": [(lob,)]}
-        })
+        cursor = make_cursor_dispatch({"SELECT": {"description": [("ddl",)], "rows": [(lob,)]}})
         result = _execute_query(cursor, "SELECT ddl FROM t", {})
         assert result == [{"ddl": "LOB content"}]
 
@@ -225,12 +219,14 @@ class TestExecuteQuery:
         assert result == []
 
     def test_multiple_rows(self):
-        cursor = make_cursor_dispatch({
-            "SELECT": {
-                "description": [("val",)],
-                "rows": [(10,), (20,), (30,)],
+        cursor = make_cursor_dispatch(
+            {
+                "SELECT": {
+                    "description": [("val",)],
+                    "rows": [(10,), (20,), (30,)],
+                }
             }
-        })
+        )
         result = _execute_query(cursor, "SELECT val FROM t", {})
         assert len(result) == 3
         assert result[2] == {"val": 30}
@@ -264,27 +260,33 @@ class TestDetectObjectType:
     """Testes de _detect_object_type."""
 
     def test_returns_table(self):
-        cursor = make_cursor_dispatch({
-            "all_objects": {
-                "description": [("object_type",)],
-                "rows": [("TABLE",)],
+        cursor = make_cursor_dispatch(
+            {
+                "all_objects": {
+                    "description": [("object_type",)],
+                    "rows": [("TABLE",)],
+                }
             }
-        })
+        )
         result = _detect_object_type(cursor, "HR", "EMPLOYEES", _make_ctx())
         assert result == "TABLE"
 
     def test_returns_view(self):
-        cursor = make_cursor_dispatch({
-            "all_objects": {
-                "description": [("object_type",)],
-                "rows": [("VIEW",)],
+        cursor = make_cursor_dispatch(
+            {
+                "all_objects": {
+                    "description": [("object_type",)],
+                    "rows": [("VIEW",)],
+                }
             }
-        })
+        )
         result = _detect_object_type(cursor, "HR", "V_EMP", _make_ctx())
         assert result == "VIEW"
 
     def test_default_table_on_empty(self):
-        cursor = make_cursor_dispatch({"all_objects": {"description": [("object_type",)], "rows": []}})
+        cursor = make_cursor_dispatch(
+            {"all_objects": {"description": [("object_type",)], "rows": []}}
+        )
         result = _detect_object_type(cursor, "HR", "UNKNOWN", _make_ctx())
         assert result == "TABLE"
 
@@ -298,22 +300,24 @@ class TestCollectViewExpansion:
     """Testes de _collect_view_expansion."""
 
     def test_populates_view_expansions(self):
-        ddl = 'CREATE VIEW v\nAS\nSELECT * FROM orders JOIN customers ON 1=1'
-        cursor = make_cursor_dispatch({
-            "DBMS_METADATA": {
-                "description": [("ddl",)],
-                "rows": [(ddl,)],
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM orders JOIN customers ON 1=1"
+        cursor = make_cursor_dispatch(
+            {
+                "DBMS_METADATA": {
+                    "description": [("ddl",)],
+                    "rows": [(ddl,)],
+                }
             }
-        })
+        )
         ctx = _make_ctx()
         _collect_view_expansion(cursor, "HR", "V_TEST", ctx)
         assert "HR.V_TEST" in ctx.view_expansions
         assert len(ctx.view_expansions["HR.V_TEST"]) >= 1
 
     def test_empty_ddl_noop(self):
-        cursor = make_cursor_dispatch({
-            "DBMS_METADATA": {"description": [("ddl",)], "rows": [("  ",)]}
-        })
+        cursor = make_cursor_dispatch(
+            {"DBMS_METADATA": {"description": [("ddl",)], "rows": [("  ",)]}}
+        )
         ctx = _make_ctx()
         _collect_view_expansion(cursor, "HR", "V_EMPTY", ctx)
         assert "HR.V_EMPTY" not in ctx.view_expansions
@@ -335,11 +339,13 @@ class TestCollectExplainPlan:
             ("| Id | Operation |",),
             ("|  0 | SELECT    |",),
         ]
-        cursor = make_cursor_dispatch({
-            "EXPLAIN PLAN": None,  # step 1: DDL, retorna nada
-            "DBMS_XPLAN": plan_lines,  # step 2: SELECT plan
-            "DELETE FROM PLAN_TABLE": None,  # step 3: cleanup
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "EXPLAIN PLAN": None,  # step 1: DDL, retorna nada
+                "DBMS_XPLAN": plan_lines,  # step 2: SELECT plan
+                "DELETE FROM PLAN_TABLE": None,  # step 3: cleanup
+            }
+        )
         ctx = _make_ctx()
         result = _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx)
         assert result is not None
@@ -347,21 +353,25 @@ class TestCollectExplainPlan:
         assert "Plan hash" in result[0]
 
     def test_three_steps_executed(self):
-        cursor = make_cursor_dispatch({
-            "EXPLAIN PLAN": None,
-            "DBMS_XPLAN": [("line1",)],
-            "DELETE FROM PLAN_TABLE": None,
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "EXPLAIN PLAN": None,
+                "DBMS_XPLAN": [("line1",)],
+                "DELETE FROM PLAN_TABLE": None,
+            }
+        )
         ctx = _make_ctx()
         _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx)
         assert cursor.execute.call_count == 3
 
     def test_inlines_binds(self):
-        cursor = make_cursor_dispatch({
-            "EXPLAIN PLAN": None,
-            "DBMS_XPLAN": [("line1",)],
-            "DELETE FROM PLAN_TABLE": None,
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "EXPLAIN PLAN": None,
+                "DBMS_XPLAN": [("line1",)],
+                "DELETE FROM PLAN_TABLE": None,
+            }
+        )
         ctx = _make_ctx()
         _collect_explain_plan(cursor, "SELECT * FROM t WHERE id = :id", ctx, {"id": 42})
         # O primeiro execute deve conter o literal 42, não :id
@@ -396,20 +406,22 @@ class TestCollectRuntimeExecution:
     """Testes de _collect_runtime_execution."""
 
     def test_collects_plan_stats_waits(self):
-        cursor = make_cursor_dispatch({
-            "ALTER SESSION": None,
-            "v$mystat": (100,),  # sid
-            "v$session": ("abc123def456",),  # sql_id
-            "DBMS_XPLAN": [("runtime plan line",)],
-            "v$sql": {
-                "description": [("sql_id",), ("executions",)],
-                "rows": [("abc123def456", 1)],
-            },
-            "v$session_event": {
-                "description": [("event",), ("total_waits",)],
-                "rows": [("db file sequential read", 5)],
-            },
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "ALTER SESSION": None,
+                "v$mystat": (100,),  # sid
+                "v$session": ("abc123def456",),  # sql_id
+                "DBMS_XPLAN": [("runtime plan line",)],
+                "v$sql": {
+                    "description": [("sql_id",), ("executions",)],
+                    "rows": [("abc123def456", 1)],
+                },
+                "v$session_event": {
+                    "description": [("event",), ("total_waits",)],
+                    "rows": [("db file sequential read", 5)],
+                },
+            }
+        )
         ctx = _make_ctx()
         conn = MagicMock()
         _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
@@ -417,14 +429,16 @@ class TestCollectRuntimeExecution:
         assert ctx.runtime_stats is not None
 
     def test_fallback_when_no_sql_id(self):
-        cursor = make_cursor_dispatch({
-            "ALTER SESSION": None,
-            "v$mystat": (100,),
-            "v$session": (None,),  # no sql_id
-            "EXPLAIN PLAN": None,
-            "DBMS_XPLAN": [("fallback plan",)],
-            "DELETE FROM PLAN_TABLE": None,
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "ALTER SESSION": None,
+                "v$mystat": (100,),
+                "v$session": (None,),  # no sql_id
+                "EXPLAIN PLAN": None,
+                "DBMS_XPLAN": [("fallback plan",)],
+                "DELETE FROM PLAN_TABLE": None,
+            }
+        )
         ctx = _make_ctx()
         conn = MagicMock()
         _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
@@ -433,9 +447,11 @@ class TestCollectRuntimeExecution:
         assert ctx.execution_plan is not None
 
     def test_fallback_on_exception(self):
-        cursor = make_cursor_dispatch({
-            "ALTER SESSION": RuntimeError("cannot alter"),
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "ALTER SESSION": RuntimeError("cannot alter"),
+            }
+        )
         # Ajusta pra explain plan fallback funcionar
         # Na exceção, _collect_explain_plan será chamado mas também pode falhar
         ctx = _make_ctx()
@@ -444,14 +460,16 @@ class TestCollectRuntimeExecution:
         assert len(ctx.errors) >= 1
 
     def test_alter_session_called(self):
-        cursor = make_cursor_dispatch({
-            "ALTER SESSION": None,
-            "v$mystat": (100,),
-            "v$session": ("abc123def456",),
-            "DBMS_XPLAN": [("line",)],
-            "v$sql": {"description": [("sql_id",)], "rows": [("abc123def456",)]},
-            "v$session_event": {"description": [("event",)], "rows": []},
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "ALTER SESSION": None,
+                "v$mystat": (100,),
+                "v$session": ("abc123def456",),
+                "DBMS_XPLAN": [("line",)],
+                "v$sql": {"description": [("sql_id",)], "rows": [("abc123def456",)]},
+                "v$session_event": {"description": [("event",)], "rows": []},
+            }
+        )
         ctx = _make_ctx()
         conn = MagicMock()
         _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
@@ -463,16 +481,19 @@ class TestCollectDdl:
     """Testes de _collect_ddl."""
 
     def test_returns_ddl_string(self):
-        cursor = make_cursor_dispatch({
-            "DBMS_METADATA": {"description": [("ddl",)], "rows": [("CREATE TABLE t (id NUMBER)",)]}
-        })
+        cursor = make_cursor_dispatch(
+            {
+                "DBMS_METADATA": {
+                    "description": [("ddl",)],
+                    "rows": [("CREATE TABLE t (id NUMBER)",)],
+                }
+            }
+        )
         result = _collect_ddl(cursor, "HR", "T", _make_ctx())
         assert result == "CREATE TABLE t (id NUMBER)"
 
     def test_none_on_empty(self):
-        cursor = make_cursor_dispatch({
-            "DBMS_METADATA": {"description": [("ddl",)], "rows": []}
-        })
+        cursor = make_cursor_dispatch({"DBMS_METADATA": {"description": [("ddl",)], "rows": []}})
         result = _collect_ddl(cursor, "HR", "T", _make_ctx())
         assert result is None
 
@@ -488,12 +509,14 @@ class TestCollectTableStats:
     """Testes de _collect_table_stats."""
 
     def test_returns_dict(self):
-        cursor = make_cursor_dispatch({
-            "all_tables": {
-                "description": [("num_rows",), ("blocks",)],
-                "rows": [(1000, 50)],
+        cursor = make_cursor_dispatch(
+            {
+                "all_tables": {
+                    "description": [("num_rows",), ("blocks",)],
+                    "rows": [(1000, 50)],
+                }
             }
-        })
+        )
         result = _collect_table_stats(cursor, "HR", "T", _make_ctx())
         assert result == {"num_rows": 1000, "blocks": 50}
 
@@ -514,12 +537,14 @@ class TestCollectColumnStats:
     """Testes de _collect_column_stats."""
 
     def test_returns_list(self):
-        cursor = make_cursor_dispatch({
-            "all_tab_col": {
-                "description": [("column_name",), ("data_type",)],
-                "rows": [("ID", "NUMBER"), ("NAME", "VARCHAR2")],
+        cursor = make_cursor_dispatch(
+            {
+                "all_tab_col": {
+                    "description": [("column_name",), ("data_type",)],
+                    "rows": [("ID", "NUMBER"), ("NAME", "VARCHAR2")],
+                }
             }
-        })
+        )
         result = _collect_column_stats(cursor, "HR", "T", _make_ctx())
         assert len(result) == 2
 
@@ -535,12 +560,14 @@ class TestCollectIndexes:
     """Testes de _collect_indexes."""
 
     def test_returns_list(self):
-        cursor = make_cursor_dispatch({
-            "all_indexes": {
-                "description": [("index_name",), ("index_type",)],
-                "rows": [("PK_T", "NORMAL")],
+        cursor = make_cursor_dispatch(
+            {
+                "all_indexes": {
+                    "description": [("index_name",), ("index_type",)],
+                    "rows": [("PK_T", "NORMAL")],
+                }
             }
-        })
+        )
         result = _collect_indexes(cursor, "HR", "T", _make_ctx())
         assert len(result) == 1
 
@@ -555,12 +582,14 @@ class TestCollectConstraints:
     """Testes de _collect_constraints."""
 
     def test_returns_list(self):
-        cursor = make_cursor_dispatch({
-            "all_constraints": {
-                "description": [("constraint_name",), ("constraint_type",)],
-                "rows": [("PK_T", "P")],
+        cursor = make_cursor_dispatch(
+            {
+                "all_constraints": {
+                    "description": [("constraint_name",), ("constraint_type",)],
+                    "rows": [("PK_T", "P")],
+                }
             }
-        })
+        )
         result = _collect_constraints(cursor, "HR", "T", _make_ctx())
         assert len(result) == 1
 
@@ -574,12 +603,14 @@ class TestCollectPartitions:
     """Testes de _collect_partitions."""
 
     def test_returns_list(self):
-        cursor = make_cursor_dispatch({
-            "all_tab_partitions": {
-                "description": [("partition_name",)],
-                "rows": [("P1",), ("P2",)],
+        cursor = make_cursor_dispatch(
+            {
+                "all_tab_partitions": {
+                    "description": [("partition_name",)],
+                    "rows": [("P1",), ("P2",)],
+                }
             }
-        })
+        )
         result = _collect_partitions(cursor, "HR", "T", _make_ctx())
         assert len(result) == 2
 
@@ -602,12 +633,14 @@ class TestCollectHistograms:
             {"column_name": "STATUS", "histogram": "FREQUENCY"},
             {"column_name": "ID", "histogram": "NONE"},
         ]
-        cursor = make_cursor_dispatch({
-            "all_tab_histograms": {
-                "description": [("endpoint_number",), ("endpoint_value",)],
-                "rows": [(1, 100), (2, 200)],
+        cursor = make_cursor_dispatch(
+            {
+                "all_tab_histograms": {
+                    "description": [("endpoint_number",), ("endpoint_value",)],
+                    "rows": [(1, 100), (2, 200)],
+                }
             }
-        })
+        )
         ctx = _make_ctx(parsed)
         result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx)
         assert "STATUS" in result
@@ -655,12 +688,14 @@ class TestCollectOptimizerParams:
     """Testes de _collect_optimizer_params."""
 
     def test_returns_name_value_dict(self):
-        cursor = make_cursor_dispatch({
-            "v$parameter": {
-                "description": [("name",), ("value",)],
-                "rows": [("optimizer_mode", "ALL_ROWS"), ("cursor_sharing", "EXACT")],
+        cursor = make_cursor_dispatch(
+            {
+                "v$parameter": {
+                    "description": [("name",), ("value",)],
+                    "rows": [("optimizer_mode", "ALL_ROWS"), ("cursor_sharing", "EXACT")],
+                }
             }
-        })
+        )
         ctx = _make_ctx()
         result = _collect_optimizer_params(cursor, ctx)
         assert result == {"optimizer_mode": "ALL_ROWS", "cursor_sharing": "EXACT"}
@@ -918,7 +953,7 @@ class TestCollectContextViews:
         assert ctx.tables[0].ddl is not None
 
     def test_view_expansion_populates_index_table_map(self):
-        ddl = 'CREATE VIEW v\nAS\nSELECT * FROM hr.orders'
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM hr.orders"
         parsed = ParsedSQL(
             raw_sql="SELECT * FROM v_orders",
             sql_type="SELECT",

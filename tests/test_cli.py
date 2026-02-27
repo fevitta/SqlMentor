@@ -24,8 +24,17 @@ def _make_parsed(schema="HR"):
     )
 
 
-def _make_ctx(parsed=None, *, errors=None, runtime_plan=None, runtime_stats=None,
-              tables=None, execution_plan=None, wait_events=None, optimizer_params=None):
+def _make_ctx(
+    parsed=None,
+    *,
+    errors=None,
+    runtime_plan=None,
+    runtime_stats=None,
+    tables=None,
+    execution_plan=None,
+    wait_events=None,
+    optimizer_params=None,
+):
     """CollectedContext mínimo para mocks."""
     if parsed is None:
         parsed = _make_parsed()
@@ -35,15 +44,25 @@ def _make_ctx(parsed=None, *, errors=None, runtime_plan=None, runtime_stats=None
         execution_plan=execution_plan or ["Plan hash value: 123"],
         runtime_plan=runtime_plan,
         runtime_stats=runtime_stats,
-        tables=tables or [
+        tables=tables
+        or [
             TableContext(
-                name="USERS", schema="HR", object_type="TABLE",
+                name="USERS",
+                schema="HR",
+                object_type="TABLE",
                 stats={"num_rows": 1000},
                 columns=[{"column_name": "ID", "data_type": "NUMBER", "nullable": "N"}],
-                indexes=[{"index_name": "PK_USERS", "index_type": "NORMAL",
-                          "uniqueness": "UNIQUE", "columns": "ID"}],
-                constraints=[{"constraint_name": "PK_USERS",
-                              "constraint_type": "P", "columns": "ID"}],
+                indexes=[
+                    {
+                        "index_name": "PK_USERS",
+                        "index_type": "NORMAL",
+                        "uniqueness": "UNIQUE",
+                        "columns": "ID",
+                    }
+                ],
+                constraints=[
+                    {"constraint_name": "PK_USERS", "constraint_type": "P", "columns": "ID"}
+                ],
             )
         ],
         optimizer_params=optimizer_params or {"optimizer_mode": "ALL_ROWS"},
@@ -51,9 +70,17 @@ def _make_ctx(parsed=None, *, errors=None, runtime_plan=None, runtime_stats=None
     )
 
 
-def _analyze_patches(monkeypatch, tmp_path, *, ctx=None, sql_text=None,
-                     connect_exc=None, collect_exc=None,
-                     is_normalized=False, format_output="# Report"):
+def _analyze_patches(
+    monkeypatch,
+    tmp_path,
+    *,
+    ctx=None,
+    sql_text=None,
+    connect_exc=None,
+    collect_exc=None,
+    is_normalized=False,
+    format_output="# Report",
+):
     """Configure common patches for analyze success tests.
 
     Returns dict of mock objects for assertion.
@@ -67,9 +94,7 @@ def _analyze_patches(monkeypatch, tmp_path, *, ctx=None, sql_text=None,
 
     mocks = {}
 
-    monkeypatch.setattr(
-        "sqlmentor.connector.resolve_connection", lambda name: name or "test"
-    )
+    monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
         lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
@@ -77,20 +102,14 @@ def _analyze_patches(monkeypatch, tmp_path, *, ctx=None, sql_text=None,
 
     mock_conn = MagicMock()
     if connect_exc:
-        monkeypatch.setattr(
-            "sqlmentor.connector.connect", MagicMock(side_effect=connect_exc)
-        )
+        monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(side_effect=connect_exc))
     else:
-        monkeypatch.setattr(
-            "sqlmentor.connector.connect", MagicMock(return_value=mock_conn)
-        )
+        monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(return_value=mock_conn))
     mocks["conn"] = mock_conn
 
     monkeypatch.setattr("sqlmentor.parser.parse_sql", lambda sql, **kw: _make_parsed())
     monkeypatch.setattr("sqlmentor.parser.is_normalized_sql", lambda sql: is_normalized)
-    monkeypatch.setattr(
-        "sqlmentor.parser.denormalize_sql", lambda sql, mode="literal": (sql, {})
-    )
+    monkeypatch.setattr("sqlmentor.parser.denormalize_sql", lambda sql, mode="literal": (sql, {}))
     monkeypatch.setattr("sqlmentor.parser.detect_sql_binds", lambda sql: set())
     monkeypatch.setattr("sqlmentor.parser.remap_bind_params", lambda bp, sb: bp)
     monkeypatch.setattr("sqlmentor.parser.parse_bind_values", lambda raw: raw)
@@ -101,9 +120,7 @@ def _analyze_patches(monkeypatch, tmp_path, *, ctx=None, sql_text=None,
             MagicMock(side_effect=collect_exc),
         )
     else:
-        monkeypatch.setattr(
-            "sqlmentor.collector.collect_context", MagicMock(return_value=ctx)
-        )
+        monkeypatch.setattr("sqlmentor.collector.collect_context", MagicMock(return_value=ctx))
 
     mock_to_md = MagicMock(return_value=format_output)
     mock_to_json = MagicMock(return_value='{"report": true}')
@@ -115,11 +132,19 @@ def _analyze_patches(monkeypatch, tmp_path, *, ctx=None, sql_text=None,
     return sql_file, out_file, mocks
 
 
-def _inspect_patches(monkeypatch, tmp_path, *, ctx=None,
-                     sql_text_row=None, runtime_plan_rows=None,
-                     runtime_stats_row=None, runtime_plan_exc=None,
-                     runtime_stats_exc=None, sql_not_found=False,
-                     format_output="# Report"):
+def _inspect_patches(
+    monkeypatch,
+    tmp_path,
+    *,
+    ctx=None,
+    sql_text_row=None,
+    runtime_plan_rows=None,
+    runtime_stats_row=None,
+    runtime_plan_exc=None,
+    runtime_stats_exc=None,
+    sql_not_found=False,
+    format_output="# Report",
+):
     """Configure common patches for inspect success tests."""
     out_file = tmp_path / "output.md"
     if ctx is None:
@@ -127,9 +152,7 @@ def _inspect_patches(monkeypatch, tmp_path, *, ctx=None,
 
     mocks = {}
 
-    monkeypatch.setattr(
-        "sqlmentor.connector.resolve_connection", lambda name: name or "test"
-    )
+    monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
         lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
@@ -154,6 +177,7 @@ def _inspect_patches(monkeypatch, tmp_path, *, ctx=None,
         # Make iteration raise on __iter__
         def _iter_raise(*a, **kw):
             raise runtime_plan_exc
+
         mock_cursor.__iter__ = MagicMock(side_effect=_iter_raise)
     elif runtime_plan_rows is not None:
         mock_cursor.__iter__ = MagicMock(return_value=iter(runtime_plan_rows))
@@ -177,9 +201,7 @@ def _inspect_patches(monkeypatch, tmp_path, *, ctx=None,
     else:
         mock_cursor.description = [("sql_id",), ("executions",)]
 
-    monkeypatch.setattr(
-        "sqlmentor.connector.connect", MagicMock(return_value=mock_conn)
-    )
+    monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(return_value=mock_conn))
     mocks["conn"] = mock_conn
     mocks["cursor"] = mock_cursor
 
@@ -202,9 +224,7 @@ def _inspect_patches(monkeypatch, tmp_path, *, ctx=None,
         # collect_context won't be called
         pass
     else:
-        monkeypatch.setattr(
-            "sqlmentor.collector.collect_context", MagicMock(return_value=ctx)
-        )
+        monkeypatch.setattr("sqlmentor.collector.collect_context", MagicMock(return_value=ctx))
 
     mock_to_md = MagicMock(return_value=format_output)
     mock_to_json = MagicMock(return_value='{"report": true}')
@@ -294,9 +314,7 @@ class TestResolveInput:
 class TestParseExtended:
     def test_auto_detect_normalized(self, monkeypatch):
         """is_normalized_sql True → 'normalizado detectado' in output."""
-        monkeypatch.setattr(
-            "sqlmentor.parser.is_normalized_sql", lambda sql: True
-        )
+        monkeypatch.setattr("sqlmentor.parser.is_normalized_sql", lambda sql: True)
         result = runner.invoke(
             app,
             ["parse", "--sql", "SELECT * FROM t WHERE a = ?"],
@@ -313,6 +331,7 @@ class TestParseExtended:
             is_parseable=True,
             parse_errors=["Token inesperado: BROKEN"],
         )
+
         def _mock_parse(sql, **kw):
             return parsed_with_errors
 
@@ -367,9 +386,16 @@ class TestConfigListWithConnections:
         """List shows table with host/port/service."""
         monkeypatch.setattr(
             "sqlmentor.connector.list_connections",
-            lambda: {"prod": {"host": "db1.example.com", "port": 1521,
-                              "service": "ORCL", "user": "app", "schema": "APP",
-                              "timeout": 180}},
+            lambda: {
+                "prod": {
+                    "host": "db1.example.com",
+                    "port": 1521,
+                    "service": "ORCL",
+                    "user": "app",
+                    "schema": "APP",
+                    "timeout": 180,
+                }
+            },
         )
         monkeypatch.setattr("sqlmentor.connector.get_default_connection", lambda: None)
         result = runner.invoke(app, ["config", "list"])
@@ -381,8 +407,16 @@ class TestConfigListWithConnections:
         """Default connection shows ★."""
         monkeypatch.setattr(
             "sqlmentor.connector.list_connections",
-            lambda: {"prod": {"host": "db1", "port": 1521, "service": "ORCL",
-                              "user": "app", "schema": "APP", "timeout": 180}},
+            lambda: {
+                "prod": {
+                    "host": "db1",
+                    "port": 1521,
+                    "service": "ORCL",
+                    "user": "app",
+                    "schema": "APP",
+                    "timeout": 180,
+                }
+            },
         )
         monkeypatch.setattr("sqlmentor.connector.get_default_connection", lambda: "prod")
         result = runner.invoke(app, ["config", "list"])
@@ -393,9 +427,7 @@ class TestConfigListWithConnections:
 class TestConfigSetDefault:
     def test_set_default_success(self, monkeypatch):
         """Name exists → 'definida como padrão'."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.set_default_connection", lambda name: None
-        )
+        monkeypatch.setattr("sqlmentor.connector.set_default_connection", lambda name: None)
         result = runner.invoke(app, ["config", "set-default", "--name", "prod"])
         assert result.exit_code == 0
         assert "definida como padrão" in result.output.lower()
@@ -446,16 +478,34 @@ class TestConfigAdd:
         else:
             monkeypatch.setattr(
                 "sqlmentor.connector.diagnose_connection",
-                lambda name: diagnose_result or {
-                    "version": "Oracle 19c", "schema": "HR",
-                    "mode": "thin", "major_version": "19",
-                },
+                lambda name: (
+                    diagnose_result
+                    or {
+                        "version": "Oracle 19c",
+                        "schema": "HR",
+                        "mode": "thin",
+                        "major_version": "19",
+                    }
+                ),
             )
         return runner.invoke(
             app,
-            ["config", "add", "--name", "t", "--host", "h",
-             "--port", "1521", "--service", "s", "--user", "u",
-             "--password", "p"],
+            [
+                "config",
+                "add",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--port",
+                "1521",
+                "--service",
+                "s",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
         )
 
     def test_validation_success(self, monkeypatch):
@@ -467,18 +517,21 @@ class TestConfigAdd:
 
     def test_validation_oracle_old_thick(self, monkeypatch):
         """major < 12 + thick → 'tudo certo'."""
-        result = self._add_cmd(monkeypatch, diagnose_result={
-            "version": "Oracle 11g", "schema": "HR",
-            "mode": "thick", "major_version": "11",
-        })
+        result = self._add_cmd(
+            monkeypatch,
+            diagnose_result={
+                "version": "Oracle 11g",
+                "schema": "HR",
+                "mode": "thick",
+                "major_version": "11",
+            },
+        )
         assert result.exit_code == 0
         assert "tudo certo" in result.output.lower()
 
     def test_validation_failure(self, monkeypatch):
         """diagnose raises Exception → 'validação falhou'."""
-        result = self._add_cmd(
-            monkeypatch, diagnose_exc=Exception("ORA-12541")
-        )
+        result = self._add_cmd(monkeypatch, diagnose_exc=Exception("ORA-12541"))
         assert result.exit_code == 0  # connection saved, validation warning
         assert "validação falhou" in result.output.lower()
 
@@ -486,9 +539,7 @@ class TestConfigAdd:
 class TestConfigRemove:
     def test_remove_existing(self, monkeypatch):
         """remove_connection True → 'removida'."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.remove_connection", lambda name: True
-        )
+        monkeypatch.setattr("sqlmentor.connector.remove_connection", lambda name: True)
         result = runner.invoke(app, ["config", "remove", "--name", "prod"])
         assert result.exit_code == 0
         assert "removida" in result.output.lower()
@@ -544,8 +595,12 @@ class TestDoctorExtended:
         )
         monkeypatch.setattr(
             "sqlmentor.connector.diagnose_connection",
-            lambda name: {"version": "Oracle 19c", "schema": "HR",
-                          "mode": "thin", "major_version": "19"},
+            lambda name: {
+                "version": "Oracle 19c",
+                "schema": "HR",
+                "mode": "thin",
+                "major_version": "19",
+            },
         )
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
@@ -603,9 +658,11 @@ class TestPrintSummary:
 
     def test_view_not_expanded(self, monkeypatch, tmp_path):
         """VIEW without ddl/columns → 'skip' in summary."""
-        ctx = _make_ctx(tables=[
-            TableContext(name="V_ACTIVE", schema="HR", object_type="VIEW"),
-        ])
+        ctx = _make_ctx(
+            tables=[
+                TableContext(name="V_ACTIVE", schema="HR", object_type="VIEW"),
+            ]
+        )
         sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path, ctx=ctx)
         result = runner.invoke(
             app,
@@ -647,8 +704,16 @@ class TestAnalyzeSuccess:
         out_file = tmp_path / "output.json"
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "--format", "json", "--output", str(out_file)],
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "--format",
+                "json",
+                "--output",
+                str(out_file),
+            ],
         )
         assert result.exit_code == 0
         mocks["to_json"].assert_called_once()
@@ -658,8 +723,7 @@ class TestAnalyzeSuccess:
         sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "--verbose", "--output", str(out_file)],
+            ["analyze", str(sql_file), "--conn", "test", "--verbose", "--output", str(out_file)],
         )
         assert result.exit_code == 0
         assert "SQL Tuning Context" in result.output
@@ -671,17 +735,14 @@ class TestAnalyzeSuccess:
         custom_out.parent.mkdir(parents=True)
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "--output", str(custom_out)],
+            ["analyze", str(sql_file), "--conn", "test", "--output", str(custom_out)],
         )
         assert result.exit_code == 0
         assert custom_out.exists()
 
     def test_normalized_auto_detect(self, monkeypatch, tmp_path):
         """is_normalized_sql True → 'normalizado detectado' in output."""
-        sql_file, out_file, _mocks = _analyze_patches(
-            monkeypatch, tmp_path, is_normalized=True
-        )
+        sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path, is_normalized=True)
         result = runner.invoke(
             app,
             ["analyze", str(sql_file), "--conn", "test", "--output", str(out_file)],
@@ -694,8 +755,16 @@ class TestAnalyzeSuccess:
         sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "--normalized", "--execute", "--output", str(out_file)],
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "--normalized",
+                "--execute",
+                "--output",
+                str(out_file),
+            ],
         )
         assert result.exit_code == 1
         assert "incompatível" in result.output.lower() or "normalizado" in result.output.lower()
@@ -711,23 +780,30 @@ class TestAnalyzeSuccess:
         )
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "-b", "name=john", "-b", "id=1", "--output", str(out_file)],
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "-b",
+                "name=john",
+                "-b",
+                "id=1",
+                "--output",
+                str(out_file),
+            ],
         )
         assert result.exit_code == 0
 
     def test_missing_binds_warning(self, monkeypatch, tmp_path):
         """--execute + missing bind → warning, execute=False."""
         sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
-        monkeypatch.setattr(
-            "sqlmentor.parser.detect_sql_binds", lambda sql: {"id_param"}
-        )
+        monkeypatch.setattr("sqlmentor.parser.detect_sql_binds", lambda sql: {"id_param"})
         # remap returns empty dict (no binds provided)
         monkeypatch.setattr("sqlmentor.parser.remap_bind_params", lambda bp, sb: {})
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "--execute", "--output", str(out_file)],
+            ["analyze", str(sql_file), "--conn", "test", "--execute", "--output", str(out_file)],
         )
         assert result.exit_code == 0
         assert "binds não informados" in result.output.lower()
@@ -777,8 +853,16 @@ class TestAnalyzeErrors:
         sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app,
-            ["analyze", str(sql_file), "--conn", "test",
-             "-b", "badformat", "--output", str(out_file)],
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "-b",
+                "badformat",
+                "--output",
+                str(out_file),
+            ],
         )
         assert result.exit_code == 1
         assert "bind inválido" in result.output.lower()
@@ -800,9 +884,7 @@ class TestInspectSuccess:
 
     def test_sql_not_found(self, monkeypatch, tmp_path):
         """cursor.fetchone() → None → exit 1, 'não encontrado'."""
-        out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path, sql_not_found=True
-        )
+        out_file, _mocks = _inspect_patches(monkeypatch, tmp_path, sql_not_found=True)
         result = runner.invoke(
             app,
             ["inspect", "abc123", "--conn", "test", "--output", str(out_file)],
@@ -813,7 +895,8 @@ class TestInspectSuccess:
     def test_runtime_plan_collected(self, monkeypatch, tmp_path):
         """cursor returns plan lines → ctx.runtime_plan populated."""
         out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             runtime_plan_rows=[("Plan line 1",), ("Plan line 2",)],
         )
         result = runner.invoke(
@@ -826,7 +909,8 @@ class TestInspectSuccess:
     def test_runtime_plan_failure_continues(self, monkeypatch, tmp_path):
         """Plan query exception → warning, continues."""
         out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             runtime_plan_exc=Exception("ORA-06502"),
         )
         result = runner.invoke(
@@ -839,7 +923,8 @@ class TestInspectSuccess:
     def test_runtime_stats_collected(self, monkeypatch, tmp_path):
         """cursor returns stats row → ctx.runtime_stats populated."""
         out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             runtime_stats_row=("abc123", 5),
         )
         result = runner.invoke(
@@ -851,7 +936,8 @@ class TestInspectSuccess:
     def test_runtime_stats_failure_continues(self, monkeypatch, tmp_path):
         """Stats query exception → warning, continues."""
         out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path,
+            monkeypatch,
+            tmp_path,
             runtime_stats_exc=Exception("ORA-01031"),
         )
         result = runner.invoke(
@@ -867,8 +953,7 @@ class TestInspectSuccess:
         out_file = tmp_path / "output.json"
         result = runner.invoke(
             app,
-            ["inspect", "abc123", "--conn", "test",
-             "--format", "json", "--output", str(out_file)],
+            ["inspect", "abc123", "--conn", "test", "--format", "json", "--output", str(out_file)],
         )
         assert result.exit_code == 0
         mocks["to_json"].assert_called_once()

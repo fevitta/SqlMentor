@@ -241,9 +241,14 @@ class TestInitThickMode:
         original = connector_mod._thick_mode_initialized
         try:
             connector_mod._thick_mode_initialized = False
-            with patch.object(
-                oracledb, "init_oracle_client", side_effect=oracledb.ProgrammingError("not found")
-            ), pytest.raises(RuntimeError, match="Oracle Instant Client"):
+            with (
+                patch.object(
+                    oracledb,
+                    "init_oracle_client",
+                    side_effect=oracledb.ProgrammingError("not found"),
+                ),
+                pytest.raises(RuntimeError, match="Oracle Instant Client"),
+            ):
                 _init_thick_mode_if_available()
         finally:
             connector_mod._thick_mode_initialized = original
@@ -349,9 +354,7 @@ class TestCheckThickMode:
         original = connector_mod._thick_mode_initialized
         try:
             connector_mod._thick_mode_initialized = False
-            with patch.object(
-                oracledb, "init_oracle_client", side_effect=Exception("not found")
-            ):
+            with patch.object(oracledb, "init_oracle_client", side_effect=Exception("not found")):
                 result = check_thick_mode_available()
                 assert result["available"] == "False"
         finally:

@@ -10,12 +10,8 @@ from sqlmentor.report import (
 
 # ─── Linha ALLSTATS reutilizável ─────────────────────────────────────────────
 
-_ALLSTATS_LINE = (
-    "|*  3 |   INDEX RANGE SCAN           | IDX_ORD_USER   |    100 |     10 |    100 |00:00:00.01 |     300 |    50 |"
-)
-_ALLSTATS_LINE_EMPTY_EROWS = (
-    "|   0 | SELECT STATEMENT             |                |      1 |        |     50 |00:00:00.26 |   10919 |     0 |"
-)
+_ALLSTATS_LINE = "|*  3 |   INDEX RANGE SCAN           | IDX_ORD_USER   |    100 |     10 |    100 |00:00:00.01 |     300 |    50 |"
+_ALLSTATS_LINE_EMPTY_EROWS = "|   0 | SELECT STATEMENT             |                |      1 |        |     50 |00:00:00.26 |   10919 |     0 |"
 
 
 # ─── _parse_plan_operations ──────────────────────────────────────────────────
@@ -109,7 +105,7 @@ class TestExtractImplicitConversions:
         lines = [
             "Predicate Information (identified by operation id):",
             "---------------------------------------------------",
-            '   1 - access(TO_CHAR("COL1")=\'ABC\')',
+            "   1 - access(TO_CHAR(\"COL1\")='ABC')",
             '   2 - filter(TO_DATE("COL2")>SYSDATE)',
         ]
         result = _extract_implicit_conversions(lines)

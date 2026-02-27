@@ -220,7 +220,9 @@ class TestMCPAnalyzeSqlNormalized:
             patches["to_markdown"],
             patch("sqlmentor.parser.denormalize_sql", return_value=("SELECT 1", {})) as mock_denorm,
         ):
-            analyze_sql("SELECT * FROM t WHERE a = ?", conn="dev", normalized=True, denorm_mode="bind")
+            analyze_sql(
+                "SELECT * FROM t WHERE a = ?", conn="dev", normalized=True, denorm_mode="bind"
+            )
             mock_denorm.assert_called_once_with("SELECT * FROM t WHERE a = ?", mode="bind")
 
 
@@ -444,9 +446,7 @@ class TestMCPInspectSqlSuccess:
     def test_runtime_plan_collected(self, tmp_connections_file):
         """runtime_plan query retorna linhas → ctx.runtime_plan populado."""
         ctx = _make_mock_ctx()
-        patches, _mock_conn, _mock_cursor, _ = _setup_inspect_patches(
-            tmp_connections_file, ctx=ctx
-        )
+        patches, _mock_conn, _mock_cursor, _ = _setup_inspect_patches(tmp_connections_file, ctx=ctx)
         with (
             patches["connect"],
             patches["collect"],
@@ -496,9 +496,7 @@ class TestMCPInspectSqlSuccess:
     def test_runtime_stats_collected(self, tmp_connections_file):
         """sql_runtime_stats retorna row → ctx.runtime_stats populado."""
         ctx = _make_mock_ctx()
-        patches, _mock_conn, _mock_cursor, _ = _setup_inspect_patches(
-            tmp_connections_file, ctx=ctx
-        )
+        patches, _mock_conn, _mock_cursor, _ = _setup_inspect_patches(tmp_connections_file, ctx=ctx)
         with (
             patches["connect"],
             patches["collect"],
@@ -512,9 +510,7 @@ class TestMCPInspectSqlSuccess:
         ctx = _make_mock_ctx()
         exec_count = [0]
 
-        patches, _mock_conn, mock_cursor, _ = _setup_inspect_patches(
-            tmp_connections_file, ctx=ctx
-        )
+        patches, _mock_conn, mock_cursor, _ = _setup_inspect_patches(tmp_connections_file, ctx=ctx)
 
         def custom_execute(sql, params=None):
             exec_count[0] += 1

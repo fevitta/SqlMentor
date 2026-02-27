@@ -25,38 +25,46 @@ class TestFormatTableStats:
         assert "**Blocks:** 50" in result
 
     def test_with_avg_row_len_and_last_analyzed(self):
-        result = _format_table_stats({
-            "num_rows": 500,
-            "blocks": 10,
-            "avg_row_len": 120,
-            "last_analyzed": "2025-06-15",
-        })
+        result = _format_table_stats(
+            {
+                "num_rows": 500,
+                "blocks": 10,
+                "avg_row_len": 120,
+                "last_analyzed": "2025-06-15",
+            }
+        )
         assert "**Avg Row Len:** 120" in result
         assert "**Last Analyzed:** 2025-06-15" in result
 
     def test_sample_size_warning(self):
-        result = _format_table_stats({
-            "num_rows": 100_000,
-            "sample_size": 5_000,
-        })
+        result = _format_table_stats(
+            {
+                "num_rows": 100_000,
+                "sample_size": 5_000,
+            }
+        )
         assert "**Sample Size:**" in result
         assert "⚠️" in result  # 5% < 10%
 
     def test_sample_size_no_warning(self):
-        result = _format_table_stats({
-            "num_rows": 100_000,
-            "sample_size": 50_000,
-        })
+        result = _format_table_stats(
+            {
+                "num_rows": 100_000,
+                "sample_size": 50_000,
+            }
+        )
         assert "**Sample Size:**" in result
         assert "⚠️" not in result  # 50% >= 10%
 
     def test_partitioned_compression_degree(self):
-        result = _format_table_stats({
-            "num_rows": 1000,
-            "partitioned": "YES",
-            "compression": "ENABLED",
-            "degree": "4",
-        })
+        result = _format_table_stats(
+            {
+                "num_rows": 1000,
+                "partitioned": "YES",
+                "compression": "ENABLED",
+                "degree": "4",
+            }
+        )
         assert "**Partitioned:** YES" in result
         assert "**Compression:** ENABLED" in result
         assert "**Parallel Degree:** 4" in result
@@ -68,10 +76,23 @@ class TestFormatTableStats:
 class TestFormatColumnStats:
     def test_basic_columns(self):
         cols = [
-            {"column_name": "ID", "data_type": "NUMBER", "nullable": "N",
-             "num_distinct": 1000, "num_nulls": 0, "histogram": "NONE"},
-            {"column_name": "NAME", "data_type": "VARCHAR2", "data_length": "100",
-             "nullable": "Y", "num_distinct": 500, "num_nulls": 10, "histogram": "FREQUENCY"},
+            {
+                "column_name": "ID",
+                "data_type": "NUMBER",
+                "nullable": "N",
+                "num_distinct": 1000,
+                "num_nulls": 0,
+                "histogram": "NONE",
+            },
+            {
+                "column_name": "NAME",
+                "data_type": "VARCHAR2",
+                "data_length": "100",
+                "nullable": "Y",
+                "num_distinct": 500,
+                "num_nulls": 10,
+                "histogram": "FREQUENCY",
+            },
         ]
         result = _format_column_stats(cols)
         assert "| Coluna | Tipo |" in result
@@ -80,16 +101,29 @@ class TestFormatColumnStats:
 
     def test_varchar_with_length(self):
         cols = [
-            {"column_name": "DESCR", "data_type": "VARCHAR2", "data_length": "200",
-             "nullable": "Y", "num_distinct": 50, "num_nulls": 0, "histogram": "NONE"},
+            {
+                "column_name": "DESCR",
+                "data_type": "VARCHAR2",
+                "data_length": "200",
+                "nullable": "Y",
+                "num_distinct": 50,
+                "num_nulls": 0,
+                "histogram": "NONE",
+            },
         ]
         result = _format_column_stats(cols)
         assert "VARCHAR2(200)" in result
 
     def test_fk_column_shown(self):
         cols = [
-            {"column_name": "USER_ID", "data_type": "NUMBER",
-             "nullable": "N", "num_distinct": 100, "num_nulls": 0, "histogram": "NONE"},
+            {
+                "column_name": "USER_ID",
+                "data_type": "NUMBER",
+                "nullable": "N",
+                "num_distinct": 100,
+                "num_nulls": 0,
+                "histogram": "NONE",
+            },
         ]
         fk_map = {"USER_ID": "HR.USERS"}
         result = _format_column_stats(cols, fk_map)
@@ -210,8 +244,18 @@ class TestBuildFkMap:
 class TestFormatPartitions:
     def test_basic(self):
         parts = [
-            {"partition_name": "P2024", "partition_position": 1, "num_rows": 100_000, "last_analyzed": "2025-01-01"},
-            {"partition_name": "P2025", "partition_position": 2, "num_rows": 200_000, "last_analyzed": "2025-06-01"},
+            {
+                "partition_name": "P2024",
+                "partition_position": 1,
+                "num_rows": 100_000,
+                "last_analyzed": "2025-01-01",
+            },
+            {
+                "partition_name": "P2025",
+                "partition_position": 2,
+                "num_rows": 200_000,
+                "last_analyzed": "2025-06-01",
+            },
         ]
         result = _format_partitions(parts)
         assert "| P2024 |" in result
@@ -281,7 +325,14 @@ class TestFormatRuntimeStats:
 
 class TestFormatWaitEvents:
     def test_basic(self):
-        events = [{"event": "db file sequential read", "total_waits": 100, "time_waited_ms": 25.0, "average_wait": 0.25}]
+        events = [
+            {
+                "event": "db file sequential read",
+                "total_waits": 100,
+                "time_waited_ms": 25.0,
+                "average_wait": 0.25,
+            }
+        ]
         result = _format_wait_events(events)
         assert "| db file sequential read |" in result
 
@@ -291,7 +342,11 @@ class TestFormatWaitEvents:
             {"event": "event2", "total_waits": 20, "time_waited_ms": 10.0, "average_wait": 0.5},
         ]
         result = _format_wait_events(events)
-        data_lines = [line for line in result.split("\n") if line.startswith("|") and "Event" not in line and "---" not in line]
+        data_lines = [
+            line
+            for line in result.split("\n")
+            if line.startswith("|") and "Event" not in line and "---" not in line
+        ]
         assert len(data_lines) == 2
 
 
@@ -328,7 +383,9 @@ class TestFormatOptimizerParams:
 class TestFormatSmallTable:
     def test_basic(self):
         table = TableContext(
-            name="LOOKUP", schema="HR", object_type="TABLE",
+            name="LOOKUP",
+            schema="HR",
+            object_type="TABLE",
             stats={"num_rows": 50, "blocks": 1},
         )
         result = _format_small_table(table)
@@ -337,11 +394,18 @@ class TestFormatSmallTable:
 
     def test_with_pk_and_fk(self):
         table = TableContext(
-            name="ORDER_ITEMS", schema="HR", object_type="TABLE",
+            name="ORDER_ITEMS",
+            schema="HR",
+            object_type="TABLE",
             stats={"num_rows": 200, "blocks": 3},
             indexes=[{"uniqueness": "UNIQUE", "columns": "ITEM_ID"}],
             constraints=[
-                {"constraint_type": "R", "columns": "ORDER_ID", "r_owner": "HR", "r_table_name": "ORDERS"},
+                {
+                    "constraint_type": "R",
+                    "columns": "ORDER_ID",
+                    "r_owner": "HR",
+                    "r_table_name": "ORDERS",
+                },
             ],
         )
         result = _format_small_table(table)
