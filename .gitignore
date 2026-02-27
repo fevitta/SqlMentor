@@ -9,8 +9,9 @@ build/
 # Hypothesis (property-based testing)
 .hypothesis/
 
-# Pytest
+# Pytest / Coverage
 .pytest_cache/
+.coverage
 
 # Virtual environments
 .venv/
