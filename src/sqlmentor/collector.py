@@ -348,7 +348,7 @@ def _inline_binds(sql_text: str, bind_params: dict | None) -> str:
             if k.upper() == name.upper():
                 if v is None:
                     return "NULL"
-                if isinstance(v, (int, float)):
+                if isinstance(v, int | float):
                     return str(v)
                 # String: escapa aspas simples
                 return f"'{str(v).replace(chr(39), chr(39) + chr(39))}'"

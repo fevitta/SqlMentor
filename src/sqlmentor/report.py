@@ -302,7 +302,6 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
     group_root_ids: list[str] = []
 
     def _flush_group():
-
         nonlocal group, group_root_ids
 
         if len(group_root_ids) >= 3:
@@ -381,7 +380,6 @@ def _collapse_situation_history(
     group_entries: list[tuple[PlanBlock, list[PlanBlock]]] = []
 
     def _flush():
-
         nonlocal group_entries
 
         if len(group_entries) >= 2:
@@ -1666,7 +1664,6 @@ def to_json(ctx: CollectedContext) -> str:
 
 
 def _table_to_dict(table: TableContext) -> dict[str, Any]:
-
     return {
         "schema": table.schema,
         "name": table.name,
@@ -1689,14 +1686,14 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     if stats.get("num_rows") is not None:
         parts.append(
             f"**Rows:** {stats['num_rows']:,}"
-            if isinstance(stats["num_rows"], (int, float))
+            if isinstance(stats["num_rows"], int | float)
             else f"**Rows:** {stats['num_rows']}"
         )
 
     if stats.get("blocks"):
         parts.append(
             f"**Blocks:** {stats['blocks']:,}"
-            if isinstance(stats["blocks"], (int, float))
+            if isinstance(stats["blocks"], int | float)
             else f"**Blocks:** {stats['blocks']}"
         )
 
@@ -1717,7 +1714,7 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
 
         sample_str = (
             f"**Sample Size:** {sample:,} ({pct:.0f}%)"
-            if isinstance(sample, (int, float))
+            if isinstance(sample, int | float)
             else f"**Sample Size:** {sample}"
         )
 
@@ -1835,7 +1832,7 @@ def _format_indexes(idxs: list[dict[str, Any]]) -> str:
 
         # blevel > 3 é red flag
 
-        bl_str = f"{blevel} ⚠️" if isinstance(blevel, (int, float)) and blevel > 3 else str(blevel)
+        bl_str = f"{blevel} ⚠️" if isinstance(blevel, int | float) and blevel > 3 else str(blevel)
         lines.append(
             f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
         )

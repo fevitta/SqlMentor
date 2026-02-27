@@ -603,7 +603,6 @@ class TestDetectPlanBlocks:
     LINE_G = "|   1 | TABLE ACCESS FULL       | SOME_TABLE                   |     1 |  1000 |    500 |00:00:00.05 |      1G |       0 |"
 
     def test_simple_plan_order_and_fields(self):
-
         blocks = _detect_plan_blocks([self.LINE_1, self.LINE_2])
 
         assert len(blocks) == 2
@@ -639,7 +638,6 @@ class TestDetectPlanBlocks:
         assert b2.e_rows == 1
 
     def test_malformed_line_ignored(self):
-
         # Não deve levantar exceção; linha inválida é ignorada
 
         result = _detect_plan_blocks(["isso nao e uma linha de plano"])
@@ -649,7 +647,6 @@ class TestDetectPlanBlocks:
         assert len(result) == 0
 
     def test_buffers_suffix_K(self):
-
         blocks = _detect_plan_blocks([self.LINE_K])
 
         assert len(blocks) == 1
@@ -657,7 +654,6 @@ class TestDetectPlanBlocks:
         assert blocks[0].buffers == 10 * 1024  # 10K = 10240
 
     def test_buffers_suffix_M(self):
-
         blocks = _detect_plan_blocks([self.LINE_M])
 
         assert len(blocks) == 1
@@ -665,7 +661,6 @@ class TestDetectPlanBlocks:
         assert blocks[0].buffers == 2 * 1024 * 1024  # 2M = 2097152
 
     def test_buffers_suffix_G(self):
-
         blocks = _detect_plan_blocks([self.LINE_G])
 
         assert len(blocks) == 1
@@ -673,11 +668,9 @@ class TestDetectPlanBlocks:
         assert blocks[0].buffers == 1 * 1024 * 1024 * 1024  # 1G = 1073741824
 
     def test_empty_list_returns_empty(self):
-
         assert _detect_plan_blocks([]) == []
 
     def test_result_len_lte_input_len(self):
-
         lines = [self.LINE_1, self.LINE_2, "linha invalida", self.LINE_K]
 
         result = _detect_plan_blocks(lines)
@@ -685,7 +678,6 @@ class TestDetectPlanBlocks:
         assert len(result) <= len(lines)
 
     def test_numeric_fields_nonnegative(self):
-
         blocks = _detect_plan_blocks([self.LINE_1, self.LINE_2])
 
         for b in blocks:
@@ -727,7 +719,6 @@ def _make_block(**kwargs) -> PlanBlock:
 
 class TestApplyThresholds:
     def test_reads_gt_zero_sets_immune(self):
-
         b = _make_block(reads=1)
 
         _apply_thresholds([b])
@@ -735,7 +726,6 @@ class TestApplyThresholds:
         assert b.immune is True
 
     def test_reads_zero_not_immune_alone(self):
-
         b = _make_block(reads=0)
 
         _apply_thresholds([b])
@@ -743,7 +733,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_buffers_gt_1000_sets_immune(self):
-
         b = _make_block(buffers=1001)
 
         _apply_thresholds([b])
@@ -751,7 +740,6 @@ class TestApplyThresholds:
         assert b.immune is True
 
     def test_buffers_eq_1000_not_immune(self):
-
         # threshold é >, não >=
 
         b = _make_block(buffers=1000)
@@ -761,7 +749,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_starts_gt_100_sets_immune(self):
-
         b = _make_block(starts=101)
 
         _apply_thresholds([b])
@@ -769,7 +756,6 @@ class TestApplyThresholds:
         assert b.immune is True
 
     def test_starts_eq_100_not_immune(self):
-
         b = _make_block(starts=100)
 
         _apply_thresholds([b])
@@ -777,7 +763,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_atime_ms_gt_100_sets_immune(self):
-
         b = _make_block(a_time_ms=100.1)
 
         _apply_thresholds([b])
@@ -785,7 +770,6 @@ class TestApplyThresholds:
         assert b.immune is True
 
     def test_atime_ms_eq_100_not_immune(self):
-
         b = _make_block(a_time_ms=100.0)
 
         _apply_thresholds([b])
@@ -793,7 +777,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_cardinality_ratio_gt_10_sets_immune(self):
-
         # ratio = max(11,1)/min(11,1) = 11 > 10
 
         b = _make_block(e_rows=1, a_rows=11)
@@ -803,7 +786,6 @@ class TestApplyThresholds:
         assert b.immune is True
 
     def test_cardinality_ratio_eq_10_not_immune(self):
-
         # ratio = 10/1 = 10, não > 10
 
         b = _make_block(e_rows=1, a_rows=10)
@@ -813,7 +795,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_no_threshold_immune_false(self):
-
         b = _make_block()  # tudo zero/None
 
         _apply_thresholds([b])
@@ -821,7 +802,6 @@ class TestApplyThresholds:
         assert b.immune is False
 
     def test_any_threshold_sets_immune(self):
-
         b1 = _make_block(id="1", buffers=1001)
 
         b2 = _make_block(id="2", reads=0)
@@ -833,7 +813,6 @@ class TestApplyThresholds:
         assert b2.immune is False
 
     def test_mutation_in_place(self):
-
         b = _make_block()
 
         result = _apply_thresholds([b])
@@ -841,7 +820,6 @@ class TestApplyThresholds:
         assert result is None  # muta in-place, não retorna nada
 
     def test_e_rows_none_skips_cardinality(self):
-
         # e_rows=None não deve setar immune por cardinalidade
 
         b = _make_block(e_rows=None, a_rows=100)
@@ -897,7 +875,6 @@ def _make_config_fields_group(
 
 class TestCollapseConfigFields:
     def test_group_of_3_collapses(self):
-
         blocks = _make_config_fields_group(3)
 
         results = _collapse_config_fields(blocks)
@@ -911,7 +888,6 @@ class TestCollapseConfigFields:
         assert cr.replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_group_of_2_does_not_collapse(self):
-
         # 1 SORT AGGREGATE com apenas 1 filho INDEX → não atinge mínimo de 2 índices → não é candidato
 
         root = _make_block(id="1", operation="SORT AGGREGATE", starts=1, indent=0)
@@ -923,7 +899,6 @@ class TestCollapseConfigFields:
         assert results == []
 
     def test_immune_block_prevents_collapse(self):
-
         # Grupo de 3, mas o segundo root é imune
 
         blocks = _make_config_fields_group(3, immune_idx=1)
@@ -933,7 +908,6 @@ class TestCollapseConfigFields:
         assert results == []
 
     def test_replacement_contains_cost(self):
-
         blocks = _make_config_fields_group(3)
 
         # Adiciona buffers e reads para verificar custo no texto
@@ -952,7 +926,6 @@ class TestCollapseConfigFields:
         assert "buffers" in full_text.lower()
 
     def test_replacement_contains_warning(self):
-
         blocks = _make_config_fields_group(3)
 
         results = _collapse_config_fields(blocks)
@@ -1005,7 +978,6 @@ def _make_situation_history_group(
 
 class TestCollapseSituationHistory:
     def test_group_of_2_collapses(self):
-
         blocks = _make_situation_history_group(2)
 
         results = _collapse_situation_history(blocks, {})
@@ -1019,7 +991,6 @@ class TestCollapseSituationHistory:
         assert cr.replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_group_of_1_does_not_collapse(self):
-
         blocks = _make_situation_history_group(1)
 
         results = _collapse_situation_history(blocks, {})
@@ -1027,7 +998,6 @@ class TestCollapseSituationHistory:
         assert results == []
 
     def test_immune_block_prevents_collapse(self):
-
         # Grupo de 2, mas o primeiro root é imune
 
         blocks = _make_situation_history_group(2, immune_idx=0)
@@ -1037,7 +1007,6 @@ class TestCollapseSituationHistory:
         assert results == []
 
     def test_replacement_has_table_columns(self):
-
         blocks = _make_situation_history_group(2)
 
         results = _collapse_situation_history(blocks, {})
@@ -1051,7 +1020,6 @@ class TestCollapseSituationHistory:
         assert "| A-Rows |" in full_text
 
     def test_tps_referencia_fallback(self):
-
         # Sem predicate_map → coluna Filtro deve usar "?"
 
         blocks = _make_situation_history_group(2)
@@ -1070,7 +1038,6 @@ class TestCollapseSituationHistory:
 
 class TestCollapseVwUsuarioNull:
     def test_view_arows_zero_collapses(self):
-
         view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
 
         child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
@@ -1082,7 +1049,6 @@ class TestCollapseVwUsuarioNull:
         assert results[0].replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_view_arows_nonzero_does_not_collapse(self):
-
         view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=1, indent=0)
 
         child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
@@ -1092,7 +1058,6 @@ class TestCollapseVwUsuarioNull:
         assert results == []
 
     def test_immune_subtree_prevents_collapse(self):
-
         view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
 
         child = _make_block(
@@ -1104,7 +1069,6 @@ class TestCollapseVwUsuarioNull:
         assert results == []
 
     def test_view_without_name_collapses(self):
-
         # VIEW sem nome também deve ser colapsada — agnóstico ao nome
 
         view = _make_block(id="20", operation="VIEW", name="", a_rows=0, indent=0)
@@ -1118,7 +1082,6 @@ class TestCollapseVwUsuarioNull:
         assert results[0].replacement_lines[0].startswith("[COLAPSADO:")
 
     def test_replacement_contains_warning(self):
-
         view = _make_block(id="10", operation="VIEW", name="ANY_VIEW", a_rows=0, indent=0)
 
         child = _make_block(id="11", operation="TABLE ACCESS FULL", name="SOME_TABLE", indent=2)
@@ -1181,7 +1144,6 @@ class TestCollapseOrphanPredicates:
     PRED_5 = '   5 - access("X"=:B1)'
 
     def test_collapsed_ids_removes_predicate_lines(self):
-
         lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
 
         result = _collapse_orphan_predicates_by_ids(lines, {"2"})
@@ -1196,7 +1158,6 @@ class TestCollapseOrphanPredicates:
         assert "2" not in ids_in_result
 
     def test_non_collapsed_ids_preserved(self):
-
         lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3, self.PRED_5]
 
         result = _collapse_orphan_predicates_by_ids(lines, {"2"})
@@ -1213,14 +1174,12 @@ class TestCollapseOrphanPredicates:
         assert "5" in ids_in_result
 
     def test_empty_collapsed_ids_returns_unchanged(self):
-
         lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
 
         result = _collapse_orphan_predicates_by_ids(lines, set())
         assert result == lines
 
     def test_pruned_adds_note(self):
-
         lines = [self.PRED_HEADER, self.PRED_2, self.PRED_3]
 
         result = _collapse_orphan_predicates_by_ids(lines, {"2", "3"})
@@ -1244,7 +1203,6 @@ LINE_ID_5 = "|   5 | TABLE ACCESS FULL       | OTHER_TABLE                  |   
 
 class TestAddNonsequentialIdNote:
     def test_sequential_ids_no_note(self):
-
         lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_2, LINE_ID_3]
 
         result = _add_nonsequential_id_note(lines)
@@ -1252,7 +1210,6 @@ class TestAddNonsequentialIdNote:
         assert not any("IDs não sequenciais" in line for line in result)
 
     def test_nonsequential_ids_inserts_note(self):
-
         lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_3, LINE_ID_5]
 
         result = _add_nonsequential_id_note(lines)
@@ -1260,7 +1217,6 @@ class TestAddNonsequentialIdNote:
         assert any("IDs não sequenciais" in line for line in result)
 
     def test_note_position_after_plan_hash(self):
-
         lines = [PLAN_HASH_LINE, LINE_ID_1, LINE_ID_3]
 
         result = _add_nonsequential_id_note(lines)
@@ -1274,7 +1230,6 @@ class TestAddNonsequentialIdNote:
         assert note_idx == hash_idx + 1
 
     def test_no_plan_hash_line_no_note(self):
-
         # Sem linha "Plan hash value", nota não deve ser inserida
 
         lines = [LINE_ID_1, LINE_ID_3, LINE_ID_5]
@@ -1320,7 +1275,6 @@ def _make_config_fields_plan_lines(n_groups: int) -> list[str]:
 
 class TestCompressPlan:
     def test_full_verbosity_returns_unchanged(self):
-
         plan = _make_config_fields_plan_lines(3)
 
         preds = ['   1 - access("X"=:B1)']
@@ -1330,7 +1284,6 @@ class TestCompressPlan:
         assert result_preds == preds
 
     def test_no_parseable_lines_returns_original(self):
-
         plan = ["-- sem linhas parseáveis", "outra linha qualquer"]
 
         preds = []
@@ -1340,7 +1293,6 @@ class TestCompressPlan:
         assert result_preds == preds
 
     def test_collapsable_plan_removes_collapsed_ids(self):
-
         plan = _make_config_fields_plan_lines(3)
 
         result_plan, _preds = _compress_plan(plan, [], "compact")
@@ -1361,7 +1313,6 @@ class TestCompressPlan:
             assert id_val not in ids_in_result
 
     def test_each_collapse_result_emits_one_summary(self):
-
         plan = _make_config_fields_plan_lines(3)
 
         result_plan, _preds = _compress_plan(plan, [], "compact")
@@ -1418,14 +1369,12 @@ def _make_runtime_plan_with_collapses() -> list[str]:
 
 class TestToMarkdownVerbosity:
     def test_invalid_verbosity_raises_value_error(self):
-
         ctx = _make_minimal_ctx()
 
         with pytest.raises(ValueError, match="verbosity"):
             to_markdown(ctx, verbosity="verbose")
 
     def test_invalid_verbosity_message_lists_valid_values(self):
-
         ctx = _make_minimal_ctx()
 
         with pytest.raises(ValueError) as exc_info:
@@ -1440,7 +1389,6 @@ class TestToMarkdownVerbosity:
         assert "minimal" in msg
 
     def test_full_produces_no_colapsado_blocks(self):
-
         ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
 
         result = to_markdown(ctx, verbosity="full")
@@ -1448,7 +1396,6 @@ class TestToMarkdownVerbosity:
         assert "[COLAPSADO:" not in result
 
     def test_compact_produces_colapsado_blocks_for_complex_plan(self):
-
         ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
 
         result = to_markdown(ctx, verbosity="compact")
@@ -1456,7 +1403,6 @@ class TestToMarkdownVerbosity:
         assert "[COLAPSADO:" in result
 
     def test_minimal_has_no_execution_plan_section(self):
-
         ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
 
         result = to_markdown(ctx, verbosity="minimal")
@@ -1468,7 +1414,6 @@ class TestToMarkdownVerbosity:
         assert "Execution Plan" not in result
 
     def test_minimal_has_no_ddl(self):
-
         from sqlmentor.collector import TableContext
 
         table = TableContext(
@@ -1489,7 +1434,6 @@ class TestToMarkdownVerbosity:
         assert "CREATE TABLE" not in result
 
     def test_default_verbosity_is_compact(self):
-
         ctx = _make_minimal_ctx(runtime_plan=_make_runtime_plan_with_collapses())
 
         result_default = _strip_timestamps(to_markdown(ctx))
@@ -1498,19 +1442,16 @@ class TestToMarkdownVerbosity:
         assert result_default == result_compact
 
     def test_full_returns_string(self):
-
         ctx = _make_minimal_ctx()
 
         assert isinstance(to_markdown(ctx, verbosity="full"), str)
 
     def test_compact_returns_string(self):
-
         ctx = _make_minimal_ctx()
 
         assert isinstance(to_markdown(ctx, verbosity="compact"), str)
 
     def test_minimal_returns_string(self):
-
         ctx = _make_minimal_ctx()
 
         assert isinstance(to_markdown(ctx, verbosity="minimal"), str)
@@ -1667,7 +1608,6 @@ class TestIntegrationRealPlan:
     """
 
     def _load_plan_lines(self) -> list[str]:
-
         return _load_fixture("sample_plan.txt")
 
     # ─── Tarefa 13.2 — compact produz menos linhas que full ──────
