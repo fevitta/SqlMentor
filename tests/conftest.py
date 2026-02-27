@@ -101,6 +101,45 @@ def tmp_connections_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def parsed_with_view() -> ParsedSQL:
+    """ParsedSQL com VIEW referenciada."""
+    return ParsedSQL(
+        raw_sql="SELECT * FROM v_employees WHERE dept_id = 10",
+        sql_type="SELECT",
+        tables=[{"name": "V_EMPLOYEES", "schema": "HR", "alias": None}],
+        where_columns=["dept_id"],
+    )
+
+
+@pytest.fixture
+def parsed_two_tables() -> ParsedSQL:
+    """ParsedSQL com JOIN de 2 tabelas."""
+    return ParsedSQL(
+        raw_sql="SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id",
+        sql_type="SELECT",
+        tables=[
+            {"name": "USERS", "schema": "HR", "alias": "u"},
+            {"name": "ORDERS", "schema": "HR", "alias": "o"},
+        ],
+        join_columns=["id", "user_id"],
+    )
+
+
+@pytest.fixture
+def parsed_with_functions() -> ParsedSQL:
+    """ParsedSQL com funções PL/SQL."""
+    return ParsedSQL(
+        raw_sql="SELECT fn_calc(id), pkg_util.format(name) FROM users",
+        sql_type="SELECT",
+        tables=[{"name": "USERS", "schema": "HR", "alias": None}],
+        functions=[
+            {"schema": "HR", "name": "FN_CALC"},
+            {"schema": "HR", "name": "FORMAT"},
+        ],
+    )
+
+
+@pytest.fixture
 def mock_oracle_cursor():
     """Cursor Oracle mockado que retorna dados configuráveis."""
     cursor = MagicMock()
