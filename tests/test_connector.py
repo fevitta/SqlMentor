@@ -1,11 +1,17 @@
 """Testes para o módulo connector (CRUD de conexões, validação de privilégios)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import oracledb
 import pytest
 
+import sqlmentor.connector as connector_mod
 from sqlmentor.connector import (
+    _init_thick_mode_if_available,
     add_connection,
+    check_thick_mode_available,
+    connect,
+    diagnose_connection,
     get_connection_config,
     get_default_connection,
     list_connections,
@@ -14,6 +20,7 @@ from sqlmentor.connector import (
     set_default_connection,
     validate_privileges,
 )
+from sqlmentor.connector import test_connection as _test_connection
 
 # ─── CRUD de conexões ────────────────────────────────────────────────────────
 
@@ -201,3 +208,270 @@ class TestValidatePrivileges:
             validate_privileges(conn)
 
         cursor.close.assert_called_once()
+
+
+# ─── _init_thick_mode_if_available ──────────────────────────────────────────
+
+
+class TestInitThickMode:
+    def test_already_initialized_noop(self):
+        """Se flag já é True, retorna imediatamente sem chamar init_oracle_client."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = True
+            with patch.object(oracledb, "init_oracle_client") as mock_init:
+                _init_thick_mode_if_available()
+                mock_init.assert_not_called()
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+    def test_success_sets_flag(self):
+        """init_oracle_client OK → flag setada para True."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = False
+            with patch.object(oracledb, "init_oracle_client"):
+                _init_thick_mode_if_available()
+                assert connector_mod._thick_mode_initialized is True
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+    def test_programming_error_raises_runtime(self):
+        """ProgrammingError → RuntimeError com mensagem de Oracle Instant Client."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = False
+            with patch.object(
+                oracledb, "init_oracle_client", side_effect=oracledb.ProgrammingError("not found")
+            ), pytest.raises(RuntimeError, match="Oracle Instant Client"):
+                _init_thick_mode_if_available()
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+
+# ─── connect ────────────────────────────────────────────────────────────────
+
+
+class TestConnect:
+    def test_thin_mode_success(self, tmp_connections_file):
+        """Conexão thin funciona, timeout setado, validate_privileges chamado."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger", timeout=60)
+        mock_conn = MagicMock()
+        with (
+            patch.object(oracledb, "connect", return_value=mock_conn),
+            patch.object(oracledb, "makedsn", return_value="dsn_string"),
+            patch("sqlmentor.connector.validate_privileges"),
+        ):
+            result = connect("dev")
+            assert result is mock_conn
+            assert mock_conn.call_timeout == 60_000
+
+    def test_dpy3010_fallback_thick(self, tmp_connections_file):
+        """DPY-3010 na 1ª tentativa → thick mode → reconecta."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        err = oracledb.DatabaseError("DPY-3010: connections to older DB not supported")
+        with (
+            patch.object(oracledb, "connect", side_effect=[err, mock_conn]),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            patch("sqlmentor.connector._init_thick_mode_if_available") as mock_thick,
+            patch("sqlmentor.connector.validate_privileges"),
+        ):
+            result = connect("dev")
+            assert result is mock_conn
+            mock_thick.assert_called_once()
+
+    def test_other_db_error_raises(self, tmp_connections_file):
+        """Erro não-DPY-3010 → re-raise direto."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        err = oracledb.DatabaseError("ORA-12154: TNS error")
+        with (
+            patch.object(oracledb, "connect", side_effect=err),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            pytest.raises(oracledb.DatabaseError, match="ORA-12154"),
+        ):
+            connect("dev")
+
+    def test_privilege_error_closes_conn(self, tmp_connections_file):
+        """validate_privileges → PermissionError → conn.close() + re-raise."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        with (
+            patch.object(oracledb, "connect", return_value=mock_conn),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            patch("sqlmentor.connector.validate_privileges", side_effect=PermissionError("bad")),
+        ):
+            with pytest.raises(PermissionError, match="bad"):
+                connect("dev")
+            mock_conn.close.assert_called_once()
+
+    def test_timeout_from_config(self, tmp_connections_file):
+        """timeout=None usa valor do profile."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger", timeout=300)
+        mock_conn = MagicMock()
+        with (
+            patch.object(oracledb, "connect", return_value=mock_conn),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            patch("sqlmentor.connector.validate_privileges"),
+        ):
+            connect("dev", timeout=None)
+            assert mock_conn.call_timeout == 300_000
+
+
+# ─── check_thick_mode_available ─────────────────────────────────────────────
+
+
+class TestCheckThickMode:
+    def test_already_initialized(self):
+        """Flag True → retorna cached."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = True
+            result = check_thick_mode_available()
+            assert result["available"] == "True"
+            assert "já" in result["detail"].lower()
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+    def test_client_found(self):
+        """init_oracle_client OK → available=True."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = False
+            with patch.object(oracledb, "init_oracle_client"):
+                result = check_thick_mode_available()
+                assert result["available"] == "True"
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+    def test_client_not_found(self):
+        """Exception → available=False."""
+        original = connector_mod._thick_mode_initialized
+        try:
+            connector_mod._thick_mode_initialized = False
+            with patch.object(
+                oracledb, "init_oracle_client", side_effect=Exception("not found")
+            ):
+                result = check_thick_mode_available()
+                assert result["available"] == "False"
+        finally:
+            connector_mod._thick_mode_initialized = original
+
+
+# ─── test_connection ────────────────────────────────────────────────────────
+
+
+class TestTestConnection:
+    def test_success(self, tmp_connections_file):
+        """Mock cursor retorna version + schema → dict correto."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.side_effect = [("Oracle 19c",), ("HR",)]
+
+        with patch("sqlmentor.connector.connect", return_value=mock_conn):
+            result = _test_connection("dev")
+            assert result["status"] == "ok"
+            assert result["version"] == "Oracle 19c"
+            assert result["schema"] == "HR"
+            mock_conn.close.assert_called_once()
+
+    def test_conn_always_closed(self, tmp_connections_file):
+        """Mesmo com erro no cursor, conn.close() chamado."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = RuntimeError("DB error")
+
+        with patch("sqlmentor.connector.connect", return_value=mock_conn):
+            with pytest.raises(RuntimeError, match="DB error"):
+                _test_connection("dev")
+            mock_conn.close.assert_called_once()
+
+    def test_connect_called_with_name(self, tmp_connections_file):
+        """Verifica que connect() é chamado com o nome certo."""
+        add_connection("prod", "prodhost", 1521, "PROD", "app", "pass")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.side_effect = [("Oracle 19c",), ("PROD",)]
+
+        with patch("sqlmentor.connector.connect", return_value=mock_conn) as mock_connect:
+            _test_connection("prod")
+            mock_connect.assert_called_once_with("prod")
+
+
+# ─── diagnose_connection ────────────────────────────────────────────────────
+
+
+class TestDiagnoseConnection:
+    def test_thin_mode_success(self, tmp_connections_file):
+        """Retorna mode=thin, needs_thick=False, major_version extraído."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.side_effect = [
+            ("Oracle Database 19c Enterprise Edition",),
+            ("HR",),
+        ]
+        with (
+            patch.object(oracledb, "connect", return_value=mock_conn),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+        ):
+            result = diagnose_connection("dev")
+            assert result["status"] == "ok"
+            assert result["mode"] == "thin"
+            assert result["needs_thick"] == "False"
+            assert result["major_version"] == "19"
+            assert result["schema"] == "HR"
+            mock_conn.close.assert_called_once()
+
+    def test_dpy3010_fallback_thick(self, tmp_connections_file):
+        """DPY-3010 → thick mode → mode=thick, needs_thick=True."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.side_effect = [
+            ("Oracle Database 11g Release 11.2.0.4.0",),
+            ("SCOTT",),
+        ]
+        err = oracledb.DatabaseError("DPY-3010: connections to older DB not supported")
+        with (
+            patch.object(oracledb, "connect", side_effect=[err, mock_conn]),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            patch("sqlmentor.connector._init_thick_mode_if_available"),
+        ):
+            result = diagnose_connection("dev")
+            assert result["mode"] == "thick"
+            assert result["needs_thick"] == "True"
+            assert result["major_version"] == "11"
+
+    def test_other_error_raises(self, tmp_connections_file):
+        """Erro não-DPY-3010 → re-raise."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        err = oracledb.DatabaseError("ORA-12154: TNS error")
+        with (
+            patch.object(oracledb, "connect", side_effect=err),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+            pytest.raises(oracledb.DatabaseError, match="ORA-12154"),
+        ):
+            diagnose_connection("dev")
+
+    def test_conn_always_closed(self, tmp_connections_file):
+        """finally garante close mesmo com erro no cursor."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = RuntimeError("query failed")
+        with (
+            patch.object(oracledb, "connect", return_value=mock_conn),
+            patch.object(oracledb, "makedsn", return_value="dsn"),
+        ):
+            with pytest.raises(RuntimeError, match="query failed"):
+                diagnose_connection("dev")
+            mock_conn.close.assert_called_once()
