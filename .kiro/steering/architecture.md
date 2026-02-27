@@ -84,7 +84,7 @@ flowchart TD
     D --> E[_build_predicate_map → pred_map]
     E --> F[_collapse_config_fields R1 - recebe blocks]
     F --> G[_collapse_situation_history R2 - recebe blocks + pred_map]
-    G --> H[_collapse_vw_usuario_null R3 - recebe blocks]
+    G --> H[_collapse_view_zero_rows R3 - recebe blocks]
     H --> I{all_collapsed_ids vazio?}
     I -->|sim| J[_add_nonsequential_id_note R6]
     J --> RET2[retorna plan_lines original + predicate_lines original]
@@ -112,7 +112,7 @@ Um bloco com `immune=True` nunca é colapsado por nenhuma regra.
 |-------|--------|-----------------|----------------------|
 | R1 | `_collapse_config_fields` | `SORT AGGREGATE` (starts≤1) com ≥2 filhos INDEX SCAN consecutivos | ≥ 3 grupos consecutivos |
 | R2 | `_collapse_situation_history` | `SORT AGGREGATE` (starts≤1) com ≥2 filhos INDEX SCAN consecutivos | ≥ 2 grupos consecutivos |
-| R3 | `_collapse_vw_usuario_null` | `VIEW` com `a_rows == 0` (qualquer nome) | subárvore inteira sem imune |
+| R3 | `_collapse_view_zero_rows` | `VIEW` com `a_rows == 0` (qualquer nome) | subárvore inteira sem imune |
 | R4 | `_collapse_orphan_predicates_by_ids` | predicados de IDs colapsados por R1/R2/R3 | qualquer ID colapsado |
 | R6 | `_add_nonsequential_id_note` | salto > 1 entre IDs consecutivos | qualquer salto |
 
