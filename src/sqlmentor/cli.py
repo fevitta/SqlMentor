@@ -365,7 +365,7 @@ def inspect(
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
             oracle_conn.close()
             raise typer.Exit(1)
-        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])
+        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
     except Exception as e:
         if "não encontrado" in str(e) or "Exit" in type(e).__name__:
             raise

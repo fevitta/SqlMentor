@@ -318,7 +318,7 @@ def inspect_sql(
                     "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
                 }
             )
-        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])
+        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
     except Exception as e:
         oracle_conn.close()
         return json.dumps({"error": f"Erro ao buscar SQL: {e}"})

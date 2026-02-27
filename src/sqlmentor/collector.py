@@ -94,7 +94,7 @@ def collect_context(
     expand_views: bool = False,
     expand_functions: bool = False,
     execute: bool = False,
-    bind_params: dict[str, str] | None = None,
+    bind_params: dict[str, str | int | float | None] | None = None,
 ) -> CollectedContext:
     """
     Coleta todo o contexto necessário para análise de SQL.
@@ -249,7 +249,7 @@ def _detect_object_type(
         sql, params = object_type(schema, name)
         rows = _execute_query(cursor, sql, params)
         if rows:
-            return rows[0].get("object_type", "TABLE")
+            return str(rows[0].get("object_type", "TABLE"))
         return "TABLE"
     except Exception:
         return "TABLE"
@@ -362,7 +362,7 @@ def _collect_explain_plan(
     cursor: oracledb.Cursor,
     sql_text: str,
     ctx: CollectedContext,
-    bind_params: dict[str, str] | None = None,
+    bind_params: dict[str, str | int | float | None] | None = None,
 ) -> list[str] | None:
     """Coleta o plano de execução.
 
@@ -429,7 +429,7 @@ def _collect_runtime_execution(
     conn: oracledb.Connection,
     sql_text: str,
     ctx: CollectedContext,
-    bind_params: dict[str, str] | None = None,
+    bind_params: dict[str, str | int | float | None] | None = None,
 ) -> None:
     """
     Executa a query com GATHER_PLAN_STATISTICS e coleta plano real + métricas.

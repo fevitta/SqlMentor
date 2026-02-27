@@ -29,6 +29,8 @@ dev = [
     "ruff>=0.4.0",
     "build>=1.0.0",
     "pre-commit>=3.0.0",
+    "mypy>=1.10.0",
+    "types-PyYAML>=6.0",
 ]
 
 [tool.ruff]
@@ -72,6 +74,13 @@ lint-fix = "ruff check src/ tests/ --fix"
 format   = "ruff format src/ tests/"
 build-dev    = "pip install -e .[dev]"
 build-deploy = "python -m build --wheel --outdir dist/"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+disallow_untyped_defs = false
 
 [tool.setuptools.packages.find]
 where = ["src"]

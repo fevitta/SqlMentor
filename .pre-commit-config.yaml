@@ -8,6 +8,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: mypy
+        name: mypy
+        entry: .venv/bin/python -m mypy src/sqlmentor/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
       - id: pytest
         name: pytest
         entry: .venv/bin/python -m pytest tests/ -q --tb=short
