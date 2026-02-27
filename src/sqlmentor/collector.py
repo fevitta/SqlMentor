@@ -35,6 +35,18 @@ from sqlmentor.queries import (
 
 logger = logging.getLogger(__name__)
 
+# ── Cache in-memory (persiste entre chamadas na mesma sessão) ──────────
+_table_cache: dict[str, "TableContext"] = {}
+_optimizer_cache: dict[str, dict[str, str]] = {}  # key: "global"
+_index_map_cache: dict[str, dict[str, str]] = {}  # key: schema
+
+
+def clear_cache() -> None:
+    """Limpa todo o cache de metadata (tabelas, otimizador, índices)."""
+    _table_cache.clear()
+    _optimizer_cache.clear()
+    _index_map_cache.clear()
+
 
 @dataclass
 class TableContext:
@@ -95,6 +107,7 @@ def collect_context(
     expand_functions: bool = False,
     execute: bool = False,
     bind_params: dict[str, str | int | float | None] | None = None,
+    use_cache: bool = True,
 ) -> CollectedContext:
     """
     Coleta todo o contexto necessário para análise de SQL.
@@ -145,6 +158,18 @@ def collect_context(
             continue
         collected_objects.add(obj_key)
 
+        # Cache hit: retorna TableContext cacheado se disponível
+        if use_cache and obj_key in _table_cache:
+            cached = _table_cache[obj_key]
+            # Se deep=True mas cache não tem histograms/partitions, re-coletar
+            if not deep or (cached.histograms or cached.partitions):
+                logger.info(f"Cache hit: {obj_key}")
+                ctx.tables.append(cached)
+                # View expansion pode estar cacheada junto, mas precisamos garantir
+                if cached.object_type == "VIEW":
+                    _collect_view_expansion(cursor, schema, name, ctx)
+                continue
+
         logger.info(f"Coletando contexto: {schema}.{name}")
         tctx = TableContext(name=name, schema=schema)
 
@@ -157,6 +182,8 @@ def collect_context(
 
         # Views: só coleta detalhes se --expand-views foi passado
         if tctx.object_type == "VIEW" and not expand_views:
+            if use_cache:
+                _table_cache[obj_key] = tctx
             ctx.tables.append(tctx)
             continue
 
@@ -180,6 +207,8 @@ def collect_context(
             tctx.partitions = _collect_partitions(cursor, schema, name, ctx)
             tctx.histograms = _collect_histograms(cursor, schema, name, parsed, tctx.columns, ctx)
 
+        if use_cache:
+            _table_cache[obj_key] = tctx
         ctx.tables.append(tctx)
 
     # 3. Mapa index_name → table_name (pra cruzar plano com view expansion)
@@ -195,14 +224,22 @@ def collect_context(
         for t in ctx.tables:
             schemas_to_map.add(t.schema)
         for schema in schemas_to_map:
+            if use_cache and schema in _index_map_cache:
+                logger.info(f"Cache hit: index_map({schema})")
+                ctx.index_table_map.update(_index_map_cache[schema])
+                continue
             try:
                 sql, params = index_to_table_map(schema)
                 rows = _execute_query(cursor, sql, params)
+                schema_map: dict[str, str] = {}
                 for row in rows:
                     idx_name = row.get("index_name", "")
                     tbl_name = row.get("table_name", "")
                     if idx_name and tbl_name:
-                        ctx.index_table_map[idx_name.upper()] = tbl_name.upper()
+                        schema_map[idx_name.upper()] = tbl_name.upper()
+                ctx.index_table_map.update(schema_map)
+                if use_cache:
+                    _index_map_cache[schema] = schema_map
             except Exception as e:
                 ctx.errors.append(f"Erro ao coletar mapa de índices ({schema}): {e}")
 
@@ -223,7 +260,13 @@ def collect_context(
                 ctx.errors.append(f"Erro ao coletar DDL de {func_key}: {e}")
 
     # 5. Optimizer params
-    ctx.optimizer_params = _collect_optimizer_params(cursor, ctx)
+    if use_cache and "global" in _optimizer_cache:
+        logger.info("Cache hit: optimizer_params")
+        ctx.optimizer_params = _optimizer_cache["global"]
+    else:
+        ctx.optimizer_params = _collect_optimizer_params(cursor, ctx)
+        if use_cache and ctx.optimizer_params:
+            _optimizer_cache["global"] = ctx.optimizer_params
 
     cursor.close()
     return ctx

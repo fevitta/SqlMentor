@@ -4,8 +4,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from sqlmentor.collector import CollectedContext, TableContext
+from sqlmentor.collector import CollectedContext, TableContext, clear_cache
 from sqlmentor.parser import ParsedSQL
+
+
+@pytest.fixture(autouse=True)
+def _clear_collector_cache():
+    """Limpa o cache do collector antes de cada teste para garantir isolamento."""
+    clear_cache()
+    yield
+    clear_cache()
 
 
 @pytest.fixture

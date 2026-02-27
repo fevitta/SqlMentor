@@ -129,6 +129,7 @@ def analyze_sql(
     normalized: bool = False,
     denorm_mode: str = "literal",
     verbosity: str = "compact",
+    no_cache: bool = False,
 ) -> str:
     """Analisa um SQL conectando no Oracle e coleta contexto completo para tuning.
 
@@ -149,8 +150,9 @@ def analyze_sql(
         normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido. Incompatível com execute=True.
         denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
+        no_cache: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
     """
-    from sqlmentor.collector import collect_context
+    from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import (
         denormalize_sql,
@@ -161,6 +163,9 @@ def analyze_sql(
     )
     from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.report import to_json, to_markdown
+
+    if no_cache:
+        clear_cache()
 
     # Resolve conexão (explícita > default > erro)
     try:
@@ -236,6 +241,7 @@ def analyze_sql(
             expand_functions=expand_functions,
             execute=execute,
             bind_params=bind_params or None,
+            use_cache=not no_cache,
         )
     except Exception as e:
         oracle_conn.close()
@@ -266,6 +272,7 @@ def inspect_sql(
     output_format: str = "markdown",
     timeout: int = 0,
     verbosity: str = "compact",
+    no_cache: bool = False,
 ) -> str:
     """Coleta contexto de um SQL já executado via sql_id, sem re-executar a query.
 
@@ -282,12 +289,16 @@ def inspect_sql(
         output_format: "markdown" (padrão) ou "json".
         timeout: Timeout em segundos. 0 = usa default do profile (180s).
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
+        no_cache: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
     """
-    from sqlmentor.collector import collect_context
+    from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql as _parse
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
+
+    if no_cache:
+        clear_cache()
 
     # Resolve conexão (explícita > default > erro)
     try:
@@ -358,6 +369,7 @@ def inspect_sql(
             expand_views=expand_views,
             expand_functions=expand_functions,
             execute=False,
+            use_cache=not no_cache,
         )
     except Exception as e:
         oracle_conn.close()

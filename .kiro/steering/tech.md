@@ -1,6 +1,6 @@
 # Tech Stack
 
-- **Linguagem:** Python 3.10+
+- **Linguagem:** Python 3.12+
 - **Build:** setuptools (pyproject.toml)
 - **CLI:** Typer com Rich para output formatado
 - **MCP Server:** FastMCP (mcp SDK Python) via stdio
@@ -8,7 +8,7 @@
 - **DB driver:** oracledb (modo thin, sem Oracle Client)
 - **Config:** PyYAML (conexões em ~/.sqlmentor/connections.yaml)
 - **Testes:** pytest + hypothesis (property-based) + pytest-cov (cobertura), taskipy (task runner), ruff (lint/format)
-- **CI:** GitHub Actions (Python 3.10/3.12) — lint, format check, testes
+- **CI:** GitHub Actions (Python 3.12) — lint, format check, mypy, testes com cobertura ≥90%
 
 ## Comandos
 
@@ -38,7 +38,7 @@ CLI e MCP Server são interfaces sobre o mesmo core. Ao adicionar, remover ou al
 4. `README.md` — exemplos de uso, tabela de flags, lista de subcomandos
 
 Exceções: `config` e `doctor` são só CLI; `list_connections` e `test_connection` são só MCP.
-Flags somente CLI (não precisam de equivalente MCP): `--verbose` (controle de display no terminal), `--output` (escrita em arquivo — MCP retorna conteúdo direto).
+Flags somente CLI (não precisam de equivalente MCP): `--verbose` (controle de display no terminal), `--output` (escrita em arquivo — MCP retorna conteúdo direto), `--debug` (ativa logging DEBUG no terminal).
 
 Nunca registrar a mesma função duas vezes com `@mcp.tool()`. Nunca editar apenas um dos arquivos sem verificar os outros dois.
 

@@ -6,7 +6,7 @@ sqlmentor/
 ├── connections.example.yaml    # Exemplo de config de conexões
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # GitHub Actions CI (Python 3.10/3.12, lint, format, tests)
+│       └── ci.yml              # GitHub Actions CI (Python 3.12, lint, format, mypy, tests)
 ├── scripts/
 │   └── oracle_create_user.sql  # Script DBA para criar user read-only
 ├── tests/
@@ -16,7 +16,8 @@ sqlmentor/
 │   ├── test_cli.py             # Testes: comandos CLI via CliRunner
 │   ├── test_mcp_server.py      # Testes: tools MCP (parse, analyze, inspect, list, test)
 │   ├── test_report_prune.py    # Testes: to_markdown, to_json, verbosity, pruning
-│   └── test_plan_compression.py # Testes: regras R1-R6 de compressão do plano
+│   ├── test_formatting_helpers.py # Testes: R9-R11 e helpers de formatação
+│   └── test_plan_compression.py # Testes: regras R1-R8, R12 de compressão do plano
 ├── powers/
 │   └── sqlmentor/              # Kiro Power (distribuição pro time)
 │       ├── POWER.md            # Frontmatter + overview + workflow + troubleshooting

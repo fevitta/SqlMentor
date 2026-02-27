@@ -14,6 +14,7 @@ Uso:
 """
 
 import hashlib
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +43,15 @@ console = Console()
 # ═══════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════
+
+
+def _configure_debug(debug: bool) -> None:
+    """Ativa logging DEBUG para expor mensagens internas do collector e demais módulos."""
+    if debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(name)s %(levelname)s: %(message)s",
+        )
 
 
 def _resolve_sql_input(sql_file: Path | None, sql_inline: str | None) -> tuple[str, str]:
@@ -135,9 +145,20 @@ def analyze(
         "--verbosity",
         help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats).",
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Ativa logging DEBUG (mostra queries e tempos internos).",
+    ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Ignora cache e força re-coleta de metadata.",
+    ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
-    from sqlmentor.collector import collect_context
+    _configure_debug(debug)
+    from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import (
         denormalize_sql,
@@ -148,6 +169,9 @@ def analyze(
         remap_bind_params,
     )
     from sqlmentor.report import to_json, to_markdown
+
+    if no_cache:
+        clear_cache()
 
     # Resolve conexão (explícita > default > erro)
     try:
@@ -253,6 +277,7 @@ def analyze(
             expand_functions=expand_functions,
             execute=execute,
             bind_params=bind_params or None,
+            use_cache=not no_cache,
         )
     except Exception as e:
         console.print(f"[red]Erro na coleta:[/red] {e}")
@@ -323,13 +348,27 @@ def inspect(
         "--verbosity",
         help="Nível de compressão do plano: full (sem compressão), compact (default), minimal (só hotspots+stats).",
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Ativa logging DEBUG (mostra queries e tempos internos).",
+    ),
+    no_cache: bool = typer.Option(
+        False,
+        "--no-cache",
+        help="Ignora cache e força re-coleta de metadata.",
+    ),
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
-    from sqlmentor.collector import collect_context
+    _configure_debug(debug)
+    from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql
     from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
+
+    if no_cache:
+        clear_cache()
 
     # Resolve conexão (explícita > default > erro)
     try:
@@ -415,6 +454,7 @@ def inspect(
             expand_views=expand_views,
             expand_functions=expand_functions,
             execute=False,
+            use_cache=not no_cache,
         )
     except Exception as e:
         console.print(f"[red]Erro na coleta:[/red] {e}")

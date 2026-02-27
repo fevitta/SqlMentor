@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from sqlmentor.collector import (
     CollectedContext,
+    TableContext,
     _collect_column_stats,
     _collect_constraints,
     _collect_db_version,
@@ -18,8 +19,12 @@ from sqlmentor.collector import (
     _collect_view_expansion,
     _detect_object_type,
     _execute_query,
+    _index_map_cache,
     _inline_binds,
+    _optimizer_cache,
     _parse_view_tables,
+    _table_cache,
+    clear_cache,
     collect_context,
 )
 from sqlmentor.parser import ParsedSQL
@@ -1129,3 +1134,93 @@ class TestCollectContextMultipleTables:
         conn.cursor.return_value = cursor
         ctx = collect_context(parsed, conn, "HR")
         assert len(ctx.tables) == 2
+
+
+# ---------------------------------------------------------------------------
+# 4. Cache de metadata
+# ---------------------------------------------------------------------------
+
+
+class TestClearCache:
+    """Testes de clear_cache."""
+
+    def test_clears_all_caches(self):
+        _table_cache["HR.T"] = TableContext(name="T", schema="HR")
+        _optimizer_cache["global"] = {"optimizer_mode": "ALL_ROWS"}
+        _index_map_cache["HR"] = {"IDX1": "T"}
+        clear_cache()
+        assert _table_cache == {}
+        assert _optimizer_cache == {}
+        assert _index_map_cache == {}
+
+    def test_clear_empty_is_noop(self):
+        clear_cache()
+        assert _table_cache == {}
+
+
+class TestCacheHitMiss:
+    """Testes de cache hit/miss em collect_context."""
+
+    def setup_method(self):
+        clear_cache()
+
+    def test_cache_hit_skips_queries(self, simple_parsed_sql):
+        """Segunda chamada com use_cache=True não re-executa queries de tabela."""
+        cursor1 = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn1 = MagicMock()
+        conn1.cursor.return_value = cursor1
+        ctx1 = collect_context(simple_parsed_sql, conn1, "HR", use_cache=True)
+        call_count_1 = cursor1.execute.call_count
+
+        # Segunda chamada com cache — deve ter menos queries
+        cursor2 = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn2 = MagicMock()
+        conn2.cursor.return_value = cursor2
+        ctx2 = collect_context(simple_parsed_sql, conn2, "HR", use_cache=True)
+        call_count_2 = cursor2.execute.call_count
+
+        # A segunda chamada deve executar menos queries (cache de tabela + optimizer)
+        assert call_count_2 < call_count_1
+        # Mas o resultado deve ser equivalente
+        assert len(ctx2.tables) == len(ctx1.tables)
+        assert ctx2.tables[0].name == ctx1.tables[0].name
+        assert ctx2.optimizer_params == ctx1.optimizer_params
+
+    def test_no_cache_always_executes(self, simple_parsed_sql):
+        """Com use_cache=False, queries são sempre executadas."""
+        cursor1 = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn1 = MagicMock()
+        conn1.cursor.return_value = cursor1
+        collect_context(simple_parsed_sql, conn1, "HR", use_cache=False)
+        call_count_1 = cursor1.execute.call_count
+
+        cursor2 = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn2 = MagicMock()
+        conn2.cursor.return_value = cursor2
+        collect_context(simple_parsed_sql, conn2, "HR", use_cache=False)
+        call_count_2 = cursor2.execute.call_count
+
+        # Sem cache, ambas devem executar o mesmo número de queries
+        assert call_count_2 == call_count_1
+
+    def test_deep_upgrade_recollects(self, simple_parsed_sql):
+        """Se cache não tem histograms/partitions mas deep=True, re-coleta."""
+        cursor1 = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn1 = MagicMock()
+        conn1.cursor.return_value = cursor1
+        # Primeira chamada sem deep — cacheia sem histograms
+        collect_context(simple_parsed_sql, conn1, "HR", deep=False, use_cache=True)
+
+        # Segunda chamada com deep — deve re-coletar (cache miss parcial)
+        overrides = {
+            "all_tab_partitions": {
+                "description": [("partition_name",)],
+                "rows": [("P1",)],
+            },
+        }
+        cursor2 = make_cursor_dispatch(_make_full_cursor_dispatch(overrides))
+        conn2 = MagicMock()
+        conn2.cursor.return_value = cursor2
+        ctx2 = collect_context(simple_parsed_sql, conn2, "HR", deep=True, use_cache=True)
+        # Deve ter re-coletado (partitions agora presentes)
+        assert ctx2.tables[0].partitions is not None

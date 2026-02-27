@@ -84,14 +84,17 @@ flowchart TD
     D --> E[_build_predicate_map → pred_map]
     E --> F[_collapse_config_fields R1 - recebe blocks]
     F --> G[_collapse_situation_history R2 - recebe blocks + pred_map]
-    G --> H[_collapse_view_zero_rows R3 - recebe blocks]
-    H --> I{all_collapsed_ids vazio?}
+    G --> G2[_collapse_union_all_branches R7 - recebe blocks]
+    G2 --> H[_collapse_view_zero_rows R3 - recebe blocks]
+    H --> H2[_collapse_low_cost_nested_loops R8 - recebe blocks]
+    H2 --> I{all_collapsed_ids vazio?}
     I -->|sim| J[_add_nonsequential_id_note R6]
     J --> RET2[retorna plan_lines original + predicate_lines original]
     I -->|nao| K[reconstroi plano - substitui blocos colapsados por replacement_lines]
     K --> L[_add_nonsequential_id_note R6]
     L --> M[_collapse_orphan_predicates_by_ids R4 - recebe predicate_lines + all_collapsed_ids]
-    M --> RET3[retorna plan_comprimido + predicados_comprimidos]
+    M --> M2[_deduplicate_predicates R12 - agrupa predicados identicos]
+    M2 --> RET3[retorna plan_comprimido + predicados_comprimidos]
 ~~~
 
 ### Thresholds de Imunidade (R5)
@@ -115,8 +118,16 @@ Um bloco com `immune=True` nunca é colapsado por nenhuma regra.
 | R3 | `_collapse_view_zero_rows` | `VIEW` com `a_rows == 0` (qualquer nome) | subárvore inteira sem imune |
 | R4 | `_collapse_orphan_predicates_by_ids` | predicados de IDs colapsados por R1/R2/R3 | qualquer ID colapsado |
 | R6 | `_add_nonsequential_id_note` | salto > 1 entre IDs consecutivos | qualquer salto |
+| R7 | `_collapse_union_all_branches` | `UNION-ALL` com ≥3 branches filhos idênticos | ≥3 branches |
+| R8 | `_collapse_low_cost_nested_loops` | `NESTED LOOPS` starts≥100, buf/iter≤3, rows/iter≤1 | subtree sem imune |
+| R9 | `_extract_plan_index_names` | Índices não referenciados no plano omitidos | metadados |
+| R10 | `_classify_uniform_columns` | Colunas uniformes (>80% distinct, sem histograma, não FK) | metadados |
+| R11 | `_strip_ddl_storage` | Remove STORAGE/TABLESPACE/PCTFREE/etc. da DDL | metadados |
+| R12 | `_deduplicate_predicates` | Agrupa predicados idênticos diferindo só no ID | ≥2 iguais |
 
 > ⚠️ Regra de ouro: nenhuma regra pode usar nomes de tabelas, índices, views ou qualquer objeto do schema como critério de detecção. Padrões são baseados exclusivamente em indicadores estruturais do plano (operação, cardinalidade, starts, indent).
+
+> R1–R8 e R12 são aplicadas em `_compress_plan()`. R9, R10 e R11 são aplicadas diretamente em `to_markdown()` (operam sobre metadados, não sobre o plano).
 
 ## Contrato de Dados — Dataclasses Principais
 
@@ -166,7 +177,7 @@ PlanBlock (report.py)
 
 | Valor | Comportamento | Default? |
 |-------|---------------|----------|
-| `compact` | Todas as podas R1–R6 ativas. Reduz ~40% em planos com views complexas. | ✅ sim |
+| `compact` | Todas as podas R1–R12 ativas. Reduz ~40% em planos com views complexas. | ✅ sim |
 | `full` | Sem compressão adicional além de P1/P3 já existentes. Comportamento legado. | não |
 | `minimal` | Só hotspots + runtime stats + optimizer params. Sem plano, sem DDL. | não |
 
@@ -228,6 +239,32 @@ Todo colapso é explícito — nenhuma omissão silenciosa. O primeiro elemento 
 ```
 ℹ️ IDs não sequenciais são normais — operações internas de views/subqueries
    são numeradas pelo Oracle mas omitidas do DBMS_XPLAN.
+```
+
+**R7 — UNION ALL com branches idênticos (≥3):**
+```
+[COLAPSADO: N branches UNION-ALL idênticos — padrão: OP1 → OP2]
+  A-Rows total: X | Buffers total: Y
+```
+
+**R8 — NESTED LOOPS de baixo custo (starts≥100, buf/iter≤3):**
+```
+[COLAPSADO: NESTED LOOPS — N starts, buf/iter=X, rows/iter=Y]
+  Custo total: Z buffers
+```
+
+**R9 — Índices não referenciados (aplicado em `to_markdown`):**
+Omite da seção de índices aqueles que não aparecem na coluna Name do plano de execução.
+
+**R10 — Colunas uniformes (aplicado em `to_markdown`):**
+Move colunas com distribuição uniforme (>80% distinct, sem histograma, não FK) para nota resumida.
+
+**R11 — DDL storage (aplicado em `to_markdown`):**
+Remove cláusulas STORAGE(...), TABLESPACE, PCTFREE, INITRANS, LOGGING etc. da DDL de views.
+
+**R12 — Predicados duplicados:**
+```
+3, 7, 12 - access("T"."COL"="S"."COL")
 ```
 
 ### Decisão de design: `verbosity` como nível, não flags booleanos

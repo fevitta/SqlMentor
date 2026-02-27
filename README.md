@@ -12,7 +12,7 @@ pip install -e .
 
 ### Pré-requisitos
 
-- Python 3.10+
+- Python 3.12+
 - Acesso a um Oracle 11g+ (driver `oracledb` em modo thin, sem Oracle Client)
 
 ## Uso Rápido
@@ -56,6 +56,12 @@ sqlmentor analyze minha_query.sql --conn producao --expand-views
 
 # Análise profunda (histogramas e partições)
 sqlmentor analyze minha_query.sql --conn producao --deep
+
+# Debug (mostra queries e tempos internos)
+sqlmentor analyze minha_query.sql --conn producao --debug
+
+# Forçar re-coleta de metadata (ignora cache)
+sqlmentor analyze minha_query.sql --conn producao --no-cache
 
 # Formato JSON
 sqlmentor analyze minha_query.sql --conn producao --format json
@@ -121,6 +127,25 @@ sqlmentor analyze minha_query.sql --verbosity full      # plano completo
 sqlmentor analyze minha_query.sql --verbosity minimal   # só métricas
 ```
 
+#### Regras de compressão (modo compact)
+
+O modo `compact` aplica 12 regras para reduzir o tamanho do relatório sem perder informação relevante:
+
+| Regra | Descrição |
+|-------|-----------|
+| R1 | Colapsa scalar subqueries com index lookup repetido (≥3 grupos) |
+| R2 | Colapsa scalar subqueries com index lookup repetido (≥2 grupos, com tabela de detalhes) |
+| R3 | Colapsa VIEWs com A-Rows=0 (subárvore inteira) |
+| R4 | Remove predicados órfãos de operações colapsadas |
+| R5 | Imunidade: operações com reads>0, buffers>1K, starts>100, tempo>100ms ou desvio>10x nunca são colapsadas |
+| R6 | Nota explicativa quando IDs não são sequenciais |
+| R7 | Colapsa UNION ALL com ≥3 branches idênticos |
+| R8 | Colapsa NESTED LOOPS de baixo custo (starts≥100, buf/iter≤3) |
+| R9 | Omite índices não referenciados no plano de execução |
+| R10 | Move colunas com distribuição uniforme para nota resumida |
+| R11 | Remove cláusulas de storage/tablespace da DDL de views |
+| R12 | Agrupa predicados idênticos que diferem apenas no ID |
+
 ## Relatórios
 
 Reports são salvos automaticamente em `reports/` com o formato:
@@ -170,6 +195,31 @@ analyze_sql(sql="SELECT ...", conn="producao", verbosity="minimal")
 inspect_sql(sql_id="abc123xyz", conn="producao", verbosity="compact")
 ```
 
+### Workflow via MCP (Claude Desktop / Kiro)
+
+```python
+# 1. Verificar conexões disponíveis
+list_connections()
+
+# 2. Entender a query (parse offline, sem conexão)
+parse_sql(sql_text="SELECT ...", schema="HR")
+
+# 3. Análise rápida (plano estimado + metadata)
+analyze_sql(sql_text="SELECT ...", conn="producao")
+
+# 4. Análise profunda (histogramas + partições + views)
+analyze_sql(sql_text="SELECT ...", conn="producao", deep=True, expand_views=True)
+
+# 5. Plano real (executa a query com ALLSTATS LAST)
+analyze_sql(sql_text="SELECT ...", conn="producao", execute=True, binds="id=123")
+
+# 6. Query já executada (via sql_id, sem re-executar)
+inspect_sql(sql_id="abc123xyz", conn="producao")
+
+# 7. Forçar re-coleta após alterar tabelas/índices
+analyze_sql(sql_text="SELECT ...", conn="producao", no_cache=True)
+```
+
 ### Configuração manual (mcp.json)
 
 ```json
@@ -209,8 +259,8 @@ ruff format src/ tests/
 ### CI
 
 GitHub Actions roda automaticamente em push/PR para `master`:
-- Matrix: Python 3.10, 3.12
-- Steps: ruff check, ruff format --check, pytest
+- Python 3.12
+- Steps: ruff check, ruff format --check, mypy, pytest com cobertura ≥90%
 
 ## Estrutura do Projeto
 
@@ -257,4 +307,4 @@ sqlmentor/
 - [x] MCP Server pra integração com Kiro/Claude Desktop
 - [x] Kiro Power com metodologia de análise embutida
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
-- [ ] Cache de metadata (evita re-coletar pra mesmas tabelas)
+- [x] Cache de metadata (evita re-coletar pra mesmas tabelas) — `--no-cache` para forçar re-coleta

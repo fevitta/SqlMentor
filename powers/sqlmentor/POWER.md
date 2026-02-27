@@ -20,7 +20,7 @@ O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que
 
 ## Pré-requisitos
 
-- Python 3.9+
+- Python 3.12+
 - `sqlmentor` instalado (`pip install -e .` no repo do projeto)
 - Pelo menos um profile de conexão Oracle configurado via `sqlmentor config add`
 - O usuário Oracle precisa de permissões de leitura em `ALL_*` views e `DBMS_XPLAN`
@@ -53,6 +53,7 @@ Parâmetros importantes:
 - `normalized`: Se True, força tratamento como SQL normalizado. Na maioria dos casos não é necessário — a auto-detecção identifica `?` placeholders automaticamente. Incompatível com `execute=True`.
 - `denorm_mode`: Estratégia de desnormalização: `"literal"` (default, `?` → `'1'`) ou `"bind"` (`?` → `:dn1`, `:dn2`...). Modo bind gera plano com seletividade padrão do otimizador, sem depender de valores concretos.
 - `verbosity`: Nível de compressão do plano: `"compact"` (default — todas as podas ativas), `"full"` (sem compressão, comportamento legado), `"minimal"` (só hotspots + runtime stats + parâmetros do otimizador, sem plano nem DDL).
+- `no_cache`: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
 
 ### inspect_sql
 Coleta contexto de um SQL já executado via sql_id, sem re-executar. Puxa plano real e métricas do shared pool Oracle. Ideal para queries longas que já rodaram.
@@ -62,6 +63,7 @@ Parâmetros importantes:
 - `conn`: Nome do profile de conexão. Se omitido, usa a conexão padrão
 - `deep`, `expand_views`, `expand_functions`, `timeout`: mesmos do analyze_sql
 - `verbosity`: mesmo do analyze_sql
+- `no_cache`: mesmo do analyze_sql
 
 ## Conexão Padrão
 
