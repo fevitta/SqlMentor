@@ -500,6 +500,129 @@ def _collapse_view_zero_rows(blocks: list[PlanBlock]) -> list[CollapseResult]:
     return results
 
 
+def _collapse_union_all_branches(blocks: list[PlanBlock]) -> list[CollapseResult]:
+    """Colapsa branches UNION ALL idênticos quando ≥3 consecutivos (R7).
+
+    Agrupa filhos diretos (subtrees no mesmo indent) por assinatura
+    ``tuple((op, name) for b in branch)``. Quando ≥3 branches consecutivos
+    têm assinatura idêntica e nenhum bloco é immune, colapsa.
+    """
+    results: list[CollapseResult] = []
+
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if "UNION-ALL" not in b.operation.upper().replace(" ", "-"):
+            i += 1
+            continue
+
+        # Encontrou UNION-ALL — coletar filhos diretos (subtrees)
+        union_indent = b.indent
+        j = i + 1
+        branches: list[list[PlanBlock]] = []
+        current_branch: list[PlanBlock] = []
+
+        while j < len(blocks) and blocks[j].indent > union_indent:
+            child = blocks[j]
+            if child.indent == union_indent + 1:
+                # Início de novo branch
+                if current_branch:
+                    branches.append(current_branch)
+                current_branch = [child]
+            else:
+                current_branch.append(child)
+            j += 1
+
+        if current_branch:
+            branches.append(current_branch)
+
+        # Agrupar branches por assinatura
+        def _branch_sig(branch: list[PlanBlock]) -> tuple[tuple[str, str], ...]:
+            return tuple((bl.operation, bl.name) for bl in branch)
+
+        # Encontrar runs consecutivos de branches idênticos
+        run_start = 0
+        while run_start < len(branches):
+            sig = _branch_sig(branches[run_start])
+            run_end = run_start + 1
+            while run_end < len(branches) and _branch_sig(branches[run_end]) == sig:
+                run_end += 1
+
+            run_len = run_end - run_start
+            if run_len >= 3:
+                run_blocks = [bl for br in branches[run_start:run_end] for bl in br]
+                immune_any = any(bl.immune for bl in run_blocks)
+                if not immune_any:
+                    all_ids = {bl.id for bl in run_blocks}
+                    # Pega tabela principal do primeiro branch
+                    table_name = branches[run_start][0].name if branches[run_start] else ""
+                    op_name = branches[run_start][0].operation if branches[run_start] else ""
+                    summary = (
+                        f"[COLAPSADO: {run_len} branches UNION ALL idênticos"
+                        f" — {op_name} {table_name}]"
+                    )
+                    results.append(
+                        CollapseResult(collapsed_ids=all_ids, replacement_lines=[summary])
+                    )
+
+            run_start = run_end
+
+        i = j  # Pula toda a subárvore UNION-ALL
+
+    return results
+
+
+def _collapse_low_cost_nested_loops(blocks: list[PlanBlock]) -> list[CollapseResult]:
+    """Colapsa NESTED LOOPS repetitivos com baixo custo por iteração (R8).
+
+    Critérios:
+    - Operação contém "NESTED LOOPS" e starts >= 100
+    - total_buffers / starts <= 3 e total_a_rows / starts <= 1
+    - Nenhum bloco imune na subtree
+    """
+    results: list[CollapseResult] = []
+
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if "NESTED LOOPS" not in b.operation.upper() or b.starts < 100:
+            i += 1
+            continue
+
+        # Coletar subtree
+        j = i + 1
+        subtree: list[PlanBlock] = [b]
+        while j < len(blocks) and blocks[j].indent > b.indent:
+            subtree.append(blocks[j])
+            j += 1
+
+        total_buffers = sum(bl.buffers for bl in subtree)
+        total_a_rows = sum(bl.a_rows for bl in subtree)
+
+        buf_per_iter = total_buffers / b.starts if b.starts > 0 else 0
+        rows_per_iter = total_a_rows / b.starts if b.starts > 0 else 0
+
+        if buf_per_iter <= 3 and rows_per_iter <= 1:
+            immune_any = any(bl.immune for bl in subtree)
+            if not immune_any:
+                all_ids = {bl.id for bl in subtree}
+                # Pega primeiro filho para o resumo
+                child_op = subtree[1].operation if len(subtree) > 1 else ""
+                child_name = subtree[1].name if len(subtree) > 1 else ""
+                summary = (
+                    f"[COLAPSADO: NESTED LOOPS {b.starts} starts"
+                    f" × {child_op} {child_name}"
+                    f" → {rows_per_iter:.1f} rows/iter, {buf_per_iter:.1f} buf/iter]"
+                )
+                results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=[summary]))
+                i = j
+                continue
+
+        i = j
+
+    return results
+
+
 def _build_predicate_map(plan_lines: list[str]) -> dict[str, list[str]]:
     """
 
@@ -667,10 +790,13 @@ def _compress_plan(
 
     all_collapses.extend(_collapse_situation_history(blocks, pred_map))
 
-    # R3 só faz sentido em planos runtime — no estimado a_rows é sempre 0
+    all_collapses.extend(_collapse_union_all_branches(blocks))  # R7
+
+    # R3 e R8 só fazem sentido em planos runtime — no estimado a_rows é sempre 0
 
     if not is_estimated:
         all_collapses.extend(_collapse_view_zero_rows(blocks))
+        all_collapses.extend(_collapse_low_cost_nested_loops(blocks))  # R8
 
     # Conjunto de todos os IDs colapsados
 
@@ -726,6 +852,7 @@ def _compress_plan(
     # Colapsa predicados dos IDs removidos (R4)
 
     new_preds = _collapse_orphan_predicates_by_ids(predicate_lines, all_collapsed_ids)
+    new_preds = _deduplicate_predicates(new_preds)  # R12
 
     return new_plan, new_preds
 
@@ -796,6 +923,157 @@ def _collapse_orphan_predicates_by_ids(plan_lines: list[str], collapsed_ids: set
 
     if pruned > 0:
         result.append(f"({pruned} predicados de blocos colapsados omitidos — ver resumos acima)")
+
+    return result
+
+
+def _extract_plan_index_names(plan_lines: list[str]) -> set[str]:
+    """Extrai nomes de índices referenciados no plano de execução (R9).
+
+    Parseia linhas do plano e retorna o ``name`` de operações contendo "INDEX".
+    """
+    index_names: set[str] = set()
+    for line in plan_lines:
+        m = _PLAN_ROW.match(line)
+        if m:
+            operation = m.group(3).strip()
+            name = m.group(4).strip()
+            if "INDEX" in operation.upper() and name:
+                index_names.add(name)
+            continue
+
+        m2 = _PLAN_ROW_ESTIMATED.match(line)
+        if m2:
+            operation = m2.group(3).strip()
+            name = m2.group(4).strip()
+            if "INDEX" in operation.upper() and name:
+                index_names.add(name)
+
+    return index_names
+
+
+def _classify_uniform_columns(
+    columns: list[dict[str, Any]], table_num_rows: int | None, fk_map: dict[str, str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Separa colunas com distribuição uniforme das relevantes (R10).
+
+    Coluna "uniforme" = histogram == "NONE" AND num_distinct > 80% de num_rows AND não é FK.
+    Retorna (colunas_relevantes, count_uniformes).
+    """
+    if table_num_rows is None:
+        return columns, 0
+
+    relevant: list[dict[str, Any]] = []
+    uniform_count = 0
+
+    for col in columns:
+        histogram = col.get("histogram", "")
+        num_distinct = col.get("num_distinct")
+        col_name = col.get("column_name", "")
+
+        if (
+            histogram == "NONE"
+            and num_distinct is not None
+            and num_distinct > 0.8 * table_num_rows
+            and col_name not in fk_map
+        ):
+            uniform_count += 1
+        else:
+            relevant.append(col)
+
+    return relevant, uniform_count
+
+
+def _deduplicate_predicates(predicate_lines: list[str]) -> list[str]:
+    """Agrupa predicados idênticos que diferem apenas no ID (R12).
+
+    Predicados com mesmo tipo e texto normalizado são mesclados em uma única linha
+    listando todos os IDs. Exemplo: ``3, 7, 12 - access("T"."ID"="V"."ID")``
+    """
+    _PRED_ID = re.compile(r"^\s*(\d+)\s*-\s*(access|filter)\((.+)")
+    # Primeira passagem: parsear predicados
+    entries: list[tuple[int, str, str, str]] = []  # (line_idx, id, tipo, texto)
+    header_lines: list[tuple[int, str]] = []  # (line_idx, line)
+    continuation: dict[int, list[str]] = {}  # pred_line_idx -> continuation lines
+
+    current_pred_idx: int | None = None
+    in_predicates = False
+
+    for i, line in enumerate(predicate_lines):
+        stripped = line.strip()
+        if stripped.startswith("Predicate Information"):
+            in_predicates = True
+            header_lines.append((i, line))
+            continue
+
+        if not in_predicates:
+            header_lines.append((i, line))
+            continue
+
+        m = _PRED_ID.match(stripped)
+        if m:
+            entries.append((i, m.group(1), m.group(2), m.group(3)))
+            current_pred_idx = len(entries) - 1
+            continue
+
+        # Continuation line or separator
+        if current_pred_idx is not None and stripped and not stripped.startswith("---"):
+            if re.match(r"^[A-Z]", stripped) and not stripped[0].isdigit():
+                # New section — stop predicate parsing
+                in_predicates = False
+                current_pred_idx = None
+                header_lines.append((i, line))
+            else:
+                continuation.setdefault(current_pred_idx, []).append(line)
+        else:
+            header_lines.append((i, line))
+
+    if not entries:
+        return predicate_lines
+
+    # Group by (tipo, normalized_text)
+    groups: dict[tuple[str, str], list[int]] = {}
+    for idx, (_, _pred_id, tipo, texto) in enumerate(entries):
+        # Include continuation lines in the text for comparison
+        full_text = texto
+        for cont_line in continuation.get(idx, []):
+            full_text += " " + cont_line.strip()
+        key = (tipo, " ".join(full_text.split()))  # normalize whitespace
+        groups.setdefault(key, []).append(idx)
+
+    merged_count = 0
+    # Rebuild: emit headers, then predicates in order of min ID per group
+    result: list[str] = []
+    # Add header lines first
+    for _, line in sorted(header_lines, key=lambda x: x[0]):
+        result.append(line)
+
+    # Sort groups by smallest ID numerically
+    ordered_groups = sorted(
+        groups.items(), key=lambda kv: min(int(entries[idx][1]) for idx in kv[1])
+    )
+
+    for (_tipo, _norm_text), indices in ordered_groups:
+        if len(indices) >= 2:
+            ids_str = ", ".join(
+                str(entries[idx][1]) for idx in sorted(indices, key=lambda x: int(entries[x][1]))
+            )
+            # Use the original text from first entry
+            first_idx = indices[0]
+            orig_text = entries[first_idx][3]
+            result.append(f"   {ids_str} - {tipo}({orig_text}")
+            for cont_line in continuation.get(first_idx, []):
+                result.append(cont_line)
+            merged_count += len(indices) - 1
+        else:
+            idx = indices[0]
+            _, pred_id, tipo_orig, texto_orig = entries[idx]
+            result.append(f"   {pred_id} - {tipo_orig}({texto_orig}")
+            for cont_line in continuation.get(idx, []):
+                result.append(cont_line)
+
+    if merged_count > 0:
+        result.append(f"({merged_count} predicados duplicados agrupados)")
 
     return result
 
@@ -1134,6 +1412,12 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
 
     referenced_cols = _get_sql_referenced_columns(ctx)
 
+    # R9: extrai nomes de índices referenciados no plano
+    plan_index_names: set[str] = set()
+    for plan_source_r9 in (ctx.runtime_plan, ctx.execution_plan):
+        if plan_source_r9:
+            plan_index_names.update(_extract_plan_index_names(plan_source_r9))
+
     # Separa tabelas pequenas (< 1000 rows) pra formato compacto
 
     small_tables: list[TableContext] = []
@@ -1177,7 +1461,10 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
 
             lines.append("```sql")
 
-            lines.append(_strip_view_column_list(table.ddl.strip()))
+            cleaned_ddl = _strip_view_column_list(table.ddl.strip())
+            if verbosity != "full":
+                cleaned_ddl = _strip_ddl_storage(cleaned_ddl)
+            lines.append(cleaned_ddl)
 
             lines.append("```")
             lines.append("")
@@ -1199,6 +1486,14 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
         if table.columns:
             display_cols = _filter_columns_by_sql(table.columns, referenced_cols)
 
+            # R10: omitir colunas com distribuição uniforme
+            uniform_omitted = 0
+            if verbosity != "full":
+                table_num_rows = (table.stats or {}).get("num_rows", None)
+                display_cols, uniform_omitted = _classify_uniform_columns(
+                    display_cols, table_num_rows, fk_map
+                )
+
             has_stats = any(c.get("num_distinct") is not None for c in display_cols)
 
             omitted = len(table.columns) - len(display_cols)
@@ -1213,16 +1508,36 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
 
                 lines.append(_format_column_structure(display_cols))
 
-            if omitted > 0:
-                lines.append(f"\n*({omitted} colunas não referenciadas no SQL omitidas)*")
+            if omitted - uniform_omitted > 0:
+                lines.append(
+                    f"\n*({omitted - uniform_omitted} colunas não referenciadas no SQL omitidas)*"
+                )
+            if uniform_omitted > 0:
+                lines.append(
+                    f"\n*({uniform_omitted} colunas com distribuição uniforme, sem histograma — omitidas)*"
+                )
             lines.append("")
 
-        # Indexes
+        # Indexes — R9: omitir índices não referenciados no plano
 
         if table.indexes:
+            display_indexes = table.indexes
+            idx_omitted = 0
+            if verbosity != "full" and plan_index_names:
+                referenced = [
+                    idx for idx in table.indexes if idx.get("index_name") in plan_index_names
+                ]
+                if referenced:  # fallback: se nenhum referenciado, mostrar todos
+                    idx_omitted = len(table.indexes) - len(referenced)
+                    display_indexes = referenced
+
             lines.append("### Índices")
 
-            lines.append(_format_indexes(table.indexes))
+            lines.append(_format_indexes(display_indexes))
+            if idx_omitted > 0:
+                lines.append(
+                    f"\n*({idx_omitted} índices adicionais não referenciados no plano omitidos)*"
+                )
             lines.append("")
 
         # Partitions
@@ -1461,6 +1776,71 @@ def _prune_orphan_predicates(plan_lines: list[str], pruned_ids: set[str]) -> lis
         result.append(f"({pruned_preds} predicados de operações não executadas omitidos)")
 
     return result
+
+
+def _strip_ddl_storage(ddl: str) -> str:
+    """Remove cláusulas de storage/tablespace da DDL Oracle (R11).
+
+    Remove:
+    - STORAGE(...) com parênteses aninhados
+    - TABLESPACE "xxx" ou TABLESPACE xxx
+    - PCTFREE N, PCTUSED N, INITRANS N, MAXTRANS N
+    - LOGGING / NOLOGGING
+    - COMPRESS / NOCOMPRESS (standalone, não em column defs)
+    - CACHE / NOCACHE
+    - SEGMENT CREATION IMMEDIATE|DEFERRED
+    - Linhas em branco resultantes
+    """
+    # STORAGE(...) — com suporte a parênteses aninhados
+    result = []
+    i = 0
+    while i < len(ddl):
+        if ddl[i:].upper().startswith("STORAGE"):
+            # Verifica se é seguido por (
+            rest = ddl[i + len("STORAGE") :].lstrip()
+            if rest.startswith("("):
+                # Conta parênteses para encontrar o fim
+                depth = 0
+                j = i + len("STORAGE") + (len(ddl[i + len("STORAGE") :]) - len(rest))
+                while j < len(ddl):
+                    if ddl[j] == "(":
+                        depth += 1
+                    elif ddl[j] == ")":
+                        depth -= 1
+                        if depth == 0:
+                            j += 1
+                            break
+                    j += 1
+                i = j
+                continue
+        result.append(ddl[i])
+        i += 1
+    ddl = "".join(result)
+
+    # TABLESPACE "xxx" ou TABLESPACE xxx
+    ddl = re.sub(r'TABLESPACE\s+"[^"]+"|TABLESPACE\s+\S+', "", ddl, flags=re.IGNORECASE)
+
+    # PCTFREE N, PCTUSED N, INITRANS N, MAXTRANS N
+    ddl = re.sub(r"\b(?:PCTFREE|PCTUSED|INITRANS|MAXTRANS)\s+\d+", "", ddl, flags=re.IGNORECASE)
+
+    # SEGMENT CREATION IMMEDIATE|DEFERRED
+    ddl = re.sub(r"\bSEGMENT\s+CREATION\s+(?:IMMEDIATE|DEFERRED)\b", "", ddl, flags=re.IGNORECASE)
+
+    # LOGGING / NOLOGGING (standalone)
+    ddl = re.sub(r"\bNOLOGGING\b", "", ddl, flags=re.IGNORECASE)
+    ddl = re.sub(r"\bLOGGING\b", "", ddl, flags=re.IGNORECASE)
+
+    # COMPRESS / NOCOMPRESS (standalone — not in column defs, look for word boundary)
+    ddl = re.sub(r"\bNOCOMPRESS\b", "", ddl, flags=re.IGNORECASE)
+    ddl = re.sub(r"\bCOMPRESS\b(?!\s+FOR)", "", ddl, flags=re.IGNORECASE)
+
+    # CACHE / NOCACHE (standalone)
+    ddl = re.sub(r"\bNOCACHE\b", "", ddl, flags=re.IGNORECASE)
+    ddl = re.sub(r"\bCACHE\b", "", ddl, flags=re.IGNORECASE)
+
+    # Limpa linhas em branco resultantes
+    cleaned_lines = [line for line in ddl.splitlines() if line.strip()]
+    return "\n".join(cleaned_lines)
 
 
 def _strip_view_column_list(ddl: str) -> str:

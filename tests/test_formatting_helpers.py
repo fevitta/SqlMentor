@@ -3,6 +3,8 @@
 from sqlmentor.collector import TableContext
 from sqlmentor.report import (
     _build_fk_map,
+    _classify_uniform_columns,
+    _extract_plan_index_names,
     _filter_columns_by_sql,
     _format_column_stats,
     _format_column_structure,
@@ -13,6 +15,7 @@ from sqlmentor.report import (
     _format_small_table,
     _format_table_stats,
     _format_wait_events,
+    _strip_ddl_storage,
 )
 
 # ─── _format_table_stats ─────────────────────────────────────────────────────
@@ -434,3 +437,307 @@ class TestFilterColumnsBySql:
         ]
         result = _filter_columns_by_sql(cols, {"NONEXISTENT"})
         assert len(result) == 2  # fallback returns all
+
+
+# ─── _strip_ddl_storage (R11) ──────────────────────────────────────────────
+
+
+class TestStripDdlStorage:
+    def test_removes_storage_clause(self):
+        ddl = "CREATE TABLE T (ID NUMBER)\nSTORAGE(INITIAL 64K NEXT 1M MINEXTENTS 1)"
+        result = _strip_ddl_storage(ddl)
+        assert "STORAGE" not in result
+        assert "CREATE TABLE T (ID NUMBER)" in result
+
+    def test_removes_tablespace(self):
+        ddl = 'CREATE TABLE T (ID NUMBER)\nTABLESPACE "USERS_DATA"'
+        result = _strip_ddl_storage(ddl)
+        assert "TABLESPACE" not in result
+        assert "USERS_DATA" not in result
+
+    def test_removes_pctfree_initrans(self):
+        ddl = "CREATE TABLE T (ID NUMBER)\nPCTFREE 10 INITRANS 2 MAXTRANS 255"
+        result = _strip_ddl_storage(ddl)
+        assert "PCTFREE" not in result
+        assert "INITRANS" not in result
+        assert "MAXTRANS" not in result
+
+    def test_removes_segment_creation(self):
+        ddl = "CREATE TABLE T (ID NUMBER)\nSEGMENT CREATION IMMEDIATE"
+        result = _strip_ddl_storage(ddl)
+        assert "SEGMENT" not in result
+        assert "CREATION" not in result
+
+    def test_preserves_column_definitions(self):
+        ddl = "CREATE TABLE T (\n  ID NUMBER,\n  NAME VARCHAR2(100),\n  CACHE_FLAG NUMBER\n)"
+        result = _strip_ddl_storage(ddl)
+        assert "ID NUMBER" in result
+        assert "NAME VARCHAR2(100)" in result
+        assert "CACHE_FLAG NUMBER" in result
+
+    def test_nested_parens_in_storage(self):
+        ddl = (
+            "CREATE TABLE T (ID NUMBER)\n"
+            "STORAGE(INITIAL 64K NEXT 1M PCTINCREASE 0 "
+            "BUFFER_POOL DEFAULT FLASH_CACHE DEFAULT CELL_FLASH_CACHE DEFAULT)"
+        )
+        result = _strip_ddl_storage(ddl)
+        assert "STORAGE" not in result
+        assert "BUFFER_POOL" not in result
+        assert "CREATE TABLE T (ID NUMBER)" in result
+
+
+# ─── _classify_uniform_columns (R10) ──────────────────────────────────────
+
+
+class TestClassifyUniformColumns:
+    def test_uniform_column_filtered(self):
+        cols = [
+            {"column_name": "ID", "num_distinct": 9000, "histogram": "NONE"},
+        ]
+        relevant, count = _classify_uniform_columns(cols, 10000, {})
+        assert count == 1
+        assert len(relevant) == 0
+
+    def test_histogram_column_kept(self):
+        cols = [
+            {"column_name": "STATUS", "num_distinct": 9000, "histogram": "FREQUENCY"},
+        ]
+        relevant, count = _classify_uniform_columns(cols, 10000, {})
+        assert count == 0
+        assert len(relevant) == 1
+
+    def test_low_cardinality_kept(self):
+        cols = [
+            {"column_name": "STATUS", "num_distinct": 5, "histogram": "NONE"},
+        ]
+        relevant, count = _classify_uniform_columns(cols, 10000, {})
+        assert count == 0
+        assert len(relevant) == 1
+
+    def test_fk_column_kept(self):
+        cols = [
+            {"column_name": "USER_ID", "num_distinct": 9000, "histogram": "NONE"},
+        ]
+        relevant, count = _classify_uniform_columns(cols, 10000, {"USER_ID": "HR.USERS"})
+        assert count == 0
+        assert len(relevant) == 1
+
+    def test_no_num_rows_skips(self):
+        cols = [
+            {"column_name": "ID", "num_distinct": 9000, "histogram": "NONE"},
+        ]
+        relevant, count = _classify_uniform_columns(cols, None, {})
+        assert count == 0
+        assert len(relevant) == 1
+
+
+# ─── _extract_plan_index_names (R9) ──────────────────────────────────────
+
+
+class TestExtractPlanIndexNames:
+    def test_allstats_format(self):
+        lines = [
+            "|   1 | INDEX RANGE SCAN        | IDX_USERS_NAME               |     1 |     1 |      1 |00:00:00.01 |       2 |       0 |",
+            "|   2 | TABLE ACCESS FULL       | USERS                        |     1 |  1000 |   1000 |00:00:00.05 |      50 |       0 |",
+        ]
+        result = _extract_plan_index_names(lines)
+        assert result == {"IDX_USERS_NAME"}
+
+    def test_estimated_format(self):
+        lines = [
+            "|   1 | INDEX UNIQUE SCAN       | PK_ORDERS                    |   100 |  800 |     2  (0)| 00:00:01 |",
+        ]
+        result = _extract_plan_index_names(lines)
+        assert result == {"PK_ORDERS"}
+
+    def test_no_index_returns_empty(self):
+        lines = [
+            "|   1 | TABLE ACCESS FULL       | USERS                        |     1 |  1000 |   1000 |00:00:00.05 |      50 |       0 |",
+        ]
+        result = _extract_plan_index_names(lines)
+        assert result == set()
+
+
+class TestOmitUnreferencedIndexes:
+    """Tests for R9 index filtering integrated in to_markdown — tested indirectly."""
+
+    def test_compact_omits_unreferenced(self):
+        from sqlmentor.collector import CollectedContext, TableContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "|   1 | INDEX RANGE SCAN        | IDX_USED                     |     1 |     1 |      1 |00:00:00.01 |       2 |       0 |",
+        ]
+        table = TableContext(
+            name="T",
+            schema="HR",
+            object_type="TABLE",
+            stats={"num_rows": 5000},
+            indexes=[
+                {
+                    "index_name": "IDX_USED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL1",
+                },
+                {
+                    "index_name": "IDX_UNUSED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL2",
+                },
+                {
+                    "index_name": "IDX_ALSO_UNUSED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL3",
+                },
+            ],
+        )
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT COL1 FROM HR.T",
+                sql_type="SELECT",
+                tables=[{"schema": "HR", "name": "T"}],
+            ),
+            runtime_plan=plan,
+            tables=[table],
+        )
+        md = to_markdown(ctx, verbosity="compact")
+        assert "IDX_USED" in md
+        assert "índices adicionais não referenciados no plano omitidos" in md
+
+    def test_full_shows_all(self):
+        from sqlmentor.collector import CollectedContext, TableContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "|   1 | INDEX RANGE SCAN        | IDX_USED                     |     1 |     1 |      1 |00:00:00.01 |       2 |       0 |",
+        ]
+        table = TableContext(
+            name="T",
+            schema="HR",
+            object_type="TABLE",
+            stats={"num_rows": 5000},
+            indexes=[
+                {
+                    "index_name": "IDX_USED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL1",
+                },
+                {
+                    "index_name": "IDX_UNUSED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL2",
+                },
+            ],
+        )
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT COL1 FROM HR.T",
+                sql_type="SELECT",
+                tables=[{"schema": "HR", "name": "T"}],
+            ),
+            runtime_plan=plan,
+            tables=[table],
+        )
+        md = to_markdown(ctx, verbosity="full")
+        assert "IDX_USED" in md
+        assert "IDX_UNUSED" in md
+        assert "omitidos" not in md
+
+    def test_all_referenced_no_note(self):
+        from sqlmentor.collector import CollectedContext, TableContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "|   1 | INDEX RANGE SCAN        | IDX_A                        |     1 |     1 |      1 |00:00:00.01 |       2 |       0 |",
+        ]
+        table = TableContext(
+            name="T",
+            schema="HR",
+            object_type="TABLE",
+            stats={"num_rows": 5000},
+            indexes=[
+                {
+                    "index_name": "IDX_A",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL1",
+                },
+            ],
+        )
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT COL1 FROM HR.T",
+                sql_type="SELECT",
+                tables=[{"schema": "HR", "name": "T"}],
+            ),
+            runtime_plan=plan,
+            tables=[table],
+        )
+        md = to_markdown(ctx, verbosity="compact")
+        assert "IDX_A" in md
+        assert "omitidos" not in md
+
+    def test_note_shows_count(self):
+        from sqlmentor.collector import CollectedContext, TableContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "|   1 | INDEX RANGE SCAN        | IDX_USED                     |     1 |     1 |      1 |00:00:00.01 |       2 |       0 |",
+        ]
+        table = TableContext(
+            name="T",
+            schema="HR",
+            object_type="TABLE",
+            stats={"num_rows": 5000},
+            indexes=[
+                {
+                    "index_name": "IDX_USED",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL1",
+                },
+                {
+                    "index_name": "IDX_X1",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL2",
+                },
+                {
+                    "index_name": "IDX_X2",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL3",
+                },
+                {
+                    "index_name": "IDX_X3",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "COL4",
+                },
+            ],
+        )
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT COL1 FROM HR.T",
+                sql_type="SELECT",
+                tables=[{"schema": "HR", "name": "T"}],
+            ),
+            runtime_plan=plan,
+            tables=[table],
+        )
+        md = to_markdown(ctx, verbosity="compact")
+        assert "3 índices adicionais não referenciados no plano omitidos" in md

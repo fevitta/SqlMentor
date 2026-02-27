@@ -26,10 +26,13 @@ from sqlmentor.report import (
     _add_nonsequential_id_note,
     _apply_thresholds,
     _collapse_config_fields,
+    _collapse_low_cost_nested_loops,
     _collapse_orphan_predicates_by_ids,
     _collapse_situation_history,
+    _collapse_union_all_branches,
     _collapse_view_zero_rows,
     _compress_plan,
+    _deduplicate_predicates,
     _detect_plan_blocks,
     _split_plan_predicates,
     to_markdown,
@@ -379,6 +382,8 @@ def test_no_silent_pruning(blocks: list):
         _collapse_config_fields(blocks)
         + _collapse_situation_history(blocks, {})
         + _collapse_view_zero_rows(blocks)
+        + _collapse_union_all_branches(blocks)  # R7
+        + _collapse_low_cost_nested_loops(blocks)  # R8
     )
 
     for cr in all_results:
@@ -506,6 +511,8 @@ def test_collapsed_ids_absent_from_reconstructed_plan(blocks, verbosity):
         _collapse_config_fields(blocks)
         + _collapse_situation_history(blocks, {})
         + _collapse_view_zero_rows(blocks)
+        + _collapse_union_all_branches(blocks)  # R7
+        + _collapse_low_cost_nested_loops(blocks)  # R8
     )
 
     all_collapsed_ids = {cid for cr in all_collapses for cid in cr.collapsed_ids}
@@ -1122,6 +1129,8 @@ def test_immune_blocks_never_collapsed(blocks: list):
         _collapse_config_fields(blocks)
         + _collapse_situation_history(blocks, {})
         + _collapse_view_zero_rows(blocks)
+        + _collapse_union_all_branches(blocks)  # R7
+        + _collapse_low_cost_nested_loops(blocks)  # R8
     )
 
     all_collapsed_ids = {id_ for cr in results for id_ in cr.collapsed_ids}
@@ -1780,3 +1789,187 @@ class TestIntegrationRealPlan:
         overlap = all_collapsed_ids & ids_in_compact
 
         assert not overlap, f"IDs colapsados ainda presentes no plano compact: {overlap}"
+
+
+# ─── R7 — Colapso de branches UNION ALL idênticos ────────────────────────────
+
+
+def _make_union_all_branches(
+    n: int, ops_per_branch: list[tuple[str, str]], start_id: int = 1, immune_idx: int | None = None
+) -> list[PlanBlock]:
+    """Gera blocos UNION-ALL com N branches idênticos."""
+    blocks = [_make_block(id=str(start_id), operation="UNION-ALL", name="", indent=0)]
+    bid = start_id + 1
+    for i in range(n):
+        for op, name in ops_per_branch:
+            immune = immune_idx is not None and i == immune_idx
+            blocks.append(
+                _make_block(id=str(bid), operation=op, name=name, indent=1, immune=immune)
+            )
+            bid += 1
+    return blocks
+
+
+class TestCollapseUnionAllBranches:
+    def test_three_or_more_collapses(self):
+        blocks = _make_union_all_branches(3, [("TABLE ACCESS FULL", "TABELA_X")])
+        results = _collapse_union_all_branches(blocks)
+        assert len(results) == 1
+        assert len(results[0].collapsed_ids) == 3
+
+    def test_fewer_than_three_does_not_collapse(self):
+        blocks = _make_union_all_branches(2, [("TABLE ACCESS FULL", "TABELA_X")])
+        results = _collapse_union_all_branches(blocks)
+        assert len(results) == 0
+
+    def test_different_branches_do_not_collapse(self):
+        blocks = [_make_block(id="1", operation="UNION-ALL", name="", indent=0)]
+        blocks.append(_make_block(id="2", operation="TABLE ACCESS FULL", name="T1", indent=1))
+        blocks.append(_make_block(id="3", operation="TABLE ACCESS FULL", name="T2", indent=1))
+        blocks.append(_make_block(id="4", operation="INDEX RANGE SCAN", name="IDX1", indent=1))
+        results = _collapse_union_all_branches(blocks)
+        assert len(results) == 0
+
+    def test_immune_blocks_prevent_collapse(self):
+        blocks = _make_union_all_branches(3, [("TABLE ACCESS FULL", "TABELA_X")], immune_idx=1)
+        results = _collapse_union_all_branches(blocks)
+        assert len(results) == 0
+
+    def test_summary_mentions_table(self):
+        blocks = _make_union_all_branches(4, [("TABLE ACCESS FULL", "TABELA_X")])
+        results = _collapse_union_all_branches(blocks)
+        assert len(results) == 1
+        summary = results[0].replacement_lines[0]
+        assert "TABELA_X" in summary
+        assert "4 branches" in summary
+
+
+# ─── R8 — Colapso de NESTED LOOPS repetitivos low-cost ───────────────────────
+
+
+def _make_nested_loops_low_cost(
+    starts: int,
+    buffers_per_iter: float,
+    rows_per_iter: float,
+    start_id: int = 1,
+    immune: bool = False,
+) -> list[PlanBlock]:
+    """Gera blocos NESTED LOOPS com child para testes R8."""
+    total_buffers = int(buffers_per_iter * starts)
+    total_a_rows = int(rows_per_iter * starts)
+    return [
+        _make_block(
+            id=str(start_id),
+            operation="NESTED LOOPS",
+            name="",
+            starts=starts,
+            buffers=total_buffers,
+            a_rows=total_a_rows,
+            indent=0,
+        ),
+        _make_block(
+            id=str(start_id + 1),
+            operation="INDEX RANGE SCAN",
+            name="IDX_CHILD",
+            starts=starts,
+            buffers=0,
+            a_rows=0,
+            indent=2,
+            immune=immune,
+        ),
+    ]
+
+
+class TestCollapseLowCostNestedLoops:
+    def test_high_starts_low_cost_collapses(self):
+        blocks = _make_nested_loops_low_cost(starts=200, buffers_per_iter=2, rows_per_iter=0.5)
+        results = _collapse_low_cost_nested_loops(blocks)
+        assert len(results) == 1
+
+    def test_low_starts_does_not_collapse(self):
+        blocks = _make_nested_loops_low_cost(starts=50, buffers_per_iter=2, rows_per_iter=0.5)
+        results = _collapse_low_cost_nested_loops(blocks)
+        assert len(results) == 0
+
+    def test_high_cost_per_iter_does_not_collapse(self):
+        blocks = _make_nested_loops_low_cost(starts=200, buffers_per_iter=10, rows_per_iter=0.5)
+        results = _collapse_low_cost_nested_loops(blocks)
+        assert len(results) == 0
+
+    def test_immune_blocks_prevent_collapse(self):
+        blocks = _make_nested_loops_low_cost(
+            starts=200, buffers_per_iter=2, rows_per_iter=0.5, immune=True
+        )
+        results = _collapse_low_cost_nested_loops(blocks)
+        assert len(results) == 0
+
+    def test_summary_shows_stats_per_iter(self):
+        blocks = _make_nested_loops_low_cost(starts=200, buffers_per_iter=2.0, rows_per_iter=0.5)
+        results = _collapse_low_cost_nested_loops(blocks)
+        assert len(results) == 1
+        summary = results[0].replacement_lines[0]
+        assert "rows/iter" in summary
+        assert "buf/iter" in summary
+        assert "200 starts" in summary
+
+
+# ─── R12 — Deduplicação de predicados idênticos ──────────────────────────────
+
+
+class TestDeduplicatePredicates:
+    PRED_HEADER = "Predicate Information (identified by operation id):"
+
+    def test_duplicates_merged(self):
+        lines = [
+            self.PRED_HEADER,
+            '   3 - access("T"."ID"="V"."ID")',
+            '   7 - access("T"."ID"="V"."ID")',
+        ]
+        result = _deduplicate_predicates(lines)
+        # Should have merged line with both IDs
+        pred_lines = [ln for ln in result if "access" in ln]
+        assert len(pred_lines) == 1
+        assert "3, 7" in pred_lines[0]
+
+    def test_unique_unchanged(self):
+        lines = [
+            self.PRED_HEADER,
+            '   3 - access("T"."ID"="V"."ID")',
+            '   7 - filter("X" > 10)',
+        ]
+        result = _deduplicate_predicates(lines)
+        pred_lines = [ln for ln in result if "access" in ln or "filter" in ln]
+        assert len(pred_lines) == 2
+
+    def test_order_by_smallest_id(self):
+        lines = [
+            self.PRED_HEADER,
+            '   12 - access("A"."ID"="B"."ID")',
+            '   5 - filter("X" > 10)',
+            '   3 - access("A"."ID"="B"."ID")',
+        ]
+        result = _deduplicate_predicates(lines)
+        pred_lines = [ln for ln in result if "access" in ln or "filter" in ln]
+        # access group (3,12) should come before filter (5)
+        access_idx = next(i for i, ln in enumerate(pred_lines) if "access" in ln)
+        filter_idx = next(i for i, ln in enumerate(pred_lines) if "filter" in ln)
+        assert access_idx < filter_idx
+
+    def test_note_added(self):
+        lines = [
+            self.PRED_HEADER,
+            '   3 - access("T"."ID"="V"."ID")',
+            '   7 - access("T"."ID"="V"."ID")',
+            '   12 - access("T"."ID"="V"."ID")',
+        ]
+        result = _deduplicate_predicates(lines)
+        assert any("predicados duplicados agrupados" in ln for ln in result)
+
+    def test_headers_preserved(self):
+        lines = [
+            self.PRED_HEADER,
+            "-----------------------------------",
+            '   3 - access("T"."ID"="V"."ID")',
+        ]
+        result = _deduplicate_predicates(lines)
+        assert any("Predicate Information" in ln for ln in result)
