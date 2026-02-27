@@ -42,6 +42,16 @@ Flags somente CLI (não precisam de equivalente MCP): `--verbose` (controle de d
 
 Nunca registrar a mesma função duas vezes com `@mcp.tool()`. Nunca editar apenas um dos arquivos sem verificar os outros dois.
 
+## ⚠️ Regra de Atualização de Documentação Técnica
+
+Ao alterar qualquer lógica de compressão do plano (`report.py`), fluxos de execução, contratos de dados ou parâmetros públicos, `.kiro/steering/architecture.md` deve ser atualizado na mesma operação. Isso inclui:
+
+- Adicionar/remover/alterar regras R1–Rn: atualizar tabela de regras, exemplos de formato e checklist
+- Alterar thresholds R5: atualizar tabela de imunidade
+- Alterar `verbosity`: atualizar tabela de parâmetro
+- Alterar dataclasses `CollectedContext`, `TableContext`, `PlanBlock`: atualizar contrato de dados
+- Alterar fluxos CLI/MCP: atualizar diagramas mermaid correspondentes
+
 ## Convenções
 
 - Todas as queries Oracle usam bind variables (`:param`) — nunca f-strings com input do usuário.
