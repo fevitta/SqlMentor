@@ -7,13 +7,13 @@ from sqlmentor.report import _prune_dead_operations, _strip_view_column_list, to
 
 def test_prune_dead_operations():
     plan = [
-        "SQL_ID  bp85n659525m6, child number 0",
-        "Plan hash value: 790398113",
+        "SQL_ID  aaaaabbbbbcccc, child number 0",
+        "Plan hash value: 123456789",
         "|   0 | SELECT STATEMENT  |  |      1 |        |      1 |00:00:00.97 |     137K|",
         "|*  1 |  COUNT STOPKEY    |  |      1 |        |      1 |00:00:00.01 |       3 |",
-        "|* 26 |     INDEX UNIQUE SCAN  | PK_GRUPO_ATIVIDADE  |      0 |      1 |      0 |00:00:00.01 |       0 |",
-        "|  27 |    TABLE ACCESS BY INDEX ROWID  | GRUPO_ATIVIDADE  |      0 |      1 |      0 |00:00:00.01 |       0 |",
-        "| 381 | TABLE ACCESS BY INDEX ROWID  | FUNCIONARIO  |  62502 |      1 |  59897 |00:00:00.15 |   79881 |",
+        "|* 26 |     INDEX UNIQUE SCAN  | PK_ENTITY_X  |      0 |      1 |      0 |00:00:00.01 |       0 |",
+        "|  27 |    TABLE ACCESS BY INDEX ROWID  | ENTITY_X  |      0 |      1 |      0 |00:00:00.01 |       0 |",
+        "| 381 | TABLE ACCESS BY INDEX ROWID  | ENTITY_Y  |  62502 |      1 |  59897 |00:00:00.15 |   79881 |",
     ]
     result, _pruned_ids = _prune_dead_operations(plan)
     # Deve manter linhas 0, 1, 381 (Starts>0) e remover 26, 27 (Starts=0, A-Rows=0)
@@ -25,12 +25,12 @@ def test_prune_dead_operations():
 
 def test_strip_view_column_list():
     ddl = (
-        'CREATE OR REPLACE FORCE VIEW "SAMPLE_SCHEMA"."VW_ENTITY_A_DETAIL" '
+        'CREATE OR REPLACE FORCE VIEW "MYSCHEMA"."VW_ENTITY_DETAIL" '
         '("COL1", "COL2", "COL3") AS\n'
         "  SELECT\n"
         "    T1.COL1,\n"
         "    T1.COL2\n"
-        "  FROM TABELA T1"
+        "  FROM ENTITY_A T1"
     )
     result = _strip_view_column_list(ddl)
     assert '("COL1"' not in result, "Lista de colunas não foi removida"
