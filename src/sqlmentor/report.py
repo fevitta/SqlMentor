@@ -9,15 +9,11 @@ Suporta Markdown (otimizado pra colar em chat) e JSON (pra integração via API)
 
 import json
 import re
-
 from dataclasses import dataclass, field
 from datetime import datetime
-
 from typing import Any
 
-
 from sqlmentor.collector import CollectedContext, TableContext
-
 
 # ─── Dataclasses para compressão do plano ────────────────────────
 

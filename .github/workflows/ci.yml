@@ -32,5 +32,5 @@ jobs:
       - name: Format check (ruff format)
         run: ruff format --check src/ tests/
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+      - name: Run tests with coverage
+        run: pytest tests/ -v --tb=short --cov=sqlmentor --cov-fail-under=90

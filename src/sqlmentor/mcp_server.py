@@ -342,7 +342,7 @@ def inspect_sql(
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
-        runtime_stats_data = dict(zip(columns, row)) if row else None
+        runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
     except Exception as e:
         logger.warning("Falha ao recuperar métricas V$SQL para sql_id '%s': %s", sql_id, e)
 

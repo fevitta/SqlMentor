@@ -397,7 +397,7 @@ def inspect(
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
-        runtime_stats = dict(zip(columns, row)) if row else None
+        runtime_stats = dict(zip(columns, row, strict=False)) if row else None
     except Exception as e:
         console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
         runtime_stats = None

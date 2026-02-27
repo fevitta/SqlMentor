@@ -15,43 +15,25 @@ Estrutura:
 import re
 import re as _re_module
 
-
 import pytest
-
 from hypothesis import given, settings
-
 from hypothesis import strategies as st
 
-
 from sqlmentor.collector import CollectedContext
-
 from sqlmentor.parser import ParsedSQL
-
 from sqlmentor.report import (
-
     PlanBlock,
-
     _add_nonsequential_id_note,
-
     _apply_thresholds,
-
     _collapse_config_fields,
-
     _collapse_orphan_predicates_by_ids,
-
     _collapse_situation_history,
-
     _collapse_view_zero_rows,
-
     _compress_plan,
-
     _detect_plan_blocks,
-
     _split_plan_predicates,
-
     to_markdown,
 )
-
 
 # ─── Estratégias Hypothesis ───────────────────────────────────────
 
@@ -2190,17 +2172,11 @@ class TestIntegrationRealPlan:
         """
         import re
 
-
         from sqlmentor.report import (
-
             _apply_thresholds,
-
             _collapse_config_fields,
-
             _collapse_situation_history,
-
             _collapse_view_zero_rows,
-
             _detect_plan_blocks,
         )
 
