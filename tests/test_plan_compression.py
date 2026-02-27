@@ -761,7 +761,7 @@ class TestDetectPlanBlocks:
 
     LINE_1 = "|   1 | SORT AGGREGATE          |                              |     1 |       |      0 |00:00:00.01 |       3 |       0 |"
 
-    LINE_2 = "|   2 | INDEX RANGE SCAN        | IDX_ATTR_ENTITY_ID           |     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
+    LINE_2 = "|   2 | INDEX RANGE SCAN        | IDX_GENERIC_A                |     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
 
     LINE_K = "|   1 | TABLE ACCESS FULL       | SOME_TABLE                   |     1 |  1000 |    500 |00:00:00.05 |     10K |       0 |"
 
@@ -802,7 +802,7 @@ class TestDetectPlanBlocks:
 
         assert "INDEX RANGE SCAN" in b2.operation
 
-        assert b2.name == "IDX_ATTR_ENTITY_ID"
+        assert b2.name == "IDX_GENERIC_A"
 
         assert b2.e_rows == 1
 
@@ -1311,7 +1311,7 @@ class TestCollapseSituationHistory:
 
 
 
-# ─── Tarefa 9.3 — Testes unitários para _collapse_vw_usuario_null (R3) ───────
+# ─── Tarefa 9.3 — Testes unitários para _collapse_view_zero_rows (R3) ───────
 
 
 
@@ -1513,7 +1513,7 @@ PLAN_HASH_LINE = "Plan hash value: 1234567890"
 
 LINE_ID_1 = "|   1 | SORT AGGREGATE          |                              |     1 |       |      0 |00:00:00.01 |       3 |       0 |"
 
-LINE_ID_2 = "|   2 | INDEX RANGE SCAN        | IDX_ATTR_ENTITY_ID           |     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
+LINE_ID_2 = "|   2 | INDEX RANGE SCAN        | IDX_GENERIC_A                |     1 |     1 |      0 |00:00:00.01 |       2 |       0 |"
 
 LINE_ID_3 = "|   3 | TABLE ACCESS FULL       | SOME_TABLE                   |     1 |  1000 |    500 |00:00:00.05 |      10 |       0 |"
 
@@ -2043,7 +2043,7 @@ class TestIntegrationRealPlan:
         Validates: Requirements 1.3
 
 
-        compact deve colapsar R1 (4 grupos), R2 (3 grupos) e R3 (VW_CURRENT_USER),
+        compact deve colapsar R1 (4 grupos), R2 (3 grupos) e R3 (VIEW com A-Rows=0),
 
         produzindo menos linhas que full.
         """
