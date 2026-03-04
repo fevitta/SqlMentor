@@ -89,12 +89,6 @@ class _StepTimer:
         console.print(f"\n[dim]Tempo: {' | '.join(parts)}[/dim]")
 
 
-def _safe_filename_part(s: str, max_len: int = 20) -> str:
-    """Sanitiza string para uso seguro em nomes de arquivo."""
-    s = re.sub(r"[^a-z0-9_]", "_", s.lower().strip())
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s[:max_len]
-
 
 def _resolve_sql_input(sql_file: Path | None, sql_inline: str | None) -> tuple[str, str]:
     """Resolve a fonte do SQL: arquivo ou --sql inline. Retorna (texto, label)."""
@@ -337,20 +331,15 @@ def analyze(
     report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
     timer.mark("Render")
 
-    conn_part = _safe_filename_part(conn)
-    schema_part = _safe_filename_part(effective_schema)
     if output:
         out_path = output
     else:
-        # Pasta padrão: reports/
         reports_dir = Path("reports")
         reports_dir.mkdir(exist_ok=True)
-
-        # Nome: report_<timestamp>_<conn>_<schema>_<filename ou hash>.ext
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
         base = sql_file.stem if sql_file else hashlib.md5(sql_text.encode()).hexdigest()[:8]  # noqa: S324
-        out_path = reports_dir / f"report_{ts}_{conn_part}_{schema_part}_{base}.{ext}"
+        out_path = reports_dir / f"{base}_{ts}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
     timer.mark("Save")
@@ -461,7 +450,7 @@ def inspect(
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
             oracle_conn.close()
             raise typer.Exit(1)
-        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
+        sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         if "não encontrado" in str(e) or "Exit" in type(e).__name__:
             raise
@@ -533,8 +522,6 @@ def inspect(
     report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
     timer.mark("Render")
 
-    conn_part = _safe_filename_part(conn)
-    schema_part = _safe_filename_part(effective_schema)
     if output:
         out_path = output
     else:
@@ -542,7 +529,7 @@ def inspect(
         reports_dir.mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
-        out_path = reports_dir / f"report_{ts}_{conn_part}_{schema_part}_inspect_{sql_id}.{ext}"
+        out_path = reports_dir / f"{sql_id}_{ts}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
     timer.mark("Save")

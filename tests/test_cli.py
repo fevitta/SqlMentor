@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
-from sqlmentor.cli import _safe_filename_part, _StepTimer, _validate_timeout, app
+from sqlmentor.cli import _StepTimer, _validate_timeout, app
 from sqlmentor.collector import CollectedContext, TableContext
 from sqlmentor.parser import ParsedSQL
 
@@ -947,6 +947,21 @@ class TestInspectSuccess:
         assert result.exit_code == 0
         assert "não disponíve" in result.output.lower()
 
+    def test_clob_sql_text(self, monkeypatch, tmp_path):
+        """SQL_FULLTEXT retornado como CLOB (thick mode) → .read() chamado corretamente."""
+        mock_lob = MagicMock()
+        mock_lob.read.return_value = "SELECT id FROM users WHERE id = 1"
+        out_file, _mocks = _inspect_patches(
+            monkeypatch, tmp_path, sql_text_row=(mock_lob,)
+        )
+        result = runner.invoke(
+            app,
+            ["inspect", "abc123", "--conn", "test", "--output", str(out_file)],
+        )
+        assert result.exit_code == 0
+        assert "Relatório salvo" in result.output
+        mock_lob.read.assert_called_once()
+
     def test_json_format(self, monkeypatch, tmp_path):
         """--format json → to_json called."""
         out_file, mocks = _inspect_patches(monkeypatch, tmp_path)
@@ -1054,29 +1069,3 @@ class TestStepTimer:
         assert "Total" in captured.out
 
 
-# ─── _safe_filename_part ─────────────────────────────────────────────────────
-
-
-class TestSafeFilenamePart:
-    def test_basic_sanitization(self):
-        """'PROD.HR' → 'prod_hr'."""
-        assert _safe_filename_part("PROD.HR") == "prod_hr"
-
-    def test_truncation(self):
-        """String longer than max_len is truncated."""
-        result = _safe_filename_part("a" * 50, max_len=10)
-        assert len(result) == 10
-
-    def test_special_chars(self):
-        """Special chars replaced with underscore."""
-        result = _safe_filename_part("my@conn!name")
-        assert result == "my_conn_name"
-
-    def test_empty_string(self):
-        """Empty string → empty."""
-        assert _safe_filename_part("") == ""
-
-    def test_leading_trailing_underscores_stripped(self):
-        """Leading/trailing underscores stripped."""
-        result = _safe_filename_part("..test..")
-        assert result == "test"
