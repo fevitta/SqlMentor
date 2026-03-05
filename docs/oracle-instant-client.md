@@ -50,8 +50,10 @@ sqlmentor doctor
 
 O check de thick mode deve mostrar `✓ Disponível`.
 
-sqlmentor config add --name prod --user sqlmentor --host 192.168.1.100 --port 1521 --service ORCL --schema sqlmentor --password 123
+```bash
+sqlmentor config add --name dev --user sqlmentor --host 192.168.1.100 --port 1521 --service ORCL --schema sqlmentor --password mysecret
 
-sqlmentor config test -n prod
+sqlmentor config test -n dev
 
-sqlmentor config set-default -n prod
+sqlmentor config set-default -n dev
+```

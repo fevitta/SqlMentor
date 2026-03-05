@@ -1,12 +1,12 @@
 """
 Batch inspect de SQL candidates — gera relatórios em 3 verbosidades.
 
-Lê sql/sql_candidates.csv, extrai sql_ids únicos e roda
+Lê sql/candidates.csv, extrai sql_ids únicos e roda
 `sqlmentor inspect` para cada um nos modos full, compact e minimal.
 
 Uso:
     python scripts/batch_inspect.py
-    python scripts/batch_inspect.py --conn prod --csv sql/sql_candidates.csv
+    python scripts/batch_inspect.py --conn prod --csv sql/candidates.csv
     python scripts/batch_inspect.py --dry-run          # mostra o que faria sem executar
 """
 
@@ -68,7 +68,7 @@ def run_inspect(
 
 def main():
     parser = argparse.ArgumentParser(description="Batch inspect de SQL candidates")
-    parser.add_argument("--csv", default="sql/sql_candidates.csv", help="Caminho do CSV")
+    parser.add_argument("--csv", default="sql/candidates.csv", help="Caminho do CSV")
     parser.add_argument("--conn", default="prod", help="Profile de conexão (default: prod)")
     parser.add_argument("--output-dir", default="reports/batch", help="Diretório de saída")
     parser.add_argument("--dry-run", action="store_true", help="Mostra comandos sem executar")

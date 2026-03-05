@@ -951,9 +951,7 @@ class TestInspectSuccess:
         """SQL_FULLTEXT retornado como CLOB (thick mode) → .read() chamado corretamente."""
         mock_lob = MagicMock()
         mock_lob.read.return_value = "SELECT id FROM users WHERE id = 1"
-        out_file, _mocks = _inspect_patches(
-            monkeypatch, tmp_path, sql_text_row=(mock_lob,)
-        )
+        out_file, _mocks = _inspect_patches(monkeypatch, tmp_path, sql_text_row=(mock_lob,))
         result = runner.invoke(
             app,
             ["inspect", "abc123", "--conn", "test", "--output", str(out_file)],
@@ -1067,5 +1065,3 @@ class TestStepTimer:
         timer.print_summary()
         captured = capsys.readouterr()
         assert "Total" in captured.out
-
-

@@ -889,18 +889,18 @@ class TestStripColumnProjection:
         lines = [
             "Predicate Information (identified by operation id):",
             "---------------------------------------------------",
-            "   1 - access(\"T\".\"ID\"=1)",
+            '   1 - access("T"."ID"=1)',
             "",
             "Column Projection Information (identified by operation id):",
             "-----------------------------------------------------------",
-            "   1 - \"T\".\"ID\"[NUMBER,22], \"T\".\"NOME\"[VARCHAR2,100]",
-            "   2 - \"T\".\"ID\"[NUMBER,22]",
+            '   1 - "T"."ID"[NUMBER,22], "T"."NOME"[VARCHAR2,100]',
+            '   2 - "T"."ID"[NUMBER,22]',
         ]
         result = _strip_column_projection(lines)
-        assert any("Predicate" in l for l in result)
-        assert any("access" in l for l in result)
-        assert not any("Column Projection" in l for l in result)
-        assert not any("NOME" in l for l in result)
+        assert any("Predicate" in line for line in result)
+        assert any("access" in line for line in result)
+        assert not any("Column Projection" in line for line in result)
+        assert not any("NOME" in line for line in result)
 
     def test_no_column_projection_returns_unchanged(self):
         from sqlmentor.report import _strip_column_projection
@@ -908,7 +908,7 @@ class TestStripColumnProjection:
         lines = [
             "Predicate Information (identified by operation id):",
             "---------------------------------------------------",
-            "   1 - access(\"T\".\"ID\"=1)",
+            '   1 - access("T"."ID"=1)',
         ]
         result = _strip_column_projection(lines)
         assert result == lines
@@ -932,7 +932,7 @@ class TestStripColumnProjection:
             "",
             "Column Projection Information (identified by operation id):",
             "-----------------------------------------------------------",
-            "   1 - \"DUAL\".\"DUMMY\"[VARCHAR2,1]",
+            '   1 - "DUAL"."DUMMY"[VARCHAR2,1]',
         ]
         ctx = CollectedContext(
             parsed_sql=ParsedSQL(
@@ -965,7 +965,7 @@ class TestStripColumnProjection:
             "",
             "Column Projection Information (identified by operation id):",
             "-----------------------------------------------------------",
-            "   1 - \"DUAL\".\"DUMMY\"[VARCHAR2,1]",
+            '   1 - "DUAL"."DUMMY"[VARCHAR2,1]',
         ]
         ctx = CollectedContext(
             parsed_sql=ParsedSQL(

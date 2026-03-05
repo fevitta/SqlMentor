@@ -21,6 +21,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.ai-jail
 
 # Config local
 connections.yaml

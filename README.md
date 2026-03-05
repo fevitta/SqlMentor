@@ -1,8 +1,8 @@
 # SqlMentor
 
-CLI para coleta de contexto Oracle 11g+, otimizado para tuning de SQL assistido por IA.
+CLI + MCP Server Python para coleta de contexto Oracle 11g+, otimizado para tuning de SQL assistido por IA.
 
-Dado um arquivo SQL (query, procedure, trigger, function), o `sqlmentor` conecta no banco Oracle, extrai automaticamente todo o metadata relevante (plano de execução real, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
+Dado um SQL (query, procedure, trigger, function), o `sqlmentor` conecta no banco Oracle, extrai automaticamente todo o metadata relevante (plano de execução real, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
 
 ## Instalação
 
@@ -10,230 +10,69 @@ Dado um arquivo SQL (query, procedure, trigger, function), o `sqlmentor` conecta
 pip install -e .
 ```
 
-### Pré-requisitos
+Pré-requisitos: Python 3.12+ e acesso a um Oracle 11g+ (driver `oracledb` em modo thin, sem Oracle Client).
 
-- Python 3.12+
-- Acesso a um Oracle 11g+ (driver `oracledb` em modo thin, sem Oracle Client)
+> Para Oracle < 12c (modo thick), veja [docs/oracle-instant-client.md](docs/oracle-instant-client.md).
 
 ## Uso Rápido
 
-### 1. Configurar conexão
-
 ```bash
-sqlmentor config add \
-  --name producao \
-  --host 192.168.0.1 \
-  --port 1521 \
-  --service PROD \
-  --user SQLMENTOR \
-  --schema SQLMENTOR
-# (senha será solicitada de forma segura)
+# Configurar conexão
+sqlmentor config add --name prod --host 192.168.0.1 --port 1521 --service ORCL --user SQLMENTOR --schema SQLMENTOR
+sqlmentor config set-default -n prod
 
-# Definir como conexão padrão (dispensa --conn nos comandos)
-sqlmentor config set-default -n producao
-```
-
-### 2. Analisar um SQL
-
-```bash
-# Relatório salvo em reports/ automaticamente
-sqlmentor analyze minha_query.sql --conn producao
-
-# Ou sem --conn, usando a conexão padrão
+# Análise com plano estimado
 sqlmentor analyze minha_query.sql
 
-# Executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime
-sqlmentor analyze minha_query.sql --conn producao --execute
+# Plano real (executa a query com ALLSTATS LAST)
+sqlmentor analyze minha_query.sql --execute
 
-# Bind variables (parâmetros da query)
-sqlmentor analyze minha_query.sql --conn producao -b id=123 -b status=A
+# Com bind variables
+sqlmentor analyze minha_query.sql --execute -b id=123 -b status=A
 
-# Binds com valores nulos (Oracle NULL) — aceita null ou none
-sqlmentor analyze minha_query.sql --conn producao -b obr=123 -b filtro=null -b tipo=none
+# Inspecionar query já executada (sem re-executar)
+sqlmentor inspect <sql_id>
 
-# Detalha views (DDL, colunas internas)
-sqlmentor analyze minha_query.sql --conn producao --expand-views
-
-# Análise profunda (histogramas e partições)
-sqlmentor analyze minha_query.sql --conn producao --deep
-
-# Debug (mostra queries e tempos internos)
-sqlmentor analyze minha_query.sql --conn producao --debug
-
-# Forçar re-coleta de metadata (ignora cache)
-sqlmentor analyze minha_query.sql --conn producao --no-cache
-
-# Formato JSON
-sqlmentor analyze minha_query.sql --conn producao --format json
-
-# Saída customizada
-sqlmentor analyze minha_query.sql --conn producao --output meu_relatorio.md
-```
-
-### 3. Parse offline (sem conexão)
-
-```bash
+# Parse offline (sem conexão)
 sqlmentor parse minha_query.sql --schema SCHEMA
+
+# Diagnóstico do ambiente
+sqlmentor doctor
 ```
 
-### 4. Gerenciar conexões
+## Flags
 
-```bash
-sqlmentor config list              # mostra todas (★ marca a padrão)
-sqlmentor config test --name producao
-sqlmentor config set-default --name producao
-sqlmentor config remove --name producao
-```
-
-### 5. Diagnóstico do ambiente
-
-```bash
-sqlmentor doctor    # verifica Python, oracledb, Oracle Instant Client e conexões
-```
+| Flag | Descrição |
+|------|-----------|
+| `--execute` | Executa a query real, coleta plano com ALLSTATS LAST + runtime stats |
+| `--deep` | Histogramas e partições |
+| `--expand-views` | DDL e colunas internas das views |
+| `--expand-functions` | DDL de funções PL/SQL referenciadas |
+| `--verbosity compact\|full\|minimal` | Nível de compressão do relatório (default: compact) |
+| `--show-sql` | Inclui texto SQL completo no relatório |
+| `--show-all-indexes` | Mostra todos os índices (não só os referenciados no SQL) |
+| `--no-cache` | Força re-coleta de metadata |
+| `--format json` | Relatório em JSON |
+| `--debug` | Mostra queries e tempos internos |
+| `-b nome=valor` | Bind variables para `--execute` |
 
 ## O que é coletado
 
-| Dado | Descrição | Flag |
-|------|-----------|------|
-| Plano real (ALLSTATS LAST) | Executa a query e coleta plano com stats reais | `--execute` |
-| Plano estimado | `EXPLAIN PLAN` via `DBMS_XPLAN` | padrão |
-| Runtime stats (V$SQL) | Elapsed, CPU, buffer gets, waits | `--execute` |
-| Wait events | Top waits da sessão | `--execute` |
-| Hotspots | Operações com efeito multiplicador e desvios de cardinalidade | `--execute` |
-| Conversões implícitas | Detecta `TO_CHAR`, `TO_NUMBER` etc. nos predicados | sempre |
-| View expansion | Tabelas internas das views, cruzadas com o plano | sempre |
-| DDL de views | `DBMS_METADATA.GET_DDL` | `--expand-views` |
-| Estatísticas de tabela | `ALL_TABLES` (rows, blocks, last_analyzed) | sempre |
-| Colunas (filtradas) | Só colunas referenciadas no SQL (WHERE, JOIN, ORDER, GROUP) | sempre |
-| Índices | Todos os índices das tabelas referenciadas | sempre |
-| Constraints + FKs | PK, FK, UK, CHECK com tabela referenciada | sempre |
-| Parâmetros do otimizador | `V$PARAMETER` com alertas de valores atípicos | sempre |
-| Histogramas detalhados | `ALL_TAB_HISTOGRAMS` | `--deep` |
-| Partições | `ALL_TAB_PARTITIONS` | `--deep` |
+| Dado | Flag |
+|------|------|
+| Plano real (ALLSTATS LAST) + runtime stats (V$SQL) + wait events | `--execute` |
+| Plano estimado (EXPLAIN PLAN) | padrão |
+| Hotspots + conversões implícitas + view expansion | sempre |
+| Estatísticas, colunas, índices, constraints + FKs | sempre |
+| Parâmetros do otimizador (com alertas de valores atípicos) | sempre |
+| DDL de views / funções PL/SQL | `--expand-views` / `--expand-functions` |
+| Histogramas + partições | `--deep` |
 
-### Verbosity (compressão do plano)
-
-O flag `--verbosity` controla o nível de compressão do plano de execução no relatório:
-
-| Nível | Comportamento |
-|-------|---------------|
-| `compact` | Default. Colapsa scalar subqueries repetitivas, expansões de views com A-Rows=0, e predicados redundantes. Reduz ~40% do tamanho sem perder informação relevante. |
-| `full` | Sem compressão adicional (além de P1/P3 já existentes). Útil para inspecionar o plano completo. |
-| `minimal` | Só hotspots + runtime stats + parâmetros do otimizador. Sem plano, sem DDL. Ideal para uma visão rápida. |
-
-```bash
-sqlmentor analyze minha_query.sql --verbosity compact   # default
-sqlmentor analyze minha_query.sql --verbosity full      # plano completo
-sqlmentor analyze minha_query.sql --verbosity minimal   # só métricas
-```
-
-### Controle de conteúdo do relatório
-
-| Flag | Default | Descrição |
-|------|---------|-----------|
-| `--show-sql` | off | Inclui texto SQL completo. No compact, só os metadados (tipo, tabelas, colunas) são exibidos por padrão. |
-| `--show-all-indexes` | off | Mostra todos os índices. Por padrão, só índices cujas colunas são referenciadas no SQL. |
-
-```bash
-sqlmentor analyze minha_query.sql --show-sql              # inclui SQL completo
-sqlmentor analyze minha_query.sql --show-all-indexes      # mostra todos os índices
-sqlmentor inspect abc123 --show-sql --show-all-indexes    # ambos
-```
-
-#### Regras de compressão (modo compact)
-
-O modo `compact` aplica 12 regras para reduzir o tamanho do relatório sem perder informação relevante:
-
-| Regra | Descrição |
-|-------|-----------|
-| R1 | Colapsa scalar subqueries com index lookup repetido (≥3 grupos) |
-| R2 | Colapsa scalar subqueries com index lookup repetido (≥2 grupos, com tabela de detalhes) |
-| R3 | Colapsa VIEWs com A-Rows=0 (subárvore inteira) |
-| R4 | Remove predicados órfãos de operações colapsadas |
-| R5 | Imunidade: operações com reads>0, buffers>1K, starts>100, tempo>100ms ou desvio>10x nunca são colapsadas |
-| R6 | Nota explicativa quando IDs não são sequenciais |
-| R7 | Colapsa UNION ALL com ≥3 branches idênticos |
-| R8 | Colapsa NESTED LOOPS de baixo custo (starts≥100, buf/iter≤3) |
-| R9 | Omite índices não relacionados às cláusulas do SQL (WHERE/JOIN/ORDER/GROUP) e ao plano |
-| R10 | Move colunas com distribuição uniforme para nota resumida |
-| R11 | Remove cláusulas de storage/tablespace da DDL de views |
-| R12 | Agrupa predicados idênticos que diferem apenas no ID |
-
-## Relatórios
-
-Reports são salvos automaticamente em `reports/` com o formato:
-
-```
-reports/report_20260216_180154_desc_unificado.md
-reports/report_20260216_173034_8ff00107.md   (quando via --sql inline)
-```
-
-O relatório Markdown é otimizado para colar direto num chat com LLM. Inclui seções de diagnóstico automático (SQL Health, hotspots, conversões implícitas) que ajudam a IA a focar nos problemas reais.
-
-## Funcionalidades
-
-- Parse de SQL via sqlglot (dialeto Oracle) com fallback regex pra PL/SQL
-- Detecção automática de CTEs (WITH ... AS) — não confunde alias de CTE com tabela real
-- View expansion: identifica tabelas internas de views e cruza com o plano de execução
-- Tabelas pequenas (< 1.000 rows) em formato compacto pra economizar context window
-- Alertas automáticos: `optimizer_index_cost_adj` fora do padrão, parse calls excessivos, buffer gets/row alto
+Relatórios são salvos automaticamente em `reports/` em Markdown otimizado para colar direto num chat com LLM.
 
 ## MCP Server
 
-O `sqlmentor` inclui um MCP Server que permite integração direta com IDEs como Kiro, Claude Desktop, etc. A IA chama as tools do sqlmentor automaticamente, sem o dev precisar rodar comandos no terminal.
-
-### Tools disponíveis
-
-| Tool | Descrição |
-|------|-----------|
-| `list_connections` | Lista profiles de conexão Oracle configurados |
-| `test_connection` | Testa se um profile funciona (retorna versão e schema) |
-| `parse_sql` | Parse offline — extrai tabelas, colunas, joins sem conectar |
-| `analyze_sql` | Análise completa: conecta no Oracle, coleta contexto, retorna relatório |
-| `inspect_sql` | Coleta contexto de um SQL já executado via sql_id, sem re-executar |
-
-### Exemplos de uso via MCP (verbosity)
-
-```python
-# compact é o default — colapsa scalar subqueries repetitivas
-analyze_sql(sql="SELECT ...", conn="producao", verbosity="compact")
-
-# full — plano completo sem compressão adicional
-analyze_sql(sql="SELECT ...", conn="producao", verbosity="full")
-
-# minimal — só hotspots + runtime stats + parâmetros do otimizador
-analyze_sql(sql="SELECT ...", conn="producao", verbosity="minimal")
-
-# inspect também aceita verbosity
-inspect_sql(sql_id="abc123xyz", conn="producao", verbosity="compact")
-```
-
-### Workflow via MCP (Claude Desktop / Kiro)
-
-```python
-# 1. Verificar conexões disponíveis
-list_connections()
-
-# 2. Entender a query (parse offline, sem conexão)
-parse_sql(sql_text="SELECT ...", schema="HR")
-
-# 3. Análise rápida (plano estimado + metadata)
-analyze_sql(sql_text="SELECT ...", conn="producao")
-
-# 4. Análise profunda (histogramas + partições + views)
-analyze_sql(sql_text="SELECT ...", conn="producao", deep=True, expand_views=True)
-
-# 5. Plano real (executa a query com ALLSTATS LAST)
-analyze_sql(sql_text="SELECT ...", conn="producao", execute=True, binds="id=123")
-
-# 6. Query já executada (via sql_id, sem re-executar)
-inspect_sql(sql_id="abc123xyz", conn="producao")
-
-# 7. Forçar re-coleta após alterar tabelas/índices
-analyze_sql(sql_text="SELECT ...", conn="producao", no_cache=True)
-```
-
-### Configuração manual (mcp.json)
+Integração com IDEs (Kiro, Claude Desktop, etc.) via Model Context Protocol:
 
 ```json
 {
@@ -246,78 +85,48 @@ analyze_sql(sql_text="SELECT ...", conn="producao", no_cache=True)
 }
 ```
 
-Pré-requisito: `pip install -e .` para registrar o entry point `sqlmentor-mcp`.
+### Tools
+
+| Tool | Descrição |
+|------|-----------|
+| `list_connections` | Lista profiles de conexão configurados |
+| `test_connection` | Testa um profile (retorna versão e schema) |
+| `parse_sql` | Parse offline — tabelas, colunas, joins |
+| `analyze_sql` | Análise completa: conecta, coleta contexto, retorna relatório |
+| `inspect_sql` | Contexto de SQL já executado via sql_id |
+
+### Workflow típico
+
+```python
+list_connections()                                          # ver profiles
+parse_sql(sql_text="SELECT ...", schema="HR")               # parse offline
+analyze_sql(sql_text="SELECT ...", conn="prod")             # plano estimado
+analyze_sql(sql_text="SELECT ...", conn="prod", execute=True, binds="id=123")  # plano real
+inspect_sql(sql_id="abc123xyz", conn="prod")                # via sql_id
+```
 
 ### Kiro Power
 
-Para times que usam Kiro, o Power em `powers/sqlmentor/` empacota o MCP Server + documentação + metodologia de análise. Instale via Powers UI → "Add Custom Power" → Local Directory → caminho absoluto de `powers/sqlmentor`.
-
-O Power inclui um steering file (`analysis.md`) com a metodologia completa de análise de DBA sênior Oracle, carregado sob demanda quando a IA vai analisar um relatório.
+Para times que usam Kiro: `powers/sqlmentor/` empacota MCP + metodologia de análise DBA sênior. Instale via Powers UI → Add Custom Power → caminho de `powers/sqlmentor`.
 
 ## Desenvolvimento
 
 ```bash
-# Instalar em modo dev (inclui pytest, ruff, hypothesis, etc.)
-pip install -e ".[dev]"
-
-# Rodar testes
-task test            # pytest -v
-task test-cov        # pytest com cobertura
-
-# Lint e formatação
-task lint            # ruff check src/ tests/
-ruff format src/ tests/
+pip install -e ".[dev]"     # instalar com deps de dev
+task test                   # pytest
+task test-cov               # pytest com cobertura
+task lint                   # ruff check
+ruff format src/ tests/     # formatação
 ```
 
-### CI
-
-GitHub Actions roda automaticamente em push/PR para `master`:
-- Python 3.12
-- Steps: ruff check, ruff format --check, mypy, pytest com cobertura ≥90%
-
-## Estrutura do Projeto
-
-```
-sqlmentor/
-├── pyproject.toml
-├── connections.example.yaml
-├── .github/
-│   └── workflows/
-│       └── ci.yml              # GitHub Actions CI
-├── scripts/
-│   └── oracle_create_user.sql
-├── reports/                    # Relatórios gerados
-├── powers/
-│   └── sqlmentor/              # Kiro Power (MCP + docs + steering)
-│       ├── POWER.md
-│       ├── mcp.json
-│       └── steering/
-│           └── analysis.md     # Metodologia de análise Oracle
-├── tests/
-│   ├── conftest.py             # Fixtures compartilhadas
-│   ├── test_parser.py          # Testes do parser SQL
-│   ├── test_connector.py       # Testes do CRUD de conexões
-│   ├── test_cli.py             # Testes da CLI (Typer)
-│   ├── test_mcp_server.py      # Testes do MCP Server
-│   ├── test_report_prune.py    # Testes do relatório e pruning
-│   └── test_plan_compression.py # Testes de compressão do plano
-└── src/sqlmentor/
-    ├── __init__.py
-    ├── cli.py                  # Entry point CLI (sqlmentor)
-    ├── mcp_server.py           # Entry point MCP (sqlmentor-mcp)
-    ├── parser.py               # Parse SQL → tabelas/colunas (sqlglot + regex)
-    ├── connector.py            # CRUD de conexões (~/.sqlmentor/connections.yaml)
-    ├── collector.py            # Coleta metadata Oracle
-    ├── report.py               # Gera Markdown/JSON
-    └── queries/
-        ├── __init__.py         # Queries Oracle (cada fn retorna tuple sql+params)
-        └── oracle.py
-```
+CI (GitHub Actions): Python 3.12, ruff check, ruff format --check, mypy, pytest com cobertura ≥ 90%.
 
 ## Roadmap
 
-- [ ] Suporte MariaDB
-- [x] MCP Server pra integração com Kiro/Claude Desktop
-- [x] Kiro Power com metodologia de análise embutida
+- [ ] Suporte a outros bancos de dados
+- [ ] Suporte a versões mais novas do Oracle
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
-- [x] Cache de metadata (evita re-coletar pra mesmas tabelas) — `--no-cache` para forçar re-coleta
+
+## Licença
+
+[MIT](LICENSE)

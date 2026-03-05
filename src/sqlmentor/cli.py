@@ -15,7 +15,6 @@ Uso:
 
 import hashlib
 import logging
-import re
 import sys
 import time
 from datetime import datetime
@@ -87,7 +86,6 @@ class _StepTimer:
             )
         parts.append(f"Total: {total * 1000:.0f}ms" if total < 1 else f"Total: {total:.1f}s")
         console.print(f"\n[dim]Tempo: {' | '.join(parts)}[/dim]")
-
 
 
 def _resolve_sql_input(sql_file: Path | None, sql_inline: str | None) -> tuple[str, str]:

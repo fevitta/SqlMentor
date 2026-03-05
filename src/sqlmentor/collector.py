@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # ── Cache TTL + LRU ──────────────────────────────────────────────────
 
-_CACHE_TTL_SECONDS: int = 300  # 5 minutos
+_CACHE_TTL_SECONDS: int = 3600  # 1 hora
 _CACHE_MAX_ENTRIES: int = 500
 
 
@@ -652,9 +652,20 @@ def _collect_runtime_execution(
         # Restaura STATISTICS_LEVEL
         cursor.execute("ALTER SESSION SET STATISTICS_LEVEL = TYPICAL")
 
+    except oracledb.DatabaseError as e:
+        err_msg = str(e)
+        if "DPY-4011" in err_msg or "call timeout" in err_msg.lower():
+            ctx.errors.append(
+                "Query cancelada por timeout. "
+                "Execute o SQL diretamente no banco e use "
+                "'sqlmentor inspect <sql_id>' para coletar o plano sem re-executar."
+            )
+        else:
+            ctx.errors.append(f"Erro na execução runtime: {e}")
+        # Fallback pro plano estimado
+        ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx, bind_params)
     except Exception as e:
         ctx.errors.append(f"Erro na execução runtime: {e}")
-        # Fallback pro plano estimado
         ctx.execution_plan = _collect_explain_plan(cursor, sql_text, ctx, bind_params)
 
 

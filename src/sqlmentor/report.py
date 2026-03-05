@@ -816,9 +816,7 @@ def _compress_plan(
 
     all_collapses.extend(_collapse_config_fields(blocks, is_estimated=is_estimated))
 
-    all_collapses.extend(
-        _collapse_situation_history(blocks, pred_map, is_estimated=is_estimated)
-    )
+    all_collapses.extend(_collapse_situation_history(blocks, pred_map, is_estimated=is_estimated))
 
     all_collapses.extend(_collapse_union_all_branches(blocks))  # R7
 
@@ -1581,9 +1579,7 @@ def to_markdown(
                 # Filtro secundário (R9): índices referenciados no plano
                 if plan_index_names:
                     plan_refs = [
-                        idx
-                        for idx in table.indexes
-                        if idx.get("index_name") in plan_index_names
+                        idx for idx in table.indexes if idx.get("index_name") in plan_index_names
                     ]
                     # Unir ambos (SQL cols + plano), sem duplicar
                     seen = {idx.get("index_name") for idx in referenced}
@@ -2293,7 +2289,7 @@ def _build_fk_map(constraints: list[dict[str, Any]]) -> dict[str, str]:
     """Constrói mapa coluna → tabela referenciada a partir das constraints FK.
 
 
-    Retorna dict tipo {"FUNC_ID": "SCHEMA.FUNC"} pra cada coluna que é FK.
+    Retorna dict tipo {"FUNC_ID": "DB.FUNC"} pra cada coluna que é FK.
 
     Constraints PK/UNIQUE/CHECK são ignoradas.
     """

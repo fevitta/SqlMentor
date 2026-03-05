@@ -47,8 +47,7 @@ GRANT SELECT ANY TABLE TO &&TUNER_USER;
 -- Crie a role e adicione grants conforme os SQLs que serão analisados.
 --
 -- Exemplo:
---   GRANT EXECUTE ON SCHEMA.FNC_GET_DOC_TYPE TO SQLMENTOR_EXEC_ROLE;
---   GRANT EXECUTE ON SCHEMA.FNC_GET_STATUS_BY_CODE TO SQLMENTOR_EXEC_ROLE;
+--   GRANT EXECUTE ON OWNER.FUNCTION TO SQLMENTOR_EXEC_ROLE;
 --
 -- Se o EXPLAIN PLAN falhar com ORA-01031, o sqlmentor mostra a linha do SQL
 -- com a função que precisa de grant.
