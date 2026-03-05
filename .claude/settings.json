@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlmentor *)",
+      "Bash(cat reports/*)"
+    ]
+  },
+  "mcpServers": {
+    "sqlmentor": {
+      "command": "sqlmentor-mcp",
+      "args": []
+    }
+  }
+}
