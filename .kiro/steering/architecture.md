@@ -120,7 +120,7 @@ Um bloco com `immune=True` nunca é colapsado por nenhuma regra.
 | R6 | `_add_nonsequential_id_note` | salto > 1 entre IDs consecutivos | qualquer salto |
 | R7 | `_collapse_union_all_branches` | `UNION-ALL` com ≥3 branches filhos idênticos | ≥3 branches |
 | R8 | `_collapse_low_cost_nested_loops` | `NESTED LOOPS` starts≥100, buf/iter≤3, rows/iter≤1 | subtree sem imune |
-| R9 | `_extract_plan_index_names` | Índices não referenciados no plano omitidos | metadados |
+| R9 | `_extract_plan_index_names` + filtro SQL cols | Índices não relacionados às cláusulas do SQL (WHERE/JOIN/ORDER/GROUP) e ao plano | metadados |
 | R10 | `_classify_uniform_columns` | Colunas uniformes (>80% distinct, sem histograma, não FK) | metadados |
 | R11 | `_strip_ddl_storage` | Remove STORAGE/TABLESPACE/PCTFREE/etc. da DDL | metadados |
 | R12 | `_deduplicate_predicates` | Agrupa predicados idênticos diferindo só no ID | ≥2 iguais |
@@ -253,8 +253,8 @@ Todo colapso é explícito — nenhuma omissão silenciosa. O primeiro elemento 
   Custo total: Z buffers
 ```
 
-**R9 — Índices não referenciados (aplicado em `to_markdown`):**
-Omite da seção de índices aqueles que não aparecem na coluna Name do plano de execução.
+**R9 — Índices não relacionados ao SQL (aplicado em `to_markdown`):**
+Filtra índices por dois critérios: (1) colunas do índice referenciadas no SQL (WHERE/JOIN/ORDER/GROUP) e (2) índice referenciado no plano de execução. Controlado por `--show-all-indexes`.
 
 **R10 — Colunas uniformes (aplicado em `to_markdown`):**
 Move colunas com distribuição uniforme (>80% distinct, sem histograma, não FK) para nota resumida.
@@ -270,6 +270,8 @@ Remove cláusulas STORAGE(...), TABLESPACE, PCTFREE, INITRANS, LOGGING etc. da D
 ### Decisão de design: `verbosity` como nível, não flags booleanos
 
 `verbosity` é um nível (`full` / `compact` / `minimal`), não um conjunto de flags por feature (`--collapse-subqueries`, `--collapse-predicates`, etc.). Motivo: flags individuais criam combinações inválidas e transferem complexidade para o usuário. O nível é uma abstração coerente — o usuário escolhe quanto quer ver, não quais algoritmos ativar.
+
+Exceção: `--show-sql` e `--show-all-indexes` são flags de controle de conteúdo ortogonais ao verbosity. Por padrão omitem conteúdo que consome muitos tokens sem benefício direto para a análise LLM, mas podem ser habilitados quando necessário (ex: reescrita de SQL, análise manual).
 
 ### Ao adicionar nova query Oracle
 

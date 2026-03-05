@@ -1973,3 +1973,73 @@ class TestDeduplicatePredicates:
         ]
         result = _deduplicate_predicates(lines)
         assert any("Predicate Information" in ln for ln in result)
+
+
+# ─── M3 — R1/R2 sem tabela de detalhes em planos estimados ──────────────
+
+
+class TestR1R2EstimatedPlanNoDetailTable:
+    """R1/R2 devem gerar resumo sem tabela de detalhes quando o plano é estimado."""
+
+    @staticmethod
+    def _make_estimated_plan_with_scalar_subqueries() -> list[str]:
+        """Plano estimado (Rows|Bytes|Cost) com 3 scalar subqueries R1."""
+        lines = [
+            "Plan hash value: 111222333",
+            "",
+            "| Id  | Operation               | Name              | Rows  | Bytes | Cost (%CPU)| Time     |",
+            "|-----|-------------------------|-------------------|-------|-------|------------|----------|",
+            "|   0 | SELECT STATEMENT        |                   |     1 |    10 |     5   (0)| 00:00:01 |",
+        ]
+        bid = 1
+        for _ in range(3):
+            lines += [
+                f"|   {bid} |  SORT AGGREGATE         |                   |     1 |    63 |            |          |",
+                f"|   {bid + 1} |   INDEX RANGE SCAN      | IDX_A             |     1 |    14 |     1   (0)| 00:00:01 |",
+                f"|   {bid + 2} |   INDEX UNIQUE SCAN     | IDX_B             |     1 |    27 |     1   (0)| 00:00:01 |",
+            ]
+            bid += 3
+        return lines
+
+    def test_estimated_plan_r1_no_detail_rows(self):
+        """R1 em plano estimado: sem 'Resultado:' nem 'Custo total:'."""
+        plan = self._make_estimated_plan_with_scalar_subqueries()
+        plan_only, pred_lines = _split_plan_predicates(plan)
+        compressed, _ = _compress_plan(plan_only, pred_lines, "compact")
+        text = "\n".join(compressed)
+        assert "[COLAPSADO:" in text
+        assert "Resultado:" not in text
+        assert "Custo total:" not in text
+
+    def test_estimated_plan_r1_no_question_mark_table(self):
+        """R1 em plano estimado: sem tabela com '? | 0 | 0'."""
+        plan = self._make_estimated_plan_with_scalar_subqueries()
+        plan_only, pred_lines = _split_plan_predicates(plan)
+        compressed, _ = _compress_plan(plan_only, pred_lines, "compact")
+        text = "\n".join(compressed)
+        assert "| ? |" not in text
+        assert "| Filtro |" not in text
+
+    def test_runtime_plan_has_detail_table(self):
+        """R1/R2 em plano runtime: mantém tabela de detalhes e 'Custo total:'."""
+        lines = [
+            "Plan hash value: 111222333",
+            "",
+            "| Id | Operation               | Name              | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |",
+            "|----|-------------------------|-------------------|--------|--------|--------|------------|---------|--------|",
+            "|  0 | SELECT STATEMENT        |                   |      1 |        |      1 |00:00:00.01 |      10 |      0 |",
+        ]
+        bid = 1
+        for _ in range(3):
+            lines += [
+                f"|  {bid} | SORT AGGREGATE          |                   |      1 |        |      0 |00:00:00.01 |       3 |      0 |",
+                f"|  {bid + 1} |  INDEX RANGE SCAN       | IDX_A             |      1 |      1 |      0 |00:00:00.01 |       2 |      0 |",
+                f"|  {bid + 2} |  INDEX UNIQUE SCAN      | IDX_B             |      1 |      1 |      0 |00:00:00.01 |       1 |      0 |",
+            ]
+            bid += 3
+        plan_only, pred_lines = _split_plan_predicates(lines)
+        compressed, _ = _compress_plan(plan_only, pred_lines, "compact")
+        text = "\n".join(compressed)
+        assert "[COLAPSADO:" in text
+        # Runtime mantém tabela de detalhes (R1 ou R2)
+        assert "Custo total:" in text or "| Filtro |" in text

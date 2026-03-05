@@ -285,7 +285,9 @@ def _is_scalar_index_subquery(
     return False, []
 
 
-def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
+def _collapse_config_fields(
+    blocks: list[PlanBlock], *, is_estimated: bool = False
+) -> list[CollapseResult]:
     """
 
     Detecta e colapsa grupos de scalar subqueries com padrão de índices (R1).
@@ -318,14 +320,19 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
                     b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0
                 ]
 
-                lines = [
-                    f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — padrão index lookup repetido]",
-                    "  Resultado: A-Rows=0 em todos"
-                    if not a_rows_nonzero
-                    else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
-                    f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
-                    "  ⚠️ Verifique se esses lookups têm custo real nos seus dados.",
-                ]
+                if is_estimated:
+                    lines = [
+                        f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — padrão index lookup repetido]",
+                    ]
+                else:
+                    lines = [
+                        f"[COLAPSADO: {len(group_root_ids)} scalar subqueries — padrão index lookup repetido]",
+                        "  Resultado: A-Rows=0 em todos"
+                        if not a_rows_nonzero
+                        else f"  Resultado: {len(a_rows_nonzero)} com A-Rows>0",
+                        f"  Custo total: {total_buffers:,} buffers, {total_reads} reads",
+                        "  ⚠️ Verifique se esses lookups têm custo real nos seus dados.",
+                    ]
 
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
 
@@ -358,7 +365,7 @@ def _collapse_config_fields(blocks: list[PlanBlock]) -> list[CollapseResult]:
 
 
 def _collapse_situation_history(
-    blocks: list[PlanBlock], predicate_map: dict[str, list[str]]
+    blocks: list[PlanBlock], predicate_map: dict[str, list[str]], *, is_estimated: bool = False
 ) -> list[CollapseResult]:
     """
 
@@ -413,16 +420,21 @@ def _collapse_situation_history(
 
                     table_rows.append((filter_val, root_block.a_rows, root_block.buffers))
 
-                lines = [
-                    f"[COLAPSADO: {len(group_entries)} scalar subqueries — padrão index lookup repetido]",
-                    "  | Filtro | A-Rows | Buffers |",
-                    "  |--------|--------|---------|",
-                ]
+                if is_estimated:
+                    lines = [
+                        f"[COLAPSADO: {len(group_entries)} scalar subqueries — padrão index lookup repetido]",
+                    ]
+                else:
+                    lines = [
+                        f"[COLAPSADO: {len(group_entries)} scalar subqueries — padrão index lookup repetido]",
+                        "  | Filtro | A-Rows | Buffers |",
+                        "  |--------|--------|---------|",
+                    ]
 
-                for fval, ar, buf in table_rows:
-                    lines.append(f"  | {fval} | {ar} | {buf} |")
+                    for fval, ar, buf in table_rows:
+                        lines.append(f"  | {fval} | {ar} | {buf} |")
 
-                lines.append(f"  Custo total: {total_buffers:,} buffers")
+                    lines.append(f"  Custo total: {total_buffers:,} buffers")
 
                 results.append(CollapseResult(collapsed_ids=all_ids, replacement_lines=lines))
 
@@ -725,6 +737,22 @@ def _split_plan_predicates(lines: list[str]) -> tuple[list[str], list[str]]:
     return lines, []
 
 
+def _strip_column_projection(predicate_lines: list[str]) -> list[str]:
+    """Remove seção 'Column Projection Information' das linhas de predicados."""
+    result: list[str] = []
+    skip = False
+    for line in predicate_lines:
+        if "Column Projection Information" in line:
+            skip = True
+            continue
+        if skip:
+            # Seção de column projection termina com linha de separação (---)
+            # ou com próxima seção. Pula tudo até o fim.
+            continue
+        result.append(line)
+    return result
+
+
 def _is_estimated_plan(plan_lines: list[str]) -> bool:
     """
 
@@ -786,9 +814,11 @@ def _compress_plan(
 
     all_collapses: list[CollapseResult] = []
 
-    all_collapses.extend(_collapse_config_fields(blocks))
+    all_collapses.extend(_collapse_config_fields(blocks, is_estimated=is_estimated))
 
-    all_collapses.extend(_collapse_situation_history(blocks, pred_map))
+    all_collapses.extend(
+        _collapse_situation_history(blocks, pred_map, is_estimated=is_estimated)
+    )
 
     all_collapses.extend(_collapse_union_all_branches(blocks))  # R7
 
@@ -1078,7 +1108,13 @@ def _deduplicate_predicates(predicate_lines: list[str]) -> list[str]:
     return result
 
 
-def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
+def to_markdown(
+    ctx: CollectedContext,
+    verbosity: str = "compact",
+    *,
+    show_sql: bool = False,
+    show_all_indexes: bool = False,
+) -> str:
     """
 
     Gera relatório Markdown estruturado pro LLM analisar.
@@ -1098,6 +1134,10 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
             "compact" — todas as podas ativas (default).
 
             "minimal" — só hotspots + runtime stats + optimizer params.
+
+        show_sql: Se True, inclui o texto SQL completo no relatório.
+
+        show_all_indexes: Se True, mostra todos os índices sem filtrar.
     """
 
     _VALID_VERBOSITY = ("full", "compact", "minimal")
@@ -1185,12 +1225,13 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
 
     lines.append("")
 
-    lines.append("```sql")
+    if show_sql or verbosity == "full":
+        lines.append("```sql")
 
-    lines.append(ctx.parsed_sql.raw_sql)
+        lines.append(ctx.parsed_sql.raw_sql)
 
-    lines.append("```")
-    lines.append("")
+        lines.append("```")
+        lines.append("")
 
     # ─── Plano de Execução ────────────────────────────────────────
 
@@ -1208,6 +1249,8 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
         plan_cleaned = _prune_orphan_predicates(plan_cleaned, pruned_ids)
 
         plan_lines, predicate_lines = _split_plan_predicates(plan_cleaned)
+        if verbosity != "full":
+            predicate_lines = _strip_column_projection(predicate_lines)
 
         plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
 
@@ -1248,6 +1291,8 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
         # Separa plan_lines de predicate_lines antes de comprimir
 
         plan_lines, predicate_lines = _split_plan_predicates(plan_cleaned)
+        if verbosity != "full":
+            predicate_lines = _strip_column_projection(predicate_lines)
 
         plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
 
@@ -1518,15 +1563,34 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
                 )
             lines.append("")
 
-        # Indexes — R9: omitir índices não referenciados no plano
+        # Indexes — filtro por colunas do SQL (default) ou por plano (R9 legacy)
 
         if table.indexes:
             display_indexes = table.indexes
             idx_omitted = 0
-            if verbosity != "full" and plan_index_names:
+            if verbosity != "full" and not show_all_indexes:
+                # Filtro primário: índices cujas colunas aparecem no SQL
                 referenced = [
-                    idx for idx in table.indexes if idx.get("index_name") in plan_index_names
+                    idx
+                    for idx in table.indexes
+                    if any(
+                        col.upper() in referenced_cols
+                        for col in (idx.get("columns") or "").split(", ")
+                    )
                 ]
+                # Filtro secundário (R9): índices referenciados no plano
+                if plan_index_names:
+                    plan_refs = [
+                        idx
+                        for idx in table.indexes
+                        if idx.get("index_name") in plan_index_names
+                    ]
+                    # Unir ambos (SQL cols + plano), sem duplicar
+                    seen = {idx.get("index_name") for idx in referenced}
+                    for idx in plan_refs:
+                        if idx.get("index_name") not in seen:
+                            referenced.append(idx)
+                            seen.add(idx.get("index_name"))
                 if referenced:  # fallback: se nenhum referenciado, mostrar todos
                     idx_omitted = len(table.indexes) - len(referenced)
                     display_indexes = referenced
@@ -1536,7 +1600,7 @@ def to_markdown(ctx: CollectedContext, verbosity: str = "compact") -> str:
             lines.append(_format_indexes(display_indexes))
             if idx_omitted > 0:
                 lines.append(
-                    f"\n*({idx_omitted} índices adicionais não referenciados no plano omitidos)*"
+                    f"\n*({idx_omitted} índices não relacionados às cláusulas do SQL omitidos)*"
                 )
             lines.append("")
 

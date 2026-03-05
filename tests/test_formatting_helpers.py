@@ -608,7 +608,7 @@ class TestOmitUnreferencedIndexes:
         )
         md = to_markdown(ctx, verbosity="compact")
         assert "IDX_USED" in md
-        assert "índices adicionais não referenciados no plano omitidos" in md
+        assert "índices não relacionados às cláusulas do SQL omitidos" in md
 
     def test_full_shows_all(self):
         from sqlmentor.collector import CollectedContext, TableContext
@@ -740,4 +740,240 @@ class TestOmitUnreferencedIndexes:
             tables=[table],
         )
         md = to_markdown(ctx, verbosity="compact")
-        assert "3 índices adicionais não referenciados no plano omitidos" in md
+        assert "3 índices não relacionados às cláusulas do SQL omitidos" in md
+
+
+# ─── --show-sql flag ─────────────────────────────────────────────────────
+
+
+class TestShowSqlFlag:
+    """Testes para o flag show_sql em to_markdown."""
+
+    def _make_ctx(self):
+        from sqlmentor.collector import CollectedContext
+        from sqlmentor.parser import ParsedSQL
+
+        return CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT COL1 FROM HR.T WHERE COL1 = 1",
+                sql_type="SELECT",
+                tables=[{"schema": "HR", "name": "T"}],
+                where_columns=["COL1"],
+            ),
+        )
+
+    def test_compact_default_omits_sql_block(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="compact")
+        assert "```sql" not in md
+        assert "**Tipo:** SELECT" in md
+        assert "**Tabelas referenciadas:**" in md
+
+    def test_compact_show_sql_includes_sql_block(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="compact", show_sql=True)
+        assert "```sql" in md
+        assert "SELECT COL1 FROM HR.T" in md
+
+    def test_full_always_includes_sql_block(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="full")
+        assert "```sql" in md
+        assert "SELECT COL1 FROM HR.T" in md
+
+    def test_full_ignores_show_sql_false(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="full", show_sql=False)
+        assert "```sql" in md
+
+
+# ─── --show-all-indexes flag ─────────────────────────────────────────────
+
+
+class TestShowAllIndexesFlag:
+    """Testes para o flag show_all_indexes e filtro por colunas do SQL."""
+
+    def _make_ctx(self):
+        from sqlmentor.collector import CollectedContext, TableContext
+        from sqlmentor.parser import ParsedSQL
+
+        table = TableContext(
+            name="PEDIDO",
+            schema="VENDAS",
+            object_type="TABLE",
+            stats={"num_rows": 50000},
+            indexes=[
+                {
+                    "index_name": "IDX_PED_CLIENTE",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "CLIENTE_ID",
+                },
+                {
+                    "index_name": "IDX_PED_DATA",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "DATA_PEDIDO",
+                },
+                {
+                    "index_name": "IDX_PED_STATUS",
+                    "index_type": "NORMAL",
+                    "uniqueness": "NONUNIQUE",
+                    "columns": "STATUS",
+                },
+                {
+                    "index_name": "PK_PEDIDO",
+                    "index_type": "NORMAL",
+                    "uniqueness": "UNIQUE",
+                    "columns": "PED_RECNO",
+                },
+            ],
+        )
+        return CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT * FROM VENDAS.PEDIDO WHERE CLIENTE_ID = :B1 ORDER BY DATA_PEDIDO",
+                sql_type="SELECT",
+                tables=[{"schema": "VENDAS", "name": "PEDIDO"}],
+                where_columns=["CLIENTE_ID"],
+                order_columns=["DATA_PEDIDO"],
+            ),
+            tables=[table],
+        )
+
+    def test_compact_default_shows_only_sql_relevant_indexes(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="compact")
+        assert "IDX_PED_CLIENTE" in md
+        assert "IDX_PED_DATA" in md
+        assert "IDX_PED_STATUS" not in md or "índices não relacionados" in md
+
+    def test_compact_show_all_indexes_shows_everything(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="compact", show_all_indexes=True)
+        assert "IDX_PED_CLIENTE" in md
+        assert "IDX_PED_DATA" in md
+        assert "IDX_PED_STATUS" in md
+        assert "PK_PEDIDO" in md
+        assert "índices não relacionados" not in md
+
+    def test_full_always_shows_all_indexes(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="full")
+        assert "IDX_PED_CLIENTE" in md
+        assert "IDX_PED_STATUS" in md
+        assert "PK_PEDIDO" in md
+
+    def test_compact_omitted_count_message(self):
+        from sqlmentor.report import to_markdown
+
+        md = to_markdown(self._make_ctx(), verbosity="compact")
+        assert "índices não relacionados às cláusulas do SQL omitidos" in md
+
+
+# ─── _strip_column_projection ────────────────────────────────────────────
+
+
+class TestStripColumnProjection:
+    """Testes para remoção de Column Projection Information no compact."""
+
+    def test_strips_column_projection_section(self):
+        from sqlmentor.report import _strip_column_projection
+
+        lines = [
+            "Predicate Information (identified by operation id):",
+            "---------------------------------------------------",
+            "   1 - access(\"T\".\"ID\"=1)",
+            "",
+            "Column Projection Information (identified by operation id):",
+            "-----------------------------------------------------------",
+            "   1 - \"T\".\"ID\"[NUMBER,22], \"T\".\"NOME\"[VARCHAR2,100]",
+            "   2 - \"T\".\"ID\"[NUMBER,22]",
+        ]
+        result = _strip_column_projection(lines)
+        assert any("Predicate" in l for l in result)
+        assert any("access" in l for l in result)
+        assert not any("Column Projection" in l for l in result)
+        assert not any("NOME" in l for l in result)
+
+    def test_no_column_projection_returns_unchanged(self):
+        from sqlmentor.report import _strip_column_projection
+
+        lines = [
+            "Predicate Information (identified by operation id):",
+            "---------------------------------------------------",
+            "   1 - access(\"T\".\"ID\"=1)",
+        ]
+        result = _strip_column_projection(lines)
+        assert result == lines
+
+    def test_compact_plan_excludes_column_projection(self):
+        from sqlmentor.collector import CollectedContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "",
+            "| Id | Operation               | Name | Rows  | Bytes | Cost (%CPU)| Time     |",
+            "|    |-------------------------|------|-------|-------|------------|----------|",
+            "|  0 | SELECT STATEMENT        |      |     1 |    10 |     2   (0)| 00:00:01 |",
+            "|  1 |  TABLE ACCESS FULL      | DUAL |     1 |    10 |     2   (0)| 00:00:01 |",
+            "",
+            "Predicate Information (identified by operation id):",
+            "---------------------------------------------------",
+            "   1 - filter(NULL IS NOT NULL)",
+            "",
+            "Column Projection Information (identified by operation id):",
+            "-----------------------------------------------------------",
+            "   1 - \"DUAL\".\"DUMMY\"[VARCHAR2,1]",
+        ]
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT 1 FROM DUAL",
+                sql_type="SELECT",
+                tables=[{"schema": "SYS", "name": "DUAL"}],
+            ),
+            execution_plan=plan,
+        )
+        md = to_markdown(ctx, verbosity="compact")
+        assert "Column Projection" not in md
+        assert "Predicate Information" in md
+
+    def test_full_plan_keeps_column_projection(self):
+        from sqlmentor.collector import CollectedContext
+        from sqlmentor.parser import ParsedSQL
+        from sqlmentor.report import to_markdown
+
+        plan = [
+            "Plan hash value: 999",
+            "",
+            "| Id | Operation               | Name | Rows  | Bytes | Cost (%CPU)| Time     |",
+            "|    |-------------------------|------|-------|-------|------------|----------|",
+            "|  0 | SELECT STATEMENT        |      |     1 |    10 |     2   (0)| 00:00:01 |",
+            "|  1 |  TABLE ACCESS FULL      | DUAL |     1 |    10 |     2   (0)| 00:00:01 |",
+            "",
+            "Predicate Information (identified by operation id):",
+            "---------------------------------------------------",
+            "   1 - filter(NULL IS NOT NULL)",
+            "",
+            "Column Projection Information (identified by operation id):",
+            "-----------------------------------------------------------",
+            "   1 - \"DUAL\".\"DUMMY\"[VARCHAR2,1]",
+        ]
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT 1 FROM DUAL",
+                sql_type="SELECT",
+                tables=[{"schema": "SYS", "name": "DUAL"}],
+            ),
+            execution_plan=plan,
+        )
+        md = to_markdown(ctx, verbosity="full")
+        assert "Column Projection" in md

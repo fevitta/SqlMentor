@@ -191,6 +191,16 @@ def analyze(
         "--no-cache",
         help="Ignora cache e força re-coleta de metadata.",
     ),
+    show_sql: bool = typer.Option(
+        False,
+        "--show-sql",
+        help="Inclui texto SQL completo no relatório (omitido por padrão no compact).",
+    ),
+    show_all_indexes: bool = typer.Option(
+        False,
+        "--show-all-indexes",
+        help="Mostra todos os índices, não só os relevantes ao SQL.",
+    ),
 ) -> None:
     """Analisa um SQL e coleta contexto Oracle para tuning."""
     _configure_debug(debug)
@@ -328,7 +338,13 @@ def analyze(
     timer.mark("Collect")
 
     # Relatório
-    report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
+    report = (
+        to_json(ctx)
+        if format.lower() == "json"
+        else to_markdown(
+            ctx, verbosity=verbosity, show_sql=show_sql, show_all_indexes=show_all_indexes
+        )
+    )
     timer.mark("Render")
 
     if output:
@@ -399,6 +415,16 @@ def inspect(
         False,
         "--no-cache",
         help="Ignora cache e força re-coleta de metadata.",
+    ),
+    show_sql: bool = typer.Option(
+        False,
+        "--show-sql",
+        help="Inclui texto SQL completo no relatório (omitido por padrão no compact).",
+    ),
+    show_all_indexes: bool = typer.Option(
+        False,
+        "--show-all-indexes",
+        help="Mostra todos os índices, não só os relevantes ao SQL.",
     ),
 ) -> None:
     """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
@@ -519,7 +545,13 @@ def inspect(
         ctx.runtime_stats = runtime_stats
 
     # Relatório
-    report = to_json(ctx) if format.lower() == "json" else to_markdown(ctx, verbosity=verbosity)
+    report = (
+        to_json(ctx)
+        if format.lower() == "json"
+        else to_markdown(
+            ctx, verbosity=verbosity, show_sql=show_sql, show_all_indexes=show_all_indexes
+        )
+    )
     timer.mark("Render")
 
     if output:

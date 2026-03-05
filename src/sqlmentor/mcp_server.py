@@ -139,6 +139,8 @@ def analyze_sql(
     denorm_mode: str = "literal",
     verbosity: str = "compact",
     no_cache: bool = False,
+    show_sql: bool = False,
+    show_all_indexes: bool = False,
 ) -> str:
     """Analisa um SQL conectando no Oracle e coleta contexto completo para tuning.
 
@@ -160,6 +162,8 @@ def analyze_sql(
         denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
         no_cache: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
+        show_sql: Se True, inclui texto SQL completo no relatório. Omitido por padrão no compact para economizar tokens.
+        show_all_indexes: Se True, mostra todos os índices. Por padrão, só mostra índices cujas colunas são relevantes ao SQL.
     """
     from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
@@ -270,7 +274,9 @@ def analyze_sql(
                 verbosity,
             )
         return to_json(ctx)
-    return to_markdown(ctx, verbosity=verbosity)
+    return to_markdown(
+        ctx, verbosity=verbosity, show_sql=show_sql, show_all_indexes=show_all_indexes
+    )
 
 
 @mcp.tool()
@@ -285,6 +291,8 @@ def inspect_sql(
     timeout: int = 0,
     verbosity: str = "compact",
     no_cache: bool = False,
+    show_sql: bool = False,
+    show_all_indexes: bool = False,
 ) -> str:
     """Coleta contexto de um SQL já executado via sql_id, sem re-executar a query.
 
@@ -302,6 +310,8 @@ def inspect_sql(
         timeout: Timeout em segundos. 0 = usa default do profile (180s).
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
         no_cache: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
+        show_sql: Se True, inclui texto SQL completo no relatório.
+        show_all_indexes: Se True, mostra todos os índices.
     """
     from sqlmentor.collector import clear_cache, collect_context
     from sqlmentor.connector import connect, get_connection_config, resolve_connection
@@ -406,7 +416,9 @@ def inspect_sql(
                 verbosity,
             )
         return to_json(ctx)
-    return to_markdown(ctx, verbosity=verbosity)
+    return to_markdown(
+        ctx, verbosity=verbosity, show_sql=show_sql, show_all_indexes=show_all_indexes
+    )
 
 
 @mcp.tool()

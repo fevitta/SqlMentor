@@ -127,6 +127,19 @@ sqlmentor analyze minha_query.sql --verbosity full      # plano completo
 sqlmentor analyze minha_query.sql --verbosity minimal   # só métricas
 ```
 
+### Controle de conteúdo do relatório
+
+| Flag | Default | Descrição |
+|------|---------|-----------|
+| `--show-sql` | off | Inclui texto SQL completo. No compact, só os metadados (tipo, tabelas, colunas) são exibidos por padrão. |
+| `--show-all-indexes` | off | Mostra todos os índices. Por padrão, só índices cujas colunas são referenciadas no SQL. |
+
+```bash
+sqlmentor analyze minha_query.sql --show-sql              # inclui SQL completo
+sqlmentor analyze minha_query.sql --show-all-indexes      # mostra todos os índices
+sqlmentor inspect abc123 --show-sql --show-all-indexes    # ambos
+```
+
 #### Regras de compressão (modo compact)
 
 O modo `compact` aplica 12 regras para reduzir o tamanho do relatório sem perder informação relevante:
@@ -141,7 +154,7 @@ O modo `compact` aplica 12 regras para reduzir o tamanho do relatório sem perde
 | R6 | Nota explicativa quando IDs não são sequenciais |
 | R7 | Colapsa UNION ALL com ≥3 branches idênticos |
 | R8 | Colapsa NESTED LOOPS de baixo custo (starts≥100, buf/iter≤3) |
-| R9 | Omite índices não referenciados no plano de execução |
+| R9 | Omite índices não relacionados às cláusulas do SQL (WHERE/JOIN/ORDER/GROUP) e ao plano |
 | R10 | Move colunas com distribuição uniforme para nota resumida |
 | R11 | Remove cláusulas de storage/tablespace da DDL de views |
 | R12 | Agrupa predicados idênticos que diferem apenas no ID |
