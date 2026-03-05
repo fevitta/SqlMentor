@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqlmentor"
-version = "0.1.0"
+version = "0.2.0"
 description = "SqlMentor — CLI para coleta de contexto Oracle para tuning de SQL assistido por IA"
 requires-python = ">=3.12"
 license = "MIT"
