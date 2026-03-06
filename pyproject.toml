@@ -55,8 +55,10 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--ignore=tests/integration"
 markers = [
     "slow: requer conexão Oracle real",
+    "oracle: integration test requiring a live Oracle database",
 ]
 
 [tool.coverage.run]
@@ -72,7 +74,9 @@ test-run = "pytest tests/ -v -p no:randomly"
 test-q   = "pytest tests/ -q"
 lint     = "ruff check src/ tests/"
 lint-fix = "ruff check src/ tests/ --fix"
-format   = "ruff format src/ tests/"
+format       = "ruff format src/ tests/"
+test-oracle  = "pytest tests/integration/ -v --tb=short"
+test-all     = "pytest tests/ tests/integration/ -v --tb=short"
 build-dev    = "pip install -e .[dev]"
 build-deploy = "python -m build --wheel --outdir dist/"
 
