@@ -38,3 +38,4 @@ Desktop.ini
 sql/
 
 .env
+.pypirc
