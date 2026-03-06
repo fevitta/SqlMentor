@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(sqlmentor *)",
-      "Bash(cat reports/*)"
+      "Bash(cat reports/*)",
+      "Bash(docker exec sqlmentor *)",
     ]
   },
   "mcpServers": {

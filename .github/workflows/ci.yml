@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 
 jobs:
   lint-and-test:
@@ -33,3 +34,84 @@ jobs:
 
       - name: Run tests with coverage
         run: pytest tests/ -v --tb=short --cov=sqlmentor --cov-fail-under=90
+
+  check-oracle-paths:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.filter.outputs.oracle }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            oracle:
+              - 'src/sqlmentor/collector.py'
+              - 'src/sqlmentor/queries/**'
+              - 'tests/integration/**'
+
+  integration-oracle:
+    runs-on: ubuntu-latest
+    needs: [lint-and-test, check-oracle-paths]
+    if: >-
+      needs.check-oracle-paths.outputs.should_run == 'true'
+      || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Oracle XE 21c container
+        run: |
+          docker run -d \
+            --name sqlmentor-oracle \
+            -p 1521:1521 \
+            -e ORACLE_PASSWORD=SysPwd123 \
+            -v ${{ github.workspace }}/tests/integration/initdb:/container-entrypoint-initdb.d \
+            --health-cmd "healthcheck.sh" \
+            --health-interval 10s \
+            --health-timeout 5s \
+            --health-retries 30 \
+            --health-start-period 120s \
+            gvenzl/oracle-xe:21-slim
+
+      - name: Wait for Oracle to be healthy
+        run: |
+          echo "Waiting for Oracle..."
+          for i in $(seq 1 60); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' sqlmentor-oracle 2>/dev/null || echo "starting")
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Oracle is healthy!"
+              break
+            fi
+            echo "Attempt $i/60 - status: $STATUS"
+            sleep 5
+          done
+          STATUS=$(docker inspect --format='{{.State.Health.Status}}' sqlmentor-oracle)
+          if [ "$STATUS" != "healthy" ]; then
+            echo "Oracle failed to start. Container logs:"
+            docker logs sqlmentor-oracle --tail 50
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run Oracle integration tests
+        env:
+          SQLMENTOR_TEST_HOST: localhost
+          SQLMENTOR_TEST_PORT: "1521"
+          SQLMENTOR_TEST_SERVICE: XEPDB1
+          SQLMENTOR_TEST_USER: SQLMENTOR_TEST
+          SQLMENTOR_TEST_PASSWORD: TestPwd123
+          SQLMENTOR_TEST_SCHEMA: SQLMENTOR_TEST
+        run: pytest tests/integration/ -v --tb=short
+
+      - name: Stop Oracle container
+        if: always()
+        run: docker rm -f sqlmentor-oracle || true

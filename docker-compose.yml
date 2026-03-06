@@ -1,0 +1,18 @@
+services:
+  oracle:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: sqlmentor-oracle
+    environment:
+      ORACLE_PASSWORD: SysPwd123
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    volumes:
+      - ./tests/integration/initdb:/container-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    tmpfs:
+      - /opt/oracle/oradata
