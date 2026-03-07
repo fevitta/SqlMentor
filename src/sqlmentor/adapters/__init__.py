@@ -35,7 +35,7 @@ def register_adapter(db_type: str, adapter_class: type[DatabaseAdapter]) -> None
 
     Chamado pelo módulo do adapter ao ser importado.
     """
-    _ADAPTER_REGISTRY[db_type] = adapter_class
+    _ADAPTER_REGISTRY[db_type.lower().strip()] = adapter_class
 
 
 def get_adapter(db_type: str) -> type[DatabaseAdapter]:
@@ -46,10 +46,11 @@ def get_adapter(db_type: str) -> type[DatabaseAdapter]:
     Raises:
         ValueError: Se o db_type não é suportado.
     """
+    db_type = db_type.lower().strip()
     if db_type not in _ADAPTER_REGISTRY:
         module_path = _LAZY_IMPORTS.get(db_type)
         if module_path is None:
-            supported = sorted(_ADAPTER_REGISTRY.keys() | _LAZY_IMPORTS.keys())
+            supported = list_adapters()
             raise ValueError(
                 f"Tipo de banco não suportado: {db_type!r}. "
                 f"Tipos disponíveis: {', '.join(supported) or 'nenhum'}"

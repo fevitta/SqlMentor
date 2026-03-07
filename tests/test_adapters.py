@@ -81,6 +81,10 @@ class TestRegisterAdapter:
         register_adapter("stub", _OtherStub)
         assert get_adapter("stub") is _OtherStub
 
+    def test_normalizes_db_type(self):
+        register_adapter("  Oracle ", _StubAdapter)
+        assert get_adapter("oracle") is _StubAdapter
+
 
 # ── get_adapter ─────────────────────────────────────────────────────
 
@@ -117,6 +121,25 @@ class TestGetAdapter:
         # Se tentasse importar, falharia (módulo oracle não existe ainda).
         # Mas como já está registrado, retorna direto.
         assert get_adapter("oracle") is _StubAdapter
+
+    def test_normalizes_db_type_case(self):
+        register_adapter("stub", _StubAdapter)
+        assert get_adapter("STUB") is _StubAdapter
+
+    def test_import_error_propagates(self, monkeypatch):
+        """ImportError no lazy import propaga sem ser engolido."""
+        monkeypatch.setattr(
+            "importlib.import_module",
+            lambda _path: (_ for _ in ()).throw(ImportError("No module named 'oracledb'")),
+        )
+        with pytest.raises(ImportError, match="oracledb"):
+            get_adapter("oracle")
+
+    def test_empty_registry_shows_nenhum(self, monkeypatch):
+        """Sem adapters registrados nem lazy imports, mensagem diz 'nenhum'."""
+        monkeypatch.setattr("sqlmentor.adapters._LAZY_IMPORTS", {})
+        with pytest.raises(ValueError, match="nenhum"):
+            get_adapter("anything")
 
 
 # ── list_adapters ───────────────────────────────────────────────────
@@ -164,3 +187,102 @@ class TestABCsNotInstantiable:
     def test_stub_adapter_instantiates(self):
         adapter = _StubAdapter()
         assert adapter.db_type == "stub"
+
+
+# ── Stubs concretos de QueryBuilder e PlanParser ────────────────────
+
+
+class _StubQueryBuilder(QueryBuilder):
+    """QueryBuilder concreto mínimo para validar o contrato ABC."""
+
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
+        return [("EXPLAIN ...", {})]
+
+    def runtime_plan(self, sql_id: str, child_number: int = 0) -> tuple[str, dict]:
+        return ("SELECT ...", {"sql_id": sql_id})
+
+    def db_version(self) -> tuple[str, dict]:
+        return ("SELECT version()", {})
+
+    def optimizer_params(self) -> tuple[str, dict]:
+        return ("SHOW ALL", {})
+
+    def session_wait_events(self, session_id: int) -> tuple[str, dict]:
+        return ("SELECT ...", {"sid": session_id})
+
+    def object_type(self, owner: str, object_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {"owner": owner, "name": object_name})
+
+    def table_ddl(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def function_ddl(self, owner: str, function_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def table_stats(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def column_stats(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def indexes(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def constraints(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def histograms(self, owner: str, table_name: str, column_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def table_partitions(self, owner: str, table_name: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def index_to_table_map(self, owner: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def sql_runtime_stats(self, sql_id: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def sql_text_by_id(self, sql_id: str) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def dangerous_privileges(self) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def dangerous_roles(self) -> tuple[str, dict]:
+        return ("SELECT ...", {})
+
+    def batch_table_stats(self, pairs: list[tuple[str, str]]) -> tuple[str, dict[str, str]]:
+        return ("SELECT ...", {})
+
+    def batch_column_stats(self, pairs: list[tuple[str, str]]) -> tuple[str, dict[str, str]]:
+        return ("SELECT ...", {})
+
+    def batch_indexes(self, pairs: list[tuple[str, str]]) -> tuple[str, dict[str, str]]:
+        return ("SELECT ...", {})
+
+    def batch_constraints(self, pairs: list[tuple[str, str]]) -> tuple[str, dict[str, str]]:
+        return ("SELECT ...", {})
+
+
+class _StubPlanParser(PlanParser):
+    """PlanParser concreto mínimo para validar o contrato ABC."""
+
+    def parse_plan(self, plan_lines: list[str]) -> list:
+        return []
+
+    def is_runtime_plan(self, plan_lines: list[str]) -> bool:
+        return False
+
+
+class TestConcreteStubs:
+    def test_query_builder_instantiates(self):
+        qb = _StubQueryBuilder()
+        steps = qb.explain_plan("SELECT 1")
+        assert isinstance(steps, list)
+        assert len(steps) == 1
+
+    def test_plan_parser_instantiates(self):
+        pp = _StubPlanParser()
+        assert pp.is_runtime_plan([]) is False
+        assert pp.parse_plan(["line"]) == []

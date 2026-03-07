@@ -8,9 +8,10 @@ O collector e o report continuam orquestrando — os adapters fornecem queries e
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlmentor.report import PlanBlock
+if TYPE_CHECKING:
+    from sqlmentor.report import PlanBlock
 
 
 class QueryBuilder(ABC):
