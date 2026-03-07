@@ -49,7 +49,7 @@ def get_adapter(db_type: str) -> type[DatabaseAdapter]:
     if db_type not in _ADAPTER_REGISTRY:
         module_path = _LAZY_IMPORTS.get(db_type)
         if module_path is None:
-            supported = sorted(set(list(_ADAPTER_REGISTRY.keys()) + list(_LAZY_IMPORTS.keys())))
+            supported = sorted(_ADAPTER_REGISTRY.keys() | _LAZY_IMPORTS.keys())
             raise ValueError(
                 f"Tipo de banco não suportado: {db_type!r}. "
                 f"Tipos disponíveis: {', '.join(supported) or 'nenhum'}"
@@ -69,4 +69,4 @@ def get_adapter(db_type: str) -> type[DatabaseAdapter]:
 
 def list_adapters() -> list[str]:
     """Lista tipos de banco disponíveis (registrados + lazy)."""
-    return sorted(set(list(_ADAPTER_REGISTRY.keys()) + list(_LAZY_IMPORTS.keys())))
+    return sorted(_ADAPTER_REGISTRY.keys() | _LAZY_IMPORTS.keys())
