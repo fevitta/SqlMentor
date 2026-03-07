@@ -1,8 +1,8 @@
 """
-Gerenciador de conexões Oracle.
+Gerenciador de conexões de banco de dados.
 
 Salva profiles em ~/.sqlmentor/connections.yaml.
-Usa oracledb em modo thin (sem Oracle Instant Client).
+Suporta Oracle (oracledb thin/thick), com extensibilidade para PostgreSQL e MariaDB.
 """
 
 import logging
@@ -18,6 +18,28 @@ CONFIG_DIR = Path.home() / ".sqlmentor"
 CONNECTIONS_FILE = CONFIG_DIR / "connections.yaml"
 
 
+def _supported_db_types() -> list[str]:
+    """Retorna tipos de banco suportados via adapters registry (lazy import)."""
+    from sqlmentor.adapters import list_adapters
+
+    return list_adapters()
+
+
+def _validate_db_type(db_type: str) -> str:
+    """Valida e normaliza o tipo de banco.
+
+    Raises:
+        ValueError: Se o db_type não é suportado.
+    """
+    normalized = db_type.lower().strip()
+    supported = _supported_db_types()
+    if normalized not in supported:
+        raise ValueError(
+            f"Tipo de banco não suportado: {db_type!r}. Tipos disponíveis: {', '.join(supported)}"
+        )
+    return normalized
+
+
 def _ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -27,7 +49,11 @@ def _load_connections() -> dict[str, dict]:
         return {}
     with open(CONNECTIONS_FILE) as f:
         data = yaml.safe_load(f)
-    return data or {}
+    connections = data or {}
+    # Backward compat: profiles sem 'type' recebem default 'oracle'
+    for cfg in connections.values():
+        cfg.setdefault("type", "oracle")
+    return connections
 
 
 def validate_privileges(conn: oracledb.Connection) -> None:
@@ -85,11 +111,13 @@ def add_connection(
     password: str,
     schema: str | None = None,
     timeout: int | None = None,
+    db_type: str = "oracle",
 ) -> None:
     """Adiciona ou atualiza um profile de conexão."""
+    validated_type = _validate_db_type(db_type)
     connections = _load_connections()
     connections[name] = {
-        "type": "oracle",
+        "type": validated_type,
         "host": host,
         "port": port,
         "service": service,
@@ -122,11 +150,17 @@ def list_connections() -> dict[str, dict]:
 
 
 def get_connection_config(name: str) -> dict[str, Any]:
-    """Retorna config completa de um profile."""
+    """Retorna config completa de um profile.
+
+    Valida o campo 'type' ao carregar. Profiles sem 'type' recebem default 'oracle'
+    via _load_connections() (backward compat).
+    """
     connections = _load_connections()
     if name not in connections:
         raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
-    return connections[name]
+    cfg = connections[name]
+    _validate_db_type(cfg["type"])
+    return cfg
 
 
 def set_default_connection(name: str) -> None:

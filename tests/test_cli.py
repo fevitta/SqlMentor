@@ -388,6 +388,7 @@ class TestConfigListWithConnections:
             "sqlmentor.connector.list_connections",
             lambda: {
                 "prod": {
+                    "type": "oracle",
                     "host": "db1.example.com",
                     "port": 1521,
                     "service": "ORCL",
@@ -401,7 +402,8 @@ class TestConfigListWithConnections:
         result = runner.invoke(app, ["config", "list"])
         assert result.exit_code == 0
         assert "prod" in result.output
-        assert "db1.example" in result.output  # Rich pode truncar em terminais estreitos
+        assert "oracle" in result.output
+        assert "db1" in result.output  # Rich pode truncar em terminais estreitos
 
     def test_list_shows_default(self, monkeypatch):
         """Default connection shows ★."""
@@ -467,7 +469,7 @@ class TestConfigTest:
 
 
 class TestConfigAdd:
-    def _add_cmd(self, monkeypatch, *, diagnose_result=None, diagnose_exc=None):
+    def _add_cmd(self, monkeypatch, *, diagnose_result=None, diagnose_exc=None, extra_args=None):
         """Helper: run config add with mocked add_connection and diagnose."""
         monkeypatch.setattr("sqlmentor.connector.add_connection", lambda **kw: None)
         if diagnose_exc:
@@ -488,25 +490,25 @@ class TestConfigAdd:
                     }
                 ),
             )
-        return runner.invoke(
-            app,
-            [
-                "config",
-                "add",
-                "--name",
-                "t",
-                "--host",
-                "h",
-                "--port",
-                "1521",
-                "--service",
-                "s",
-                "--user",
-                "u",
-                "--password",
-                "p",
-            ],
-        )
+        cmd = [
+            "config",
+            "add",
+            "--name",
+            "t",
+            "--host",
+            "h",
+            "--port",
+            "1521",
+            "--service",
+            "s",
+            "--user",
+            "u",
+            "--password",
+            "p",
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
+        return runner.invoke(app, cmd)
 
     def test_validation_success(self, monkeypatch):
         """diagnose_connection OK → 'Conectado', version."""
@@ -534,6 +536,140 @@ class TestConfigAdd:
         result = self._add_cmd(monkeypatch, diagnose_exc=Exception("ORA-12541"))
         assert result.exit_code == 0  # connection saved, validation warning
         assert "validação falhou" in result.output.lower()
+
+    def test_db_type_default_oracle(self, monkeypatch):
+        """Sem --db-type → add_connection recebe db_type='oracle'."""
+        captured_kwargs = {}
+
+        def _capture(**kw):
+            captured_kwargs.update(kw)
+
+        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
+        monkeypatch.setattr(
+            "sqlmentor.connector.diagnose_connection",
+            lambda name: {
+                "version": "Oracle 19c",
+                "schema": "HR",
+                "mode": "thin",
+                "major_version": "19",
+            },
+        )
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--port",
+                "1521",
+                "--service",
+                "s",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "oracle"
+
+    def test_db_type_explicit(self, monkeypatch):
+        """--db-type oracle → add_connection recebe db_type='oracle'."""
+        captured_kwargs = {}
+
+        def _capture(**kw):
+            captured_kwargs.update(kw)
+
+        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
+        monkeypatch.setattr(
+            "sqlmentor.connector.diagnose_connection",
+            lambda name: {
+                "version": "Oracle 19c",
+                "schema": "HR",
+                "mode": "thin",
+                "major_version": "19",
+            },
+        )
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--port",
+                "1521",
+                "--service",
+                "s",
+                "--user",
+                "u",
+                "--password",
+                "p",
+                "--db-type",
+                "oracle",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "oracle"
+
+    def test_db_type_invalid_raises(self, monkeypatch):
+        """--db-type redis → add_connection raises ValueError → exit 1."""
+        monkeypatch.setattr(
+            "sqlmentor.connector.add_connection",
+            MagicMock(side_effect=ValueError("Tipo de banco não suportado: 'redis'")),
+        )
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--port",
+                "1521",
+                "--service",
+                "s",
+                "--user",
+                "u",
+                "--password",
+                "p",
+                "--db-type",
+                "redis",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "não suportado" in result.output.lower()
+
+
+class TestConfigListShowsType:
+    def test_list_shows_type_column(self, monkeypatch):
+        """config list mostra coluna Tipo com valor do profile."""
+        monkeypatch.setattr(
+            "sqlmentor.connector.list_connections",
+            lambda: {
+                "prod": {
+                    "type": "oracle",
+                    "host": "db1",
+                    "port": 1521,
+                    "service": "ORCL",
+                    "user": "app",
+                    "schema": "APP",
+                    "timeout": 180,
+                }
+            },
+        )
+        monkeypatch.setattr("sqlmentor.connector.get_default_connection", lambda: None)
+        result = runner.invoke(app, ["config", "list"])
+        assert result.exit_code == 0
+        assert "oracle" in result.output
+        assert "Tipo" in result.output
 
 
 class TestConfigRemove:
