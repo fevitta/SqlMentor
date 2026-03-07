@@ -423,6 +423,7 @@ class TestDiagnoseConnection:
         with (
             patch.object(oracledb, "connect", return_value=mock_conn),
             patch.object(oracledb, "makedsn", return_value="dsn"),
+            patch.object(oracledb, "is_thin_mode", return_value=True),
         ):
             result = diagnose_connection("dev")
             assert result["status"] == "ok"
@@ -447,6 +448,7 @@ class TestDiagnoseConnection:
             patch.object(oracledb, "connect", side_effect=[err, mock_conn]),
             patch.object(oracledb, "makedsn", return_value="dsn"),
             patch("sqlmentor.connector._init_thick_mode_if_available"),
+            patch.object(oracledb, "is_thin_mode", return_value=False),
         ):
             result = diagnose_connection("dev")
             assert result["mode"] == "thick"

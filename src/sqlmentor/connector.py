@@ -287,7 +287,6 @@ def diagnose_connection(name: str) -> dict[str, str]:
     """
     cfg = get_connection_config(name)
     dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
-    mode = "thin"
     needs_thick = False
 
     try:
@@ -306,7 +305,8 @@ def diagnose_connection(name: str) -> dict[str, str]:
             password=cfg["password"],
             dsn=dsn,
         )
-        mode = "thick"
+
+    mode = "thick" if not oracledb.is_thin_mode() else "thin"
 
     try:
         cursor = conn.cursor()
