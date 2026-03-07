@@ -91,12 +91,12 @@ class TestRegisterAdapter:
 
 class TestGetAdapter:
     def test_unknown_db_type_raises_value_error(self):
-        with pytest.raises(ValueError, match="não suportado.*'mysql'"):
+        with pytest.raises(ValueError, match=r"não suportado.*'mysql'"):
             get_adapter("mysql")
 
     def test_error_message_lists_available_types(self):
         register_adapter("stub", _StubAdapter)
-        with pytest.raises(ValueError, match="oracle.*stub"):
+        with pytest.raises(ValueError, match=r"oracle.*stub"):
             get_adapter("mysql")
 
     def test_lazy_import_triggers_module_load(self, monkeypatch):
