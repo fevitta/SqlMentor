@@ -30,11 +30,36 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version
+
+        typer.echo(f"sqlmentor {version('sqlmentor')}")
+        raise typer.Exit
+
+
 app = typer.Typer(
     name="sqlmentor",
     help="SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA.",
     no_args_is_help=True,
 )
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        callback=_version_callback,
+        is_eager=True,
+        help="Exibe a versão e sai.",
+    ),
+) -> None:
+    """SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA."""
+
+
 config_app = typer.Typer(help="Gerencia conexões Oracle.")
 app.add_typer(config_app, name="config")
 
