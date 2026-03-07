@@ -3,7 +3,9 @@
 import pytest
 
 from sqlmentor.parser import (
+    _BIND_STYLE,
     _BUILTIN_FUNCTIONS,
+    _SQLGLOT_DIALECT,
     _SYSTEM_TABLES,
     SUPPORTED_DIALECTS,
     ParsedSQL,
@@ -377,6 +379,18 @@ class TestDialectValidation:
         with pytest.raises(ValueError, match="nao suportado"):
             _validate_dialect("sqlite")
 
+    def test_mysql_is_not_valid(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("mysql")
+
+    def test_postgres_is_not_valid(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("postgres")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("")
+
     def test_parse_sql_invalid_dialect(self):
         with pytest.raises(ValueError, match="nao suportado"):
             parse_sql("SELECT 1", dialect="sqlite")
@@ -598,3 +612,11 @@ class TestConfigDictsIntegrity:
         for d in SUPPORTED_DIALECTS:
             for fn in common:
                 assert fn in _BUILTIN_FUNCTIONS[d], f"{fn} ausente em {d}"
+
+    def test_sqlglot_dialect_has_all_dialects(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _SQLGLOT_DIALECT
+
+    def test_bind_style_has_all_dialects(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _BIND_STYLE

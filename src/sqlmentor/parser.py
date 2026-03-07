@@ -183,8 +183,6 @@ _BUILTIN_FUNCTIONS: dict[str, frozenset[str]] = {
             "BETWEEN",
             "LIKE",
             "ILIKE",
-            "PG_CATALOG",
-            "INFORMATION_SCHEMA",
             "CURRENT_SCHEMA",
             "CURRENT_USER",
             "SESSION_USER",
@@ -392,7 +390,7 @@ def parse_sql(
 
     # Pra procedures/triggers/packages, tenta extrair tabelas via regex como fallback
     if result.sql_type in ("PROCEDURE", "TRIGGER", "FUNCTION", "PACKAGE"):
-        _extract_from_plsql(cleaned, result, default_schema)
+        _extract_from_plsql(cleaned, result, default_schema, dialect=dialect)
         return result
 
     # Parse com sqlglot
@@ -402,7 +400,7 @@ def parse_sql(
         result.is_parseable = False
         result.parse_errors.append(str(e))
         # Fallback: tenta extrair tabelas via regex
-        _extract_from_plsql(cleaned, result, default_schema)
+        _extract_from_plsql(cleaned, result, default_schema, dialect=dialect)
         return result
 
     for statement in statements:
@@ -621,12 +619,15 @@ def remap_bind_params(
     return remapped
 
 
-def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | None) -> None:
+def _extract_from_plsql(
+    sql_text: str, result: ParsedSQL, default_schema: str | None, dialect: str = "oracle"
+) -> None:
     """
     Fallback: extrai tabelas de PL/SQL via parsing parcial.
 
     Procura por padrões como FROM table, JOIN table, INTO table,
     UPDATE table, INSERT INTO table, DELETE FROM table.
+    Filtra tabelas de sistema conforme o dialeto.
     """
     import re
 
@@ -695,6 +696,10 @@ def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | 
             if table_ref.upper() not in reserved and table_ref.upper() not in result.cte_names:
                 found_tables.add(table_ref)
 
+    # Filtra tabelas de sistema do dialeto
+    system_tables = _SYSTEM_TABLES[dialect]
+    found_tables = {t for t in found_tables if t.upper() not in system_tables}
+
     for table_ref in sorted(found_tables):
         parts = table_ref.split(".")
         if len(parts) == 2:
@@ -731,7 +736,7 @@ def _extract_functions(
     import re
 
     # Funcoes built-in do dialeto que nao interessam
-    builtins = _BUILTIN_FUNCTIONS.get(dialect, _BUILTIN_FUNCTIONS["oracle"])
+    builtins = _BUILTIN_FUNCTIONS[dialect]
 
     # Padrão: SCHEMA.FUNCTION_NAME( — schema-qualificado
     pattern = r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\("
