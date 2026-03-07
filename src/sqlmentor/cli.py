@@ -60,7 +60,7 @@ def main(
     """SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA."""
 
 
-config_app = typer.Typer(help="Gerencia conexões Oracle.")
+config_app = typer.Typer(help="Gerencia conexões de banco de dados.")
 app.add_typer(config_app, name="config")
 
 console = Console()
@@ -700,9 +700,7 @@ def config_add(
     timeout: int = typer.Option(
         180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
     ),
-    db_type: str = typer.Option(
-        "oracle", "--db-type", help="Tipo de banco de dados (ex: oracle, postgresql, mariadb)."
-    ),
+    db_type: str = typer.Option("oracle", "--db-type", help="Tipo de banco (default: oracle)."),
 ) -> None:
     """Adiciona um profile de conexão."""
     _validate_timeout(timeout)

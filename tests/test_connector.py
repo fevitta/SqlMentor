@@ -419,6 +419,29 @@ class TestConnect:
             connect("dev", timeout=None)
             assert mock_conn.call_timeout == 300_000
 
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        # Cria profile manualmente com type 'postgresql'
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            connect("pg")
+
 
 # ─── check_thick_mode_available ─────────────────────────────────────────────
 
@@ -502,6 +525,28 @@ class TestTestConnection:
             _test_connection("prod")
             mock_connect.assert_called_once_with("prod")
 
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            _test_connection("pg")
+
 
 # ─── diagnose_connection ────────────────────────────────────────────────────
 
@@ -577,3 +622,25 @@ class TestDiagnoseConnection:
             with pytest.raises(RuntimeError, match="query failed"):
                 diagnose_connection("dev")
             mock_conn.close.assert_called_once()
+
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            diagnose_connection("pg")

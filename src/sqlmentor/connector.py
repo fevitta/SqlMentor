@@ -152,15 +152,13 @@ def list_connections() -> dict[str, dict]:
 def get_connection_config(name: str) -> dict[str, Any]:
     """Retorna config completa de um profile.
 
-    Valida o campo 'type' ao carregar. Profiles sem 'type' recebem default 'oracle'
-    via _load_connections() (backward compat).
+    Profiles sem 'type' recebem default 'oracle' via _load_connections() (backward compat).
+    Validação de tipo acontece no write (add_connection) e no uso (connect/test/diagnose).
     """
     connections = _load_connections()
     if name not in connections:
         raise ValueError(f"Conexão '{name}' não encontrada. Use 'sqlmentor config list'.")
-    cfg = connections[name]
-    _validate_db_type(cfg["type"])
-    return cfg
+    return connections[name]
 
 
 def set_default_connection(name: str) -> None:
@@ -239,6 +237,11 @@ def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
                  Se 0, sem timeout.
     """
     cfg = get_connection_config(name)
+    if cfg.get("type", "oracle") != "oracle":
+        raise NotImplementedError(
+            f"Conexão para '{cfg['type']}' ainda não implementada. "
+            f"Apenas 'oracle' é suportado no momento."
+        )
     dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
 
     # Resolve timeout: parâmetro explícito > config do profile > 180s
@@ -296,6 +299,12 @@ def check_thick_mode_available() -> dict[str, str]:
 
 def test_connection(name: str) -> dict[str, str]:
     """Testa conexão e retorna info do banco."""
+    cfg = get_connection_config(name)
+    if cfg.get("type", "oracle") != "oracle":
+        raise NotImplementedError(
+            f"Conexão para '{cfg['type']}' ainda não implementada. "
+            f"Apenas 'oracle' é suportado no momento."
+        )
     conn = connect(name)
     try:
         cursor = conn.cursor()
@@ -320,6 +329,11 @@ def diagnose_connection(name: str) -> dict[str, str]:
     schema, e needs_thick (se o banco precisa de thick mode).
     """
     cfg = get_connection_config(name)
+    if cfg.get("type", "oracle") != "oracle":
+        raise NotImplementedError(
+            f"Conexão para '{cfg['type']}' ainda não implementada. "
+            f"Apenas 'oracle' é suportado no momento."
+        )
     dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
     needs_thick = False
 
