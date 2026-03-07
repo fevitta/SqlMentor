@@ -26,6 +26,10 @@ env/
 # Config local
 connections.yaml
 
+# Worktrees e estado de workflow
+.worktrees/
+.claude/tasks.json
+
 # Reports gerados
 reports/
 
