@@ -8,6 +8,7 @@ import pytest
 import sqlmentor.connector as connector_mod
 from sqlmentor.connector import (
     _init_thick_mode_if_available,
+    _validate_db_type,
     add_connection,
     check_thick_mode_available,
     connect,
@@ -74,6 +75,102 @@ class TestConnectionCRUD:
     def test_get_nonexistent_raises(self, tmp_connections_file):
         with pytest.raises(ValueError, match="não encontrada"):
             get_connection_config("nonexistent")
+
+    def test_add_default_type_is_oracle(self, tmp_connections_file):
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        cfg = get_connection_config("dev")
+        assert cfg["type"] == "oracle"
+
+    def test_add_with_explicit_type(self, tmp_connections_file):
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger", db_type="oracle")
+        cfg = get_connection_config("dev")
+        assert cfg["type"] == "oracle"
+
+    def test_add_invalid_type_raises(self, tmp_connections_file):
+        with pytest.raises(ValueError, match="não suportado"):
+            add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger", db_type="redis")
+
+    def test_add_type_case_insensitive(self, tmp_connections_file):
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger", db_type="ORACLE")
+        cfg = get_connection_config("dev")
+        assert cfg["type"] == "oracle"
+
+
+# ─── db_type validation ──────────────────────────────────────────────────────
+
+
+class TestDbTypeValidation:
+    def test_validate_oracle(self):
+        assert _validate_db_type("oracle") == "oracle"
+
+    def test_validate_case_insensitive(self):
+        assert _validate_db_type("ORACLE") == "oracle"
+        assert _validate_db_type("Oracle") == "oracle"
+
+    def test_validate_with_whitespace(self):
+        assert _validate_db_type("  oracle  ") == "oracle"
+
+    def test_validate_invalid_raises(self):
+        with pytest.raises(ValueError, match="não suportado"):
+            _validate_db_type("redis")
+
+    def test_validate_error_lists_supported(self):
+        with pytest.raises(ValueError, match="oracle"):
+            _validate_db_type("nosql")
+
+
+# ─── backward compat (profiles sem type) ────────────────────────────────────
+
+
+class TestBackwardCompat:
+    def test_profile_without_type_gets_oracle(self, tmp_connections_file):
+        """Profile salvo sem campo 'type' recebe default 'oracle' ao carregar."""
+        import yaml
+
+        # Escreve profile sem 'type' diretamente no YAML
+        connections = {
+            "legacy": {
+                "host": "legacyhost",
+                "port": 1521,
+                "service": "ORCL",
+                "user": "scott",
+                "password": "tiger",
+                "schema": "SCOTT",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        cfg = get_connection_config("legacy")
+        assert cfg["type"] == "oracle"
+
+    def test_list_shows_type(self, tmp_connections_file):
+        """list_connections inclui campo type."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        result = list_connections()
+        assert result["dev"]["type"] == "oracle"
+
+    def test_list_legacy_profile_shows_oracle(self, tmp_connections_file):
+        """Profile sem type no YAML aparece como 'oracle' no list."""
+        import yaml
+
+        connections = {
+            "legacy": {
+                "host": "legacyhost",
+                "port": 1521,
+                "service": "ORCL",
+                "user": "scott",
+                "password": "tiger",
+                "schema": "SCOTT",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        result = list_connections()
+        assert result["legacy"]["type"] == "oracle"
 
 
 # ─── list_connections ─────────────────────────────────────────────────────────
@@ -322,6 +419,29 @@ class TestConnect:
             connect("dev", timeout=None)
             assert mock_conn.call_timeout == 300_000
 
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        # Cria profile manualmente com type 'postgresql'
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            connect("pg")
+
 
 # ─── check_thick_mode_available ─────────────────────────────────────────────
 
@@ -405,6 +525,28 @@ class TestTestConnection:
             _test_connection("prod")
             mock_connect.assert_called_once_with("prod")
 
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            _test_connection("pg")
+
 
 # ─── diagnose_connection ────────────────────────────────────────────────────
 
@@ -480,3 +622,25 @@ class TestDiagnoseConnection:
             with pytest.raises(RuntimeError, match="query failed"):
                 diagnose_connection("dev")
             mock_conn.close.assert_called_once()
+
+    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
+        """Profile com type != 'oracle' levanta NotImplementedError."""
+        import yaml
+
+        connections = {
+            "pg": {
+                "type": "postgresql",
+                "host": "localhost",
+                "port": 5432,
+                "service": "mydb",
+                "user": "admin",
+                "password": "secret",
+                "schema": "PUBLIC",
+                "timeout": 180,
+            }
+        }
+        with open(tmp_connections_file, "w") as f:
+            yaml.dump(connections, f)
+
+        with pytest.raises(NotImplementedError, match="postgresql"):
+            diagnose_connection("pg")
