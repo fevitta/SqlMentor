@@ -1,7 +1,15 @@
-"""Testes para o módulo parser (sqlglot + regex fallback)."""
+"""Testes para o modulo parser (sqlglot + regex fallback)."""
+
+import pytest
 
 from sqlmentor.parser import (
+    _BIND_STYLE,
+    _BUILTIN_FUNCTIONS,
+    _SQLGLOT_DIALECT,
+    _SYSTEM_TABLES,
+    SUPPORTED_DIALECTS,
     ParsedSQL,
+    _validate_dialect,
     denormalize_sql,
     detect_sql_binds,
     is_normalized_sql,
@@ -352,3 +360,263 @@ class TestRemapBindParams:
 
     def test_empty_binds(self):
         assert remap_bind_params({"id": 1}, []) == {"id": 1}
+
+
+# ─── dialect validation ────────────────────────────────────────────────────
+
+
+class TestDialectValidation:
+    def test_valid_dialects(self):
+        for d in SUPPORTED_DIALECTS:
+            assert _validate_dialect(d) == d
+
+    def test_case_insensitive(self):
+        assert _validate_dialect("Oracle") == "oracle"
+        assert _validate_dialect("POSTGRESQL") == "postgresql"
+        assert _validate_dialect("MariaDB") == "mariadb"
+
+    def test_invalid_dialect_raises(self):
+        with pytest.raises(ValueError, match="nao suportado"):
+            _validate_dialect("sqlite")
+
+    def test_mysql_is_not_valid(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("mysql")
+
+    def test_postgres_is_not_valid(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("postgres")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError):
+            _validate_dialect("")
+
+    def test_parse_sql_invalid_dialect(self):
+        with pytest.raises(ValueError, match="nao suportado"):
+            parse_sql("SELECT 1", dialect="sqlite")
+
+    def test_denormalize_invalid_dialect(self):
+        with pytest.raises(ValueError, match="nao suportado"):
+            denormalize_sql("SELECT ?", dialect="sqlite")
+
+    def test_is_normalized_invalid_dialect(self):
+        with pytest.raises(ValueError, match="nao suportado"):
+            is_normalized_sql("SELECT ?", dialect="sqlite")
+
+
+# ─── parse_sql: dialect-aware system tables ─────────────────────────────────
+
+
+class TestParseDialectSystemTables:
+    def test_oracle_filters_dual(self):
+        result = parse_sql("SELECT SYSDATE FROM DUAL", dialect="oracle")
+        assert not any(t["name"].upper() == "DUAL" for t in result.tables)
+
+    def test_postgresql_does_not_filter_dual(self):
+        """PostgreSQL nao tem DUAL como tabela de sistema."""
+        result = parse_sql("SELECT 1 FROM DUAL", dialect="postgresql")
+        # DUAL nao esta no _SYSTEM_TABLES do PostgreSQL, deve aparecer como tabela
+        assert any(t["name"].upper() == "DUAL" for t in result.tables)
+
+    def test_postgresql_filters_information_schema(self):
+        """PostgreSQL filtra information_schema como tabela de sistema."""
+        result = parse_sql("SELECT * FROM information_schema.tables", dialect="postgresql")
+        # information_schema como nome de tabela deve ser filtrada
+        # Nota: sqlglot pode interpretar como schema.table, entao o nome "tables" aparece
+        assert not any(t["name"].upper() == "INFORMATION_SCHEMA" for t in result.tables)
+
+    def test_mariadb_filters_dual(self):
+        result = parse_sql("SELECT 1 FROM DUAL", dialect="mariadb")
+        assert not any(t["name"].upper() == "DUAL" for t in result.tables)
+
+    def test_mariadb_filters_information_schema(self):
+        result = parse_sql("SELECT * FROM information_schema.tables", dialect="mariadb")
+        assert not any(t["name"].upper() == "INFORMATION_SCHEMA" for t in result.tables)
+
+    def test_oracle_select_preserves_real_tables(self):
+        """Garante que tabelas reais nao sao filtradas em nenhum dialeto."""
+        for d in SUPPORTED_DIALECTS:
+            result = parse_sql("SELECT * FROM users WHERE id = 1", dialect=d)
+            assert any(t["name"].upper() == "USERS" for t in result.tables)
+
+
+# ─── parse_sql: dialect-aware sqlglot parsing ───────────────────────────────
+
+
+class TestParseDialectSqlglot:
+    def test_postgresql_basic_select(self):
+        sql = "SELECT u.id, u.name FROM users u WHERE u.active = true"
+        result = parse_sql(sql, dialect="postgresql")
+        assert result.sql_type == "SELECT"
+        assert result.is_parseable
+        assert any(t["name"].upper() == "USERS" for t in result.tables)
+
+    def test_mariadb_basic_select(self):
+        sql = "SELECT id, name FROM users WHERE status = 'active'"
+        result = parse_sql(sql, dialect="mariadb")
+        assert result.sql_type == "SELECT"
+        assert result.is_parseable
+        assert any(t["name"].upper() == "USERS" for t in result.tables)
+
+    def test_postgresql_with_join(self):
+        sql = """
+        SELECT e.name, d.name
+        FROM employees e
+        JOIN departments d ON e.dept_id = d.id
+        WHERE e.active = true
+        """
+        result = parse_sql(sql, dialect="postgresql")
+        assert len(result.tables) >= 2
+        assert len(result.join_columns) > 0
+
+    def test_mariadb_with_join(self):
+        sql = """
+        SELECT e.name, d.name
+        FROM employees e
+        INNER JOIN departments d ON e.dept_id = d.id
+        """
+        result = parse_sql(sql, dialect="mariadb")
+        assert len(result.tables) >= 2
+
+    def test_default_dialect_is_oracle(self):
+        """Sem dialeto explicito, deve usar Oracle (backward compat)."""
+        result = parse_sql("SELECT SYSDATE FROM DUAL")
+        assert not any(t["name"].upper() == "DUAL" for t in result.tables)
+
+
+# ─── _extract_functions: dialect-aware builtins ─────────────────────────────
+
+
+class TestExtractFunctionsDialect:
+    def test_oracle_ignores_nvl(self):
+        sql = "SELECT pkg.custom_fn(id), NVL(name, 'N/A') FROM users"
+        result = parse_sql(sql, dialect="oracle")
+        assert any(f["name"].upper() == "CUSTOM_FN" for f in result.functions)
+        assert not any(f["name"].upper() == "NVL" for f in result.functions)
+
+    def test_postgresql_ignores_string_agg(self):
+        sql = "SELECT pkg.custom_fn(id), STRING_AGG(name, ',') FROM users"
+        result = parse_sql(sql, dialect="postgresql")
+        assert any(f["name"].upper() == "CUSTOM_FN" for f in result.functions)
+        assert not any(f["name"].upper() == "STRING_AGG" for f in result.functions)
+
+    def test_mariadb_ignores_ifnull(self):
+        sql = "SELECT pkg.custom_fn(id), IFNULL(name, 'N/A') FROM users"
+        result = parse_sql(sql, dialect="mariadb")
+        assert any(f["name"].upper() == "CUSTOM_FN" for f in result.functions)
+        assert not any(f["name"].upper() == "IFNULL" for f in result.functions)
+
+    def test_oracle_specific_builtin_not_ignored_in_pg(self):
+        """NVL e Oracle-only — nao deve ser filtrada em PostgreSQL."""
+        # NVL nao esta no builtins de PG, mas quando usada como schema.NVL(...)
+        # o schema seria detectado como funcao. Testamos que o builtins set e correto.
+        assert "NVL" in _BUILTIN_FUNCTIONS["oracle"]
+        assert "NVL" not in _BUILTIN_FUNCTIONS["postgresql"]
+
+    def test_pg_specific_builtin_not_in_oracle(self):
+        assert "ILIKE" in _BUILTIN_FUNCTIONS["postgresql"]
+        assert "ILIKE" not in _BUILTIN_FUNCTIONS["oracle"]
+
+    def test_mariadb_specific_builtin_not_in_oracle(self):
+        assert "IFNULL" in _BUILTIN_FUNCTIONS["mariadb"]
+        assert "IFNULL" not in _BUILTIN_FUNCTIONS["oracle"]
+
+
+# ─── denormalize_sql: dialect-aware bind styles ─────────────────────────────
+
+
+class TestDenormalizeDialect:
+    def test_oracle_bind_mode(self):
+        sql = "SELECT * FROM users WHERE id = ? AND name = ?"
+        result, binds = denormalize_sql(sql, mode="bind", dialect="oracle")
+        assert "?" not in result
+        assert ":dn1" in result
+        assert ":dn2" in result
+        assert "dn1" in binds
+        assert "dn2" in binds
+
+    def test_postgresql_bind_mode(self):
+        sql = "SELECT * FROM users WHERE id = ? AND name = ?"
+        result, binds = denormalize_sql(sql, mode="bind", dialect="postgresql")
+        assert "?" not in result
+        assert "%(dn1)s" in result
+        assert "%(dn2)s" in result
+        assert "dn1" in binds
+        assert "dn2" in binds
+
+    def test_mariadb_bind_mode_noop(self):
+        """MariaDB usa '?' nativamente — bind mode nao altera o SQL."""
+        sql = "SELECT * FROM users WHERE id = ? AND name = ?"
+        result, binds = denormalize_sql(sql, mode="bind", dialect="mariadb")
+        assert result == sql  # inalterado
+        assert binds == {}  # sem binds gerados
+
+    def test_literal_mode_same_for_all_dialects(self):
+        """Modo literal deve se comportar igual em todos os dialetos."""
+        sql = "SELECT * FROM users WHERE id = ? AND name = ?"
+        for d in SUPPORTED_DIALECTS:
+            result, binds = denormalize_sql(sql, mode="literal", dialect=d)
+            assert "?" not in result
+            assert "'1'" in result
+            assert binds == {}
+
+    def test_postgresql_bind_preserves_existing_colon_binds(self):
+        sql = "SELECT * FROM users WHERE id = :id AND name = ?"
+        result, binds = denormalize_sql(sql, mode="bind", dialect="postgresql")
+        assert ":id" in result  # preservado
+        assert "%(dn1)s" in result
+        assert "dn1" in binds
+
+    def test_default_dialect_is_oracle(self):
+        """Sem dialeto explicito, deve usar Oracle bind style."""
+        sql = "SELECT * FROM t WHERE a = ? AND b = ?"
+        result, _binds = denormalize_sql(sql, mode="bind")
+        assert ":dn1" in result
+        assert ":dn2" in result
+
+
+# ─── is_normalized_sql: dialect param ───────────────────────────────────────
+
+
+class TestIsNormalizedDialect:
+    def test_works_for_all_dialects(self):
+        """A heuristica de '?' e universal — deve funcionar com qualquer dialeto."""
+        sql = "SELECT * FROM users WHERE id = ? AND name = ?"
+        for d in SUPPORTED_DIALECTS:
+            assert is_normalized_sql(sql, dialect=d)
+
+    def test_not_normalized_for_all_dialects(self):
+        sql = "SELECT * FROM users WHERE id = 1"
+        for d in SUPPORTED_DIALECTS:
+            assert not is_normalized_sql(sql, dialect=d)
+
+
+# ─── config dicts integrity ────────────────────────────────────────────────
+
+
+class TestConfigDictsIntegrity:
+    def test_all_dialects_have_system_tables(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _SYSTEM_TABLES
+            assert isinstance(_SYSTEM_TABLES[d], frozenset)
+
+    def test_all_dialects_have_builtin_functions(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _BUILTIN_FUNCTIONS
+            assert isinstance(_BUILTIN_FUNCTIONS[d], frozenset)
+            assert len(_BUILTIN_FUNCTIONS[d]) > 0
+
+    def test_common_builtins_across_dialects(self):
+        """Funcoes comuns a todos os dialetos devem estar em todos."""
+        common = {"COUNT", "SUM", "AVG", "MIN", "MAX", "UPPER", "LOWER", "ROUND"}
+        for d in SUPPORTED_DIALECTS:
+            for fn in common:
+                assert fn in _BUILTIN_FUNCTIONS[d], f"{fn} ausente em {d}"
+
+    def test_sqlglot_dialect_has_all_dialects(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _SQLGLOT_DIALECT
+
+    def test_bind_style_has_all_dialects(self):
+        for d in SUPPORTED_DIALECTS:
+            assert d in _BIND_STYLE

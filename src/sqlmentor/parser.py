@@ -1,7 +1,8 @@
 """
 Parser de SQL usando sqlglot.
 
-Extrai tabelas, colunas, joins e tipo de statement de qualquer SQL/procedure Oracle.
+Extrai tabelas, colunas, joins e tipo de statement de qualquer SQL/procedure.
+Suporta dialetos Oracle, PostgreSQL e MariaDB via configuração por dialeto.
 """
 
 from dataclasses import dataclass, field
@@ -9,8 +10,279 @@ from dataclasses import dataclass, field
 import sqlglot
 from sqlglot import exp
 
-# Tabelas de sistema Oracle que não devem ser coletadas como objetos do usuário
-_ORACLE_SYSTEM_TABLES = frozenset({"DUAL"})
+# Dialetos suportados
+SUPPORTED_DIALECTS = ("oracle", "postgresql", "mariadb")
+
+# Tabelas de sistema por dialeto — filtradas durante o parse para não coletar como objetos do usuário
+_SYSTEM_TABLES: dict[str, frozenset[str]] = {
+    "oracle": frozenset({"DUAL"}),
+    "postgresql": frozenset({"PG_CATALOG", "INFORMATION_SCHEMA"}),
+    "mariadb": frozenset({"DUAL", "INFORMATION_SCHEMA"}),
+}
+
+# Mapeamento de dialeto interno para o dialeto do sqlglot
+_SQLGLOT_DIALECT: dict[str, str] = {
+    "oracle": "oracle",
+    "postgresql": "postgres",
+    "mariadb": "mysql",
+}
+
+# Estilo de bind variable por dialeto para desnormalização (modo "bind")
+_BIND_STYLE: dict[str, str] = {
+    "oracle": "named_colon",  # :param
+    "postgresql": "named_pyformat",  # %(name)s
+    "mariadb": "qmark",  # ?
+}
+
+# Funções built-in por dialeto — ignoradas na extração de funções custom
+_BUILTIN_FUNCTIONS: dict[str, frozenset[str]] = {
+    "oracle": frozenset(
+        {
+            "NVL",
+            "NVL2",
+            "COALESCE",
+            "DECODE",
+            "CASE",
+            "CAST",
+            "TO_CHAR",
+            "TO_DATE",
+            "TO_NUMBER",
+            "TO_TIMESTAMP",
+            "TO_CLOB",
+            "TRIM",
+            "LTRIM",
+            "RTRIM",
+            "UPPER",
+            "LOWER",
+            "INITCAP",
+            "SUBSTR",
+            "INSTR",
+            "REPLACE",
+            "TRANSLATE",
+            "LENGTH",
+            "LPAD",
+            "RPAD",
+            "ROUND",
+            "TRUNC",
+            "CEIL",
+            "FLOOR",
+            "MOD",
+            "ABS",
+            "SIGN",
+            "POWER",
+            "SQRT",
+            "COUNT",
+            "SUM",
+            "AVG",
+            "MIN",
+            "MAX",
+            "LISTAGG",
+            "ROW_NUMBER",
+            "RANK",
+            "DENSE_RANK",
+            "LEAD",
+            "LAG",
+            "FIRST_VALUE",
+            "LAST_VALUE",
+            "OVER",
+            "PARTITION",
+            "WITHIN",
+            "SYSDATE",
+            "SYSTIMESTAMP",
+            "CURRENT_DATE",
+            "CURRENT_TIMESTAMP",
+            "EXTRACT",
+            "ADD_MONTHS",
+            "MONTHS_BETWEEN",
+            "LAST_DAY",
+            "NEXT_DAY",
+            "GREATEST",
+            "LEAST",
+            "NULLIF",
+            "SYS_CONTEXT",
+            "USERENV",
+            "USER",
+            "UID",
+            "ROWNUM",
+            "ROWID",
+            "LEVEL",
+            "CONNECT_BY_ROOT",
+            "EXISTS",
+            "NOT",
+            "IN",
+            "BETWEEN",
+            "LIKE",
+            "DBMS_METADATA",
+            "DBMS_XPLAN",
+            "TABLE",
+        }
+    ),
+    "postgresql": frozenset(
+        {
+            "NOW",
+            "CURRENT_DATE",
+            "CURRENT_TIMESTAMP",
+            "COALESCE",
+            "NULLIF",
+            "GREATEST",
+            "LEAST",
+            "CAST",
+            "EXTRACT",
+            "TRIM",
+            "UPPER",
+            "LOWER",
+            "LENGTH",
+            "SUBSTRING",
+            "POSITION",
+            "REPLACE",
+            "CONCAT",
+            "LEFT",
+            "RIGHT",
+            "LPAD",
+            "RPAD",
+            "REPEAT",
+            "REVERSE",
+            "SPLIT_PART",
+            "COUNT",
+            "SUM",
+            "AVG",
+            "MIN",
+            "MAX",
+            "ARRAY_AGG",
+            "STRING_AGG",
+            "JSON_AGG",
+            "ROW_NUMBER",
+            "RANK",
+            "DENSE_RANK",
+            "LEAD",
+            "LAG",
+            "FIRST_VALUE",
+            "LAST_VALUE",
+            "ROUND",
+            "TRUNC",
+            "CEIL",
+            "FLOOR",
+            "ABS",
+            "MOD",
+            "POWER",
+            "SQRT",
+            "SIGN",
+            "TO_CHAR",
+            "TO_DATE",
+            "TO_NUMBER",
+            "TO_TIMESTAMP",
+            "DATE_TRUNC",
+            "DATE_PART",
+            "AGE",
+            "INTERVAL",
+            "GENERATE_SERIES",
+            "UNNEST",
+            "EXISTS",
+            "NOT",
+            "IN",
+            "BETWEEN",
+            "LIKE",
+            "ILIKE",
+            "CURRENT_SCHEMA",
+            "CURRENT_USER",
+            "SESSION_USER",
+            "OVER",
+            "PARTITION",
+            "WITHIN",
+            "CASE",
+            "TABLE",
+        }
+    ),
+    "mariadb": frozenset(
+        {
+            "NOW",
+            "CURDATE",
+            "CURTIME",
+            "CURRENT_DATE",
+            "CURRENT_TIMESTAMP",
+            "SYSDATE",
+            "COALESCE",
+            "NULLIF",
+            "IFNULL",
+            "IF",
+            "GREATEST",
+            "LEAST",
+            "CAST",
+            "CONVERT",
+            "TRIM",
+            "UPPER",
+            "LOWER",
+            "LENGTH",
+            "CHAR_LENGTH",
+            "SUBSTRING",
+            "SUBSTR",
+            "INSTR",
+            "REPLACE",
+            "CONCAT",
+            "CONCAT_WS",
+            "LEFT",
+            "RIGHT",
+            "LPAD",
+            "RPAD",
+            "REPEAT",
+            "REVERSE",
+            "COUNT",
+            "SUM",
+            "AVG",
+            "MIN",
+            "MAX",
+            "GROUP_CONCAT",
+            "JSON_ARRAYAGG",
+            "ROW_NUMBER",
+            "RANK",
+            "DENSE_RANK",
+            "LEAD",
+            "LAG",
+            "FIRST_VALUE",
+            "LAST_VALUE",
+            "ROUND",
+            "TRUNCATE",
+            "CEIL",
+            "FLOOR",
+            "ABS",
+            "MOD",
+            "POWER",
+            "SQRT",
+            "SIGN",
+            "DATE_FORMAT",
+            "STR_TO_DATE",
+            "DATE_ADD",
+            "DATE_SUB",
+            "DATEDIFF",
+            "TIMESTAMPDIFF",
+            "EXISTS",
+            "NOT",
+            "IN",
+            "BETWEEN",
+            "LIKE",
+            "OVER",
+            "PARTITION",
+            "WITHIN",
+            "CASE",
+            "TABLE",
+        }
+    ),
+}
+
+# Alias de compatibilidade — código legado pode referenciar diretamente
+_ORACLE_SYSTEM_TABLES = _SYSTEM_TABLES["oracle"]
+
+
+def _validate_dialect(dialect: str) -> str:
+    """Valida e normaliza o nome do dialeto.
+
+    Raises:
+        ValueError: se o dialeto não é suportado.
+    """
+    dialect = dialect.lower()
+    if dialect not in SUPPORTED_DIALECTS:
+        raise ValueError(f"Dialeto '{dialect}' nao suportado. Use: {', '.join(SUPPORTED_DIALECTS)}")
+    return dialect
 
 
 @dataclass
@@ -44,19 +316,23 @@ class ParsedSQL:
         return sorted(set(result))
 
 
-def is_normalized_sql(sql_text: str) -> bool:
+def is_normalized_sql(sql_text: str, dialect: str = "oracle") -> bool:
     """
-    Detecta se o SQL parece ser normalizado (literais substituídos por '?').
+    Detecta se o SQL parece ser normalizado (literais substituidos por '?').
 
-    Heurística: conta '?' fora de strings. Se houver 2+ ocorrências, é normalizado.
-    SQL Oracle normal não usa '?' — bind variables usam ':param'.
+    Heuristica: conta '?' fora de strings. Se houver 2+ ocorrencias, e normalizado.
+    Funciona para todos os dialetos — ferramentas de monitoramento (Datadog, OEM,
+    pg_stat_statements) usam '?' como placeholder universal.
 
     Args:
         sql_text: SQL a ser verificado.
+        dialect: Dialeto do SQL (oracle, postgresql, mariadb). Reservado para
+                 heuristicas futuras; por ora a logica e a mesma para todos.
 
     Returns:
         True se o SQL parece normalizado.
     """
+    _validate_dialect(dialect)
     count = 0
     in_single_quote = False
     in_double_quote = False
@@ -78,17 +354,24 @@ def is_normalized_sql(sql_text: str) -> bool:
     return False
 
 
-def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
+def parse_sql(
+    sql_text: str, default_schema: str | None = None, dialect: str = "oracle"
+) -> ParsedSQL:
     """
     Faz parse do SQL e extrai metadata estrutural.
 
     Args:
         sql_text: SQL completo (pode ser query, procedure, trigger, etc.)
-        default_schema: Schema padrão caso não esteja qualificado no SQL.
+        default_schema: Schema padrao caso nao esteja qualificado no SQL.
+        dialect: Dialeto do SQL (oracle, postgresql, mariadb).
 
     Returns:
-        ParsedSQL com tabelas, colunas e metadata extraídos.
+        ParsedSQL com tabelas, colunas e metadata extraidos.
     """
+    dialect = _validate_dialect(dialect)
+    system_tables = _SYSTEM_TABLES[dialect]
+    sqlglot_dialect = _SQLGLOT_DIALECT[dialect]
+
     result = ParsedSQL(raw_sql=sql_text.strip().rstrip(";").strip(), sql_type="UNKNOWN")
 
     # Limpa SQL — remove terminadores e comentários de header comuns
@@ -107,17 +390,17 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
 
     # Pra procedures/triggers/packages, tenta extrair tabelas via regex como fallback
     if result.sql_type in ("PROCEDURE", "TRIGGER", "FUNCTION", "PACKAGE"):
-        _extract_from_plsql(cleaned, result, default_schema)
+        _extract_from_plsql(cleaned, result, default_schema, dialect=dialect)
         return result
 
     # Parse com sqlglot
     try:
-        statements = sqlglot.parse(cleaned, dialect="oracle")
+        statements = sqlglot.parse(cleaned, dialect=sqlglot_dialect)
     except sqlglot.errors.ParseError as e:
         result.is_parseable = False
         result.parse_errors.append(str(e))
         # Fallback: tenta extrair tabelas via regex
-        _extract_from_plsql(cleaned, result, default_schema)
+        _extract_from_plsql(cleaned, result, default_schema, dialect=dialect)
         return result
 
     for statement in statements:
@@ -152,8 +435,8 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
             # CTE nunca tem schema; se o nome bate com uma CTE, pula
             if not table.db and table.name and table.name.upper() in result.cte_names:
                 continue
-            # Ignora tabelas de sistema Oracle (DUAL, etc.)
-            if table.name and table.name.upper() in _ORACLE_SYSTEM_TABLES:
+            # Ignora tabelas de sistema do dialeto (DUAL, information_schema, etc.)
+            if table.name and table.name.upper() in system_tables:
                 continue
             table_info = {
                 "name": table.name,
@@ -196,37 +479,43 @@ def parse_sql(sql_text: str, default_schema: str | None = None) -> ParsedSQL:
         # Conta subqueries
         result.subqueries = len(list(statement.find_all(exp.Subquery)))
 
-    # Extrai funções PL/SQL schema-qualificadas via regex (sqlglot não captura bem)
-    _extract_functions(sql_text, result, default_schema)
+    # Extrai funcoes schema-qualificadas via regex (sqlglot nao captura bem)
+    _extract_functions(sql_text, result, default_schema, dialect=dialect)
 
     return result
 
 
-def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
+def denormalize_sql(
+    sql_text: str, mode: str = "literal", dialect: str = "oracle"
+) -> tuple[str, dict]:
     """
     Substitui placeholders '?' de SQL normalizado (Datadog, OEM, etc.).
 
     Ferramentas de monitoramento normalizam SQL substituindo literais por '?'.
-    Isso quebra o parser e o EXPLAIN PLAN. Esta função restaura o SQL para uma
-    forma sintaticamente válida.
+    Isso quebra o parser e o EXPLAIN PLAN. Esta funcao restaura o SQL para uma
+    forma sintaticamente valida.
 
-    Dois modos disponíveis:
+    Dois modos disponiveis:
     - "literal": substitui '?' por '1' (string literal). Funciona pra parse e
-      EXPLAIN PLAN na maioria dos casos. Pode divergir do plano real se o tipo
-      do literal influenciar a estimativa de cardinalidade.
-    - "bind": substitui '?' por bind variables Oracle (:dn1, :dn2, ...).
-      O EXPLAIN PLAN usa seletividade padrão sem depender de valores concretos.
-      Retorna dict com as binds geradas (chave→None) pra passar ao cursor.
+      EXPLAIN PLAN na maioria dos casos.
+    - "bind": substitui '?' por bind variables no formato do dialeto:
+      - Oracle: :dn1, :dn2, ...
+      - PostgreSQL: %(dn1)s, %(dn2)s, ...
+      - MariaDB: mantem '?' (ja e o formato nativo — bind mode e no-op)
 
-    Não altera bind variables Oracle já existentes (:param, :B1) — preservadas.
+    Nao altera bind variables ja existentes (:param, :B1) — preservadas.
 
     Args:
-        sql_text: SQL com placeholders '?' de normalização.
+        sql_text: SQL com placeholders '?' de normalizacao.
         mode: "literal" (default) ou "bind".
+        dialect: Dialeto do SQL (oracle, postgresql, mariadb).
 
     Returns:
-        Tupla (sql_transformado, bind_dict). bind_dict é vazio no modo literal.
+        Tupla (sql_transformado, bind_dict). bind_dict e vazio no modo literal
+        e no modo bind do MariaDB (onde '?' ja e o formato nativo).
     """
+    dialect = _validate_dialect(dialect)
+    bind_style = _BIND_STYLE[dialect]
     result = []
     binds: dict[str, None] = {}
     bind_counter = 0
@@ -255,13 +544,20 @@ def denormalize_sql(sql_text: str, mode: str = "literal") -> tuple[str, dict]:
             i += 1
             continue
 
-        # Encontrou ? fora de string — substitui conforme modo
+        # Encontrou ? fora de string — substitui conforme modo e dialeto
         if ch == "?":
             if mode == "bind":
-                bind_counter += 1
-                bind_name = f"dn{bind_counter}"
-                result.append(f":{bind_name}")
-                binds[bind_name] = None
+                if bind_style == "qmark":
+                    # MariaDB usa '?' nativamente — nada a fazer
+                    result.append("?")
+                else:
+                    bind_counter += 1
+                    bind_name = f"dn{bind_counter}"
+                    if bind_style == "named_colon":
+                        result.append(f":{bind_name}")
+                    elif bind_style == "named_pyformat":
+                        result.append(f"%({bind_name})s")
+                    binds[bind_name] = None
             else:
                 result.append("'1'")
             i += 1
@@ -323,12 +619,15 @@ def remap_bind_params(
     return remapped
 
 
-def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | None) -> None:
+def _extract_from_plsql(
+    sql_text: str, result: ParsedSQL, default_schema: str | None, dialect: str = "oracle"
+) -> None:
     """
     Fallback: extrai tabelas de PL/SQL via parsing parcial.
 
     Procura por padrões como FROM table, JOIN table, INTO table,
     UPDATE table, INSERT INTO table, DELETE FROM table.
+    Filtra tabelas de sistema conforme o dialeto.
     """
     import re
 
@@ -397,6 +696,10 @@ def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | 
             if table_ref.upper() not in reserved and table_ref.upper() not in result.cte_names:
                 found_tables.add(table_ref)
 
+    # Filtra tabelas de sistema do dialeto
+    system_tables = _SYSTEM_TABLES[dialect]
+    found_tables = {t for t in found_tables if t.upper() not in system_tables}
+
     for table_ref in sorted(found_tables):
         parts = table_ref.split(".")
         if len(parts) == 2:
@@ -417,96 +720,23 @@ def _extract_from_plsql(sql_text: str, result: ParsedSQL, default_schema: str | 
             )
 
 
-def _extract_functions(sql_text: str, result: ParsedSQL, default_schema: str | None) -> None:
+def _extract_functions(
+    sql_text: str,
+    result: ParsedSQL,
+    default_schema: str | None,
+    dialect: str = "oracle",
+) -> None:
     """
-    Extrai funções PL/SQL chamadas no SQL via regex.
+    Extrai funcoes schema-qualificadas chamadas no SQL via regex.
 
-    Captura padrões como SCHEMA.FUNCTION_NAME(...) — funções Oracle
-    custom que podem impactar performance (ex: chamadas row-by-row).
-    Ignora funções built-in do Oracle (NVL, TO_CHAR, COUNT, etc.).
+    Captura padroes como SCHEMA.FUNCTION_NAME(...) — funcoes custom
+    que podem impactar performance (ex: chamadas row-by-row).
+    Ignora funcoes built-in do dialeto.
     """
     import re
 
-    # Funções built-in Oracle que não interessam
-    builtins = {
-        "NVL",
-        "NVL2",
-        "COALESCE",
-        "DECODE",
-        "CASE",
-        "CAST",
-        "TO_CHAR",
-        "TO_DATE",
-        "TO_NUMBER",
-        "TO_TIMESTAMP",
-        "TO_CLOB",
-        "TRIM",
-        "LTRIM",
-        "RTRIM",
-        "UPPER",
-        "LOWER",
-        "INITCAP",
-        "SUBSTR",
-        "INSTR",
-        "REPLACE",
-        "TRANSLATE",
-        "LENGTH",
-        "LPAD",
-        "RPAD",
-        "ROUND",
-        "TRUNC",
-        "CEIL",
-        "FLOOR",
-        "MOD",
-        "ABS",
-        "SIGN",
-        "POWER",
-        "SQRT",
-        "COUNT",
-        "SUM",
-        "AVG",
-        "MIN",
-        "MAX",
-        "LISTAGG",
-        "ROW_NUMBER",
-        "RANK",
-        "DENSE_RANK",
-        "LEAD",
-        "LAG",
-        "FIRST_VALUE",
-        "LAST_VALUE",
-        "OVER",
-        "PARTITION",
-        "WITHIN",
-        "SYSDATE",
-        "SYSTIMESTAMP",
-        "CURRENT_DATE",
-        "CURRENT_TIMESTAMP",
-        "EXTRACT",
-        "ADD_MONTHS",
-        "MONTHS_BETWEEN",
-        "LAST_DAY",
-        "NEXT_DAY",
-        "GREATEST",
-        "LEAST",
-        "NULLIF",
-        "SYS_CONTEXT",
-        "USERENV",
-        "USER",
-        "UID",
-        "ROWNUM",
-        "ROWID",
-        "LEVEL",
-        "CONNECT_BY_ROOT",
-        "EXISTS",
-        "NOT",
-        "IN",
-        "BETWEEN",
-        "LIKE",
-        "DBMS_METADATA",
-        "DBMS_XPLAN",
-        "TABLE",
-    }
+    # Funcoes built-in do dialeto que nao interessam
+    builtins = _BUILTIN_FUNCTIONS[dialect]
 
     # Padrão: SCHEMA.FUNCTION_NAME( — schema-qualificado
     pattern = r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\("
