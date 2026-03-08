@@ -3,7 +3,7 @@
     "allow": [
       "Bash(sqlmentor *)",
       "Bash(cat reports/*)",
-      "Bash(docker exec sqlmentor *)",
+      "Bash(docker exec sqlmentor *)"
     ]
   },
   "mcpServers": {
