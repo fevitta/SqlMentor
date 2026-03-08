@@ -286,3 +286,18 @@ class TestConcreteStubs:
         pp = _StubPlanParser()
         assert pp.is_runtime_plan([]) is False
         assert pp.parse_plan(["line"]) == []
+
+
+# ── Real OracleAdapter via registry ──────────────────────────────────
+
+
+class TestRealOracleAdapter:
+    """Verifica que get_adapter("oracle") retorna OracleAdapter sem mocking importlib."""
+
+    def test_get_adapter_returns_oracle_adapter(self):
+        from sqlmentor.adapters.oracle import OracleAdapter
+
+        # Registra o adapter real (módulo já importado, register_adapter não re-executa)
+        register_adapter("oracle", OracleAdapter)
+        result = get_adapter("oracle")
+        assert result is OracleAdapter

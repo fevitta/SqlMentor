@@ -9,13 +9,23 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import oracledb
 import yaml
+
+from sqlmentor.adapters.oracle import (
+    _init_thick_mode_if_available,
+    check_thick_mode_available,
+)
 
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path.home() / ".sqlmentor"
 CONNECTIONS_FILE = CONFIG_DIR / "connections.yaml"
+
+# Re-export para backward compat (usados em test_connector.py e cli.py)
+__all__ = [
+    "_init_thick_mode_if_available",
+    "check_thick_mode_available",
+]
 
 
 def _supported_db_types() -> list[str]:
@@ -56,35 +66,26 @@ def _load_connections() -> dict[str, dict]:
     return connections
 
 
-def validate_privileges(conn: oracledb.Connection) -> None:
+def validate_privileges(conn: Any) -> None:
     """
     Verifica se o user conectado tem apenas privilégios de leitura.
 
-    Consulta SESSION_PRIVS e SESSION_ROLES e rejeita se encontrar
+    Delega ao adapter Oracle e levanta PermissionError se encontrar
     qualquer privilégio de escrita/DDL ou role perigosa.
 
     Raises:
         PermissionError: Se o user tiver privilégios além de leitura.
     """
-    from sqlmentor.queries import dangerous_privileges, dangerous_roles
+    from sqlmentor.adapters import get_adapter
 
-    cursor = conn.cursor()
+    adapter = get_adapter("oracle")()
+    result = adapter.validate_privileges(conn)
+
     problems: list[str] = []
-
-    try:
-        sql, params = dangerous_privileges()
-        cursor.execute(sql, params)
-        bad_privs = [row[0] for row in cursor]
-        if bad_privs:
-            problems.append(f"Privilégios perigosos: {', '.join(bad_privs)}")
-
-        sql, params = dangerous_roles()
-        cursor.execute(sql, params)
-        bad_roles = [row[0] for row in cursor]
-        if bad_roles:
-            problems.append(f"Roles perigosas: {', '.join(bad_roles)}")
-    finally:
-        cursor.close()
+    if result["dangerous_privileges"]:
+        problems.append(f"Privilégios perigosos: {', '.join(result['dangerous_privileges'])}")
+    if result["dangerous_roles"]:
+        problems.append(f"Roles perigosas: {', '.join(result['dangerous_roles'])}")
 
     if problems:
         user = conn.username or "desconhecido"
@@ -195,40 +196,12 @@ def resolve_connection(conn: str | None) -> str:
     )
 
 
-_thick_mode_initialized = False
-
-
-def _init_thick_mode_if_available() -> None:
+def connect(name: str, timeout: int | None = None) -> Any:
     """
-    Tenta ativar thick mode se o Oracle Instant Client estiver disponível.
+    Abre uma conexão a partir de um profile salvo.
 
-    Não explode se não encontrar — apenas re-raise o erro original
-    com uma mensagem útil sobre como resolver.
-    """
-    global _thick_mode_initialized
-    if _thick_mode_initialized:
-        return
-    try:
-        oracledb.init_oracle_client()
-        _thick_mode_initialized = True
-        logger.info("oracledb: thick mode ativado via Oracle Instant Client")
-    except oracledb.ProgrammingError:
-        raise RuntimeError(
-            "Este banco Oracle é antigo demais para o modo thin do oracledb.\n"
-            "Opções:\n"
-            "  1. Instale o Oracle Instant Client e adicione ao PATH\n"
-            "     https://www.oracle.com/database/technologies/instant-client.html\n"
-            "  2. Atualize o banco para Oracle 12c+ (suporta thin mode nativo)"
-        )
-
-
-def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
-    """
-    Abre uma conexão Oracle a partir de um profile salvo.
-
-    Tenta modo thin primeiro (zero dependências externas).
-    Se o banco for muito antigo (DPY-3010), tenta thick mode
-    automaticamente caso o Oracle Instant Client esteja no PATH.
+    Delega ao adapter correspondente ao tipo do profile.
+    Após conectar, valida que o user não tem privilégios além de leitura.
 
     Args:
         name: Nome do profile de conexão.
@@ -236,39 +209,11 @@ def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
                  Se None, usa o valor do profile (default 180s).
                  Se 0, sem timeout.
     """
+    from sqlmentor.adapters import get_adapter
+
     cfg = get_connection_config(name)
-    if cfg.get("type", "oracle") != "oracle":
-        raise NotImplementedError(
-            f"Conexão para '{cfg['type']}' ainda não implementada. "
-            f"Apenas 'oracle' é suportado no momento."
-        )
-    dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
-
-    # Resolve timeout: parâmetro explícito > config do profile > 180s
-    effective_timeout = timeout if timeout is not None else cfg.get("timeout", 180)
-
-    try:
-        conn = oracledb.connect(
-            user=cfg["user"],
-            password=cfg["password"],
-            dsn=dsn,
-        )
-    except oracledb.DatabaseError as e:
-        if "DPY-3010" not in str(e):
-            raise
-
-        logger.info("Thin mode não suportado por este banco, tentando thick mode...")
-        _init_thick_mode_if_available()
-
-        conn = oracledb.connect(
-            user=cfg["user"],
-            password=cfg["password"],
-            dsn=dsn,
-        )
-
-    # Seta call_timeout (em milissegundos, 0 = sem timeout)
-    if effective_timeout > 0:
-        conn.call_timeout = effective_timeout * 1000
+    adapter = get_adapter(cfg.get("type", "oracle"))()
+    conn = adapter.connect(cfg, timeout)
 
     # Valida que o user não tem privilégios além de leitura
     try:
@@ -280,31 +225,8 @@ def connect(name: str, timeout: int | None = None) -> oracledb.Connection:
     return conn
 
 
-def check_thick_mode_available() -> dict[str, str]:
-    """
-    Verifica se o Oracle Instant Client está disponível no ambiente.
-
-    Retorna dict com available (bool como str) e detalhes.
-    """
-    global _thick_mode_initialized
-    if _thick_mode_initialized:
-        return {"available": "True", "detail": "Thick mode já inicializado"}
-    try:
-        oracledb.init_oracle_client()
-        _thick_mode_initialized = True
-        return {"available": "True", "detail": "Oracle Instant Client encontrado"}
-    except Exception as e:
-        return {"available": "False", "detail": str(e)}
-
-
 def test_connection(name: str) -> dict[str, str]:
     """Testa conexão e retorna info do banco."""
-    cfg = get_connection_config(name)
-    if cfg.get("type", "oracle") != "oracle":
-        raise NotImplementedError(
-            f"Conexão para '{cfg['type']}' ainda não implementada. "
-            f"Apenas 'oracle' é suportado no momento."
-        )
     conn = connect(name)
     try:
         cursor = conn.cursor()
@@ -321,64 +243,14 @@ def test_connection(name: str) -> dict[str, str]:
         conn.close()
 
 
-def diagnose_connection(name: str) -> dict[str, str]:
+def diagnose_connection(name: str) -> dict[str, Any]:
     """
     Diagnóstico completo de uma conexão: versão, modo, schema, thick mode.
 
-    Retorna dict com status, version, major_version, mode (thin/thick),
-    schema, e needs_thick (se o banco precisa de thick mode).
+    Delega ao adapter correspondente ao tipo do profile.
     """
+    from sqlmentor.adapters import get_adapter
+
     cfg = get_connection_config(name)
-    if cfg.get("type", "oracle") != "oracle":
-        raise NotImplementedError(
-            f"Conexão para '{cfg['type']}' ainda não implementada. "
-            f"Apenas 'oracle' é suportado no momento."
-        )
-    dsn = oracledb.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
-    needs_thick = False
-
-    try:
-        conn = oracledb.connect(
-            user=cfg["user"],
-            password=cfg["password"],
-            dsn=dsn,
-        )
-    except oracledb.DatabaseError as e:
-        if "DPY-3010" not in str(e):
-            raise
-        needs_thick = True
-        _init_thick_mode_if_available()
-        conn = oracledb.connect(
-            user=cfg["user"],
-            password=cfg["password"],
-            dsn=dsn,
-        )
-
-    mode = "thick" if not oracledb.is_thin_mode() else "thin"
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT banner FROM v$version WHERE ROWNUM = 1")
-        row = cursor.fetchone()
-        version = row[0] if row else "unknown"
-
-        cursor.execute("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")
-        row = cursor.fetchone()
-        current_schema = row[0] if row else "unknown"
-
-        # Extrai major version (ex: "Oracle Database 11g" → 11)
-        import re
-
-        match = re.search(r"(\d+)", version)
-        major = int(match.group(1)) if match else 0
-
-        return {
-            "status": "ok",
-            "version": version,
-            "major_version": str(major),
-            "mode": mode,
-            "schema": current_schema,
-            "needs_thick": str(needs_thick),
-        }
-    finally:
-        conn.close()
+    adapter = get_adapter(cfg.get("type", "oracle"))()
+    return adapter.diagnose_connection(cfg)
