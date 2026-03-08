@@ -60,7 +60,7 @@ def main(
     """SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA."""
 
 
-config_app = typer.Typer(help="Gerencia conexões Oracle.")
+config_app = typer.Typer(help="Gerencia conexões de banco de dados.")
 app.add_typer(config_app, name="config")
 
 console = Console()
@@ -691,7 +691,7 @@ def _print_summary(ctx) -> None:
 @config_app.command("add")
 def config_add(
     name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
-    host: str = typer.Option(..., "--host", "-h", help="Host do Oracle."),
+    host: str = typer.Option(..., "--host", "-h", help="Host do banco."),
     port: int = typer.Option(1521, "--port", "-p", help="Porta."),
     service: str = typer.Option(..., "--service", "-s", help="Service name."),
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
@@ -700,21 +700,27 @@ def config_add(
     timeout: int = typer.Option(
         180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
     ),
+    db_type: str = typer.Option("oracle", "--db-type", help="Tipo de banco (default: oracle)."),
 ) -> None:
-    """Adiciona um profile de conexão Oracle."""
+    """Adiciona um profile de conexão."""
     _validate_timeout(timeout)
     from sqlmentor.connector import add_connection
 
-    add_connection(
-        name=name,
-        host=host,
-        port=port,
-        service=service,
-        user=user,
-        password=password,
-        schema=schema_name,
-        timeout=timeout,
-    )
+    try:
+        add_connection(
+            name=name,
+            host=host,
+            port=port,
+            service=service,
+            user=user,
+            password=password,
+            schema=schema_name,
+            timeout=timeout,
+            db_type=db_type,
+        )
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
 
     # Valida conexão e detecta versão/modo automaticamente
@@ -768,6 +774,7 @@ def config_list() -> None:
 
     table = Table(title="Conexões", show_header=True)
     table.add_column("Nome", style="bold cyan")
+    table.add_column("Tipo")
     table.add_column("Host")
     table.add_column("Porta")
     table.add_column("Service")
@@ -780,6 +787,7 @@ def config_list() -> None:
         is_default = "★" if name == default_name else ""
         table.add_row(
             name,
+            cfg.get("type", "oracle"),
             cfg.get("host", "?"),
             str(cfg.get("port", "?")),
             cfg.get("service", "?"),
