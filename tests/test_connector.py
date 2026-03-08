@@ -5,12 +5,10 @@ from unittest.mock import MagicMock, patch
 import oracledb
 import pytest
 
-import sqlmentor.connector as connector_mod
+import sqlmentor.adapters.oracle as oracle_mod
 from sqlmentor.connector import (
-    _init_thick_mode_if_available,
     _validate_db_type,
     add_connection,
-    check_thick_mode_available,
     connect,
     diagnose_connection,
     get_connection_config,
@@ -307,50 +305,6 @@ class TestValidatePrivileges:
         cursor.close.assert_called_once()
 
 
-# ─── _init_thick_mode_if_available ──────────────────────────────────────────
-
-
-class TestInitThickMode:
-    def test_already_initialized_noop(self):
-        """Se flag já é True, retorna imediatamente sem chamar init_oracle_client."""
-        original = connector_mod._thick_mode_initialized
-        try:
-            connector_mod._thick_mode_initialized = True
-            with patch.object(oracledb, "init_oracle_client") as mock_init:
-                _init_thick_mode_if_available()
-                mock_init.assert_not_called()
-        finally:
-            connector_mod._thick_mode_initialized = original
-
-    def test_success_sets_flag(self):
-        """init_oracle_client OK → flag setada para True."""
-        original = connector_mod._thick_mode_initialized
-        try:
-            connector_mod._thick_mode_initialized = False
-            with patch.object(oracledb, "init_oracle_client"):
-                _init_thick_mode_if_available()
-                assert connector_mod._thick_mode_initialized is True
-        finally:
-            connector_mod._thick_mode_initialized = original
-
-    def test_programming_error_raises_runtime(self):
-        """ProgrammingError → RuntimeError com mensagem de Oracle Instant Client."""
-        original = connector_mod._thick_mode_initialized
-        try:
-            connector_mod._thick_mode_initialized = False
-            with (
-                patch.object(
-                    oracledb,
-                    "init_oracle_client",
-                    side_effect=oracledb.ProgrammingError("not found"),
-                ),
-                pytest.raises(RuntimeError, match="Oracle Instant Client"),
-            ):
-                _init_thick_mode_if_available()
-        finally:
-            connector_mod._thick_mode_initialized = original
-
-
 # ─── connect ────────────────────────────────────────────────────────────────
 
 
@@ -376,7 +330,7 @@ class TestConnect:
         with (
             patch.object(oracledb, "connect", side_effect=[err, mock_conn]),
             patch.object(oracledb, "makedsn", return_value="dsn"),
-            patch("sqlmentor.connector._init_thick_mode_if_available") as mock_thick,
+            patch("sqlmentor.adapters.oracle._init_thick_mode_if_available") as mock_thick,
             patch("sqlmentor.connector.validate_privileges"),
         ):
             result = connect("dev")
@@ -419,8 +373,8 @@ class TestConnect:
             connect("dev", timeout=None)
             assert mock_conn.call_timeout == 300_000
 
-    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
-        """Profile com type != 'oracle' levanta NotImplementedError."""
+    def test_non_oracle_type_raises_value_error(self, tmp_connections_file):
+        """Profile com type não suportado levanta ValueError via get_adapter."""
         import yaml
 
         # Cria profile manualmente com type 'postgresql'
@@ -439,7 +393,7 @@ class TestConnect:
         with open(tmp_connections_file, "w") as f:
             yaml.dump(connections, f)
 
-        with pytest.raises(NotImplementedError, match="postgresql"):
+        with pytest.raises(ValueError, match="não suportado"):
             connect("pg")
 
 
@@ -449,36 +403,42 @@ class TestConnect:
 class TestCheckThickMode:
     def test_already_initialized(self):
         """Flag True → retorna cached."""
-        original = connector_mod._thick_mode_initialized
+        from sqlmentor.connector import check_thick_mode_available
+
+        original = oracle_mod._thick_mode_initialized
         try:
-            connector_mod._thick_mode_initialized = True
+            oracle_mod._thick_mode_initialized = True
             result = check_thick_mode_available()
             assert result["available"] == "True"
             assert "já" in result["detail"].lower()
         finally:
-            connector_mod._thick_mode_initialized = original
+            oracle_mod._thick_mode_initialized = original
 
     def test_client_found(self):
         """init_oracle_client OK → available=True."""
-        original = connector_mod._thick_mode_initialized
+        from sqlmentor.connector import check_thick_mode_available
+
+        original = oracle_mod._thick_mode_initialized
         try:
-            connector_mod._thick_mode_initialized = False
+            oracle_mod._thick_mode_initialized = False
             with patch.object(oracledb, "init_oracle_client"):
                 result = check_thick_mode_available()
                 assert result["available"] == "True"
         finally:
-            connector_mod._thick_mode_initialized = original
+            oracle_mod._thick_mode_initialized = original
 
     def test_client_not_found(self):
         """Exception → available=False."""
-        original = connector_mod._thick_mode_initialized
+        from sqlmentor.connector import check_thick_mode_available
+
+        original = oracle_mod._thick_mode_initialized
         try:
-            connector_mod._thick_mode_initialized = False
+            oracle_mod._thick_mode_initialized = False
             with patch.object(oracledb, "init_oracle_client", side_effect=Exception("not found")):
                 result = check_thick_mode_available()
                 assert result["available"] == "False"
         finally:
-            connector_mod._thick_mode_initialized = original
+            oracle_mod._thick_mode_initialized = original
 
 
 # ─── test_connection ────────────────────────────────────────────────────────
@@ -525,8 +485,8 @@ class TestTestConnection:
             _test_connection("prod")
             mock_connect.assert_called_once_with("prod")
 
-    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
-        """Profile com type != 'oracle' levanta NotImplementedError."""
+    def test_non_oracle_type_raises_value_error(self, tmp_connections_file):
+        """Profile com type não suportado levanta ValueError via get_adapter."""
         import yaml
 
         connections = {
@@ -544,7 +504,7 @@ class TestTestConnection:
         with open(tmp_connections_file, "w") as f:
             yaml.dump(connections, f)
 
-        with pytest.raises(NotImplementedError, match="postgresql"):
+        with pytest.raises(ValueError, match="não suportado"):
             _test_connection("pg")
 
 
@@ -589,7 +549,7 @@ class TestDiagnoseConnection:
         with (
             patch.object(oracledb, "connect", side_effect=[err, mock_conn]),
             patch.object(oracledb, "makedsn", return_value="dsn"),
-            patch("sqlmentor.connector._init_thick_mode_if_available"),
+            patch("sqlmentor.adapters.oracle._init_thick_mode_if_available"),
             patch.object(oracledb, "is_thin_mode", return_value=False),
         ):
             result = diagnose_connection("dev")
@@ -623,8 +583,8 @@ class TestDiagnoseConnection:
                 diagnose_connection("dev")
             mock_conn.close.assert_called_once()
 
-    def test_non_oracle_type_raises_not_implemented(self, tmp_connections_file):
-        """Profile com type != 'oracle' levanta NotImplementedError."""
+    def test_non_oracle_type_raises_value_error(self, tmp_connections_file):
+        """Profile com type não suportado levanta ValueError via get_adapter."""
         import yaml
 
         connections = {
@@ -642,5 +602,5 @@ class TestDiagnoseConnection:
         with open(tmp_connections_file, "w") as f:
             yaml.dump(connections, f)
 
-        with pytest.raises(NotImplementedError, match="postgresql"):
+        with pytest.raises(ValueError, match="não suportado"):
             diagnose_connection("pg")
