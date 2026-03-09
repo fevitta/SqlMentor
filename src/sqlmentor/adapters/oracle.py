@@ -888,6 +888,28 @@ class OracleAdapter(DatabaseAdapter):
         """Fecha a conexão Oracle."""
         conn.close()
 
+    def check_deps(self) -> list[dict[str, str]]:
+        """Verifica dependências do driver Oracle (oracledb, Instant Client)."""
+        results: list[dict[str, str]] = []
+        # Check 1: oracledb package
+        try:
+            import importlib.metadata
+
+            ver = importlib.metadata.version("oracledb")
+            results.append({"name": "oracledb", "status": "ok", "detail": ver})
+        except Exception:
+            results.append(
+                {"name": "oracledb", "status": "missing", "detail": "pip install oracledb"}
+            )
+            return results  # can't check thick mode without oracledb
+        # Check 2: Oracle Instant Client (thick mode)
+        thick_info = check_thick_mode_available()
+        status = "ok" if thick_info["available"] == "True" else "warning"
+        results.append(
+            {"name": "Oracle Instant Client", "status": status, "detail": thick_info["detail"]}
+        )
+        return results
+
 
 # ── Registro ────────────────────────────────────────────────────────
 

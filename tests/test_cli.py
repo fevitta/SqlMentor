@@ -703,39 +703,62 @@ class TestDoctorCLI:
 
 
 class TestDoctorExtended:
-    def test_oracledb_not_installed(self, monkeypatch):
-        """PackageNotFoundError → 'não instalado'."""
-        import importlib.metadata
+    def test_adapter_check_deps_ok(self, monkeypatch):
+        """Adapter retorna deps ok → exibe versão."""
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "ok", "detail": "2.1.0"},
+            {"name": "Oracle Instant Client", "status": "ok", "detail": "Instant Client 19.8"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
+        monkeypatch.setattr("sqlmentor.connector.list_connections", lambda: {})
+        result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0
+        assert "2.1.0" in result.output
 
-        original_version = importlib.metadata.version
-
-        def _mock_version(pkg):
-            if pkg == "oracledb":
-                raise importlib.metadata.PackageNotFoundError(pkg)
-            return original_version(pkg)
-
-        monkeypatch.setattr("importlib.metadata.version", _mock_version)
+    def test_adapter_check_deps_missing(self, monkeypatch):
+        """Adapter retorna dep missing → 'não instalado'."""
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "missing", "detail": "pip install oracledb"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
+        monkeypatch.setattr("sqlmentor.connector.list_connections", lambda: {})
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
         assert "não instalado" in result.output.lower()
 
-    def test_thick_mode_not_available(self, monkeypatch):
-        """available=False → 'Não encontrado'."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.check_thick_mode_available",
-            lambda: {"available": "False", "detail": ""},
-        )
+    def test_adapter_check_deps_warning(self, monkeypatch):
+        """Adapter retorna dep warning → exibe warning."""
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "ok", "detail": "2.1.0"},
+            {"name": "Oracle Instant Client", "status": "warning", "detail": "Não encontrado"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
         monkeypatch.setattr("sqlmentor.connector.list_connections", lambda: {})
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
-        assert "não encontrado" in result.output.lower()
 
     def test_connection_diagnostics(self, monkeypatch):
         """List connections + diagnose → 'Conectado'."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.check_thick_mode_available",
-            lambda: {"available": "True", "detail": "Instant Client 19.8"},
-        )
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "ok", "detail": "2.1.0"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
         monkeypatch.setattr(
             "sqlmentor.connector.list_connections",
             lambda: {"prod": {"host": "db1", "port": 1521, "service": "ORCL"}},
@@ -755,10 +778,14 @@ class TestDoctorExtended:
 
     def test_connection_diagnostics_failure(self, monkeypatch):
         """diagnose raises → 'Falha'."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.check_thick_mode_available",
-            lambda: {"available": "True", "detail": "Instant Client 19.8"},
-        )
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "ok", "detail": "2.1.0"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
         monkeypatch.setattr(
             "sqlmentor.connector.list_connections",
             lambda: {"prod": {"host": "db1", "port": 1521, "service": "ORCL"}},

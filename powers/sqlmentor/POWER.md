@@ -33,7 +33,7 @@ Parse offline — extrai tabelas, colunas, joins, subqueries sem conectar no ban
 A tool principal. Conecta no Oracle, coleta contexto completo e retorna relatório estruturado. Veja os parâmetros na descrição da tool.
 
 ### inspect_sql
-Coleta contexto de um SQL já executado via `sql_id`, sem re-executar. Puxa plano real e métricas do shared pool Oracle. Veja os parâmetros na descrição da tool.
+Coleta contexto de um SQL já executado via `statement_id` (ex: sql_id Oracle), sem re-executar. Puxa plano real e métricas do banco. Veja os parâmetros na descrição da tool.
 
 ## Conexão Padrão
 
@@ -48,7 +48,7 @@ Depois disso, as tools usam essa conexão automaticamente quando `conn` é omiti
 ## Workflow Recomendado
 
 ### Com sql_id (caminho rápido)
-1. Chame `inspect_sql` com o `sql_id` — já traz plano real e métricas do shared pool
+1. Chame `inspect_sql` com o `statement_id` (ex: sql_id Oracle) — já traz plano real e métricas do shared pool
 2. Carregue o steering `analysis` e analise o relatório
 3. Se precisar de mais contexto: `deep=True`, `expand_views=True`, `expand_functions=True`
 

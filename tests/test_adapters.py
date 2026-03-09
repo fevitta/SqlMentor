@@ -63,6 +63,9 @@ class _StubAdapter(DatabaseAdapter):
     def close_connection(self, conn: Any) -> None:
         pass
 
+    def check_deps(self) -> list[dict[str, str]]:
+        return [{"name": "stub-driver", "status": "ok", "detail": "1.0.0"}]
+
 
 # ── register_adapter ────────────────────────────────────────────────
 
