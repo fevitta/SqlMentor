@@ -30,6 +30,9 @@ session_wait_events = _qb.session_wait_events
 # Sessão / instância
 db_version = _qb.db_version
 optimizer_params = _qb.optimizer_params
+set_statistics_level = _qb.set_statistics_level
+session_sid = _qb.session_sid
+prev_sql_id = _qb.prev_sql_id
 
 # Objetos
 object_type = _qb.object_type

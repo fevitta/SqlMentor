@@ -189,8 +189,12 @@ def _setup_analyze_patches(
     mock_conn = MagicMock()
     ctx = collect_return or _make_mock_ctx()
 
+    mock_adapter = MagicMock()
     patches = {
-        "connect": patch("sqlmentor.connector.connect", return_value=mock_conn),
+        "connect": patch(
+            "sqlmentor.connector.connect_with_adapter",
+            return_value=(mock_adapter, mock_conn),
+        ),
         "collect": patch(
             "sqlmentor.collector.collect_context",
             return_value=ctx,
@@ -394,8 +398,24 @@ def _setup_inspect_patches(tmp_connections_file, **overrides):
 
     ctx = overrides.get("ctx", _make_mock_ctx())
 
+    mock_adapter = MagicMock()
+    mock_qb = MagicMock()
+    mock_adapter.query_builder = mock_qb
+    mock_qb.sql_text_by_id = MagicMock(
+        side_effect=lambda sid: ("SELECT sql_fulltext FROM v$sql WHERE sql_id = :sid", {"sid": sid})
+    )
+    mock_qb.runtime_plan = MagicMock(
+        side_effect=lambda sid: ("SELECT plan_table_output FROM ...", {"sid": sid})
+    )
+    mock_qb.sql_runtime_stats = MagicMock(
+        side_effect=lambda sid: ("SELECT * FROM v$sql WHERE sql_id = :sid", {"sid": sid})
+    )
+
     patches = {
-        "connect": patch("sqlmentor.connector.connect", return_value=mock_conn),
+        "connect": patch(
+            "sqlmentor.connector.connect_with_adapter",
+            return_value=(mock_adapter, mock_conn),
+        ),
         "collect": patch("sqlmentor.collector.collect_context", return_value=ctx),
         "to_markdown": patch("sqlmentor.report.to_markdown", return_value="# Inspect Report"),
         "to_json": patch("sqlmentor.report.to_json", return_value='{"inspect": true}'),

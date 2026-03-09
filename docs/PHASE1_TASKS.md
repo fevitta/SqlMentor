@@ -2,7 +2,7 @@
 
 > Refatorar o código Oracle existente em adapters plugáveis sem quebrar funcionalidade.
 
-## Status: IN PROGRESS (4/9)
+## Status: IN PROGRESS (6/9)
 
 ## Ordem de Execução
 
@@ -58,26 +58,26 @@ T1 ──→ T9 (paralelo com T2-T6)    └→ T6 ──↗
   - [x] `test_connection()` e `diagnose_connection()` delegam ao adapter
 
 ### T3: Refatorar queries → queries/oracle.py
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T1, T2
 - **Bloqueia**: T4
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] `queries/__init__.py` → re-export / factory
-  - [ ] `queries/oracle.py` — `OracleQueryBuilder` implementando `QueryBuilder`
-  - [ ] Assinaturas mantêm `tuple[str, dict]`
+  - [x] `queries/__init__.py` → re-export / factory
+  - [x] `queries/oracle.py` — `OracleQueryBuilder` implementando `QueryBuilder`
+  - [x] Assinaturas mantêm `tuple[str, dict]`
 
 ### T4: Refatorar collector.py → usar adapter
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T2, T3
 - **Bloqueia**: T5, T6, T7
 - **Esforço**: 5 dias
 - **Entregas**:
-  - [ ] Remover `import oracledb` do collector
-  - [ ] LOB `.read()` encapsulado no adapter
-  - [ ] `ALTER SESSION`, `SYS_CONTEXT`, `EXPLAIN PLAN FOR` delegados ao adapter
-  - [ ] `_collect_explain_plan()` e `_collect_runtime_execution()` via adapter
-  - [ ] Batch collection via `adapter.query_builder.batch_*()`
+  - [x] Remover `import oracledb` do collector
+  - [x] LOB `.read()` encapsulado no adapter
+  - [x] `ALTER SESSION`, `SYS_CONTEXT`, `EXPLAIN PLAN FOR` delegados ao adapter
+  - [x] `_collect_explain_plan()` e `_collect_runtime_execution()` via adapter
+  - [x] Batch collection via `adapter.query_builder.batch_*()`
 
 ### T5: Refatorar report.py → PlanParser plugável
 - **Status**: [ ] TODO
@@ -121,10 +121,10 @@ T1 ──→ T9 (paralelo com T2-T6)    └→ T6 ──↗
 | T8 Schema conexão | ✅ DONE | T1 |
 | T9 Parser dialeto | ✅ DONE | T1 |
 | T2 OracleAdapter | ✅ DONE | T1, T8 |
-| T3 queries/oracle.py | ⬜ TODO | T1, T2 |
-| T4 Collector adapter | ⬜ TODO | T2, T3 |
+| T3 queries/oracle.py | ✅ DONE | T1, T2 |
+| T4 Collector adapter | ✅ DONE | T2, T3 |
 | T5 PlanParser plugável | ⬜ TODO | T1, T4 |
 | T6 CLI/MCP dialect | ⬜ TODO | T4 |
 | T7 Regressão Oracle | ⬜ TODO | T4, T5, T6 |
 
-**Progresso**: 4/9 tarefas concluídas
+**Progresso**: 6/9 tarefas concluídas
