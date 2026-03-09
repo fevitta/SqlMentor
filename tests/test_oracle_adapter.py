@@ -304,8 +304,8 @@ class TestOracleAdapterExecuteQuery:
 
         rows = OracleAdapter().execute_query(cursor, "SELECT 1", {})
         assert len(rows) == 2
-        assert rows[0] == {"ID": 1, "NAME": "Alice"}
-        assert rows[1] == {"ID": 2, "NAME": "Bob"}
+        assert rows[0] == {"id": 1, "name": "Alice"}
+        assert rows[1] == {"id": 2, "name": "Bob"}
 
     def test_lob_conversion(self):
         """LOBs com .read() são convertidos automaticamente."""
@@ -317,7 +317,7 @@ class TestOracleAdapterExecuteQuery:
         cursor.__iter__ = MagicMock(return_value=iter([(lob,)]))
 
         rows = OracleAdapter().execute_query(cursor, "SELECT 1", {})
-        assert rows[0]["DDL"] == "LOB content"
+        assert rows[0]["ddl"] == "LOB content"
         lob.read.assert_called_once()
 
     def test_no_description_returns_empty(self):
@@ -410,6 +410,45 @@ class TestThickMode:
 
 
 # ─── OracleQueryBuilder shim ────────────────────────────────────────
+
+
+class TestOracleQueryBuilderSessionMethods:
+    """Testes dos 3 novos métodos de sessão do OracleQueryBuilder."""
+
+    def test_set_statistics_level_all(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.set_statistics_level("ALL")
+        assert "STATISTICS_LEVEL" in sql
+        assert "ALL" in sql
+        assert params == {}
+
+    def test_set_statistics_level_typical(self):
+        qb = OracleQueryBuilder()
+        sql, _params = qb.set_statistics_level("TYPICAL")
+        assert "TYPICAL" in sql
+
+    def test_set_statistics_level_invalid(self):
+        qb = OracleQueryBuilder()
+        with pytest.raises(ValueError, match="inválido"):
+            qb.set_statistics_level("INVALID")
+
+    def test_set_statistics_level_case_insensitive(self):
+        qb = OracleQueryBuilder()
+        sql, _params = qb.set_statistics_level("all")
+        assert "ALL" in sql
+
+    def test_session_sid(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.session_sid()
+        assert "v$mystat" in sql
+        assert params == {}
+
+    def test_prev_sql_id(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.prev_sql_id()
+        assert "prev_sql_id" in sql
+        assert "v$session" in sql
+        assert params == {}
 
 
 class TestOracleQueryBuilderShim:

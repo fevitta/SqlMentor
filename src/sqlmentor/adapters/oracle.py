@@ -153,6 +153,27 @@ class OracleQueryBuilder(QueryBuilder):
 
     # ── Sessão / instância ───────────────────────────────────────────
 
+    def set_statistics_level(self, level: str) -> tuple[str, dict]:
+        """ALTER SESSION SET STATISTICS_LEVEL (DDL, não aceita binds)."""
+        allowed = ("ALL", "TYPICAL")
+        level_upper = level.upper().strip()
+        if level_upper not in allowed:
+            raise ValueError(
+                f"STATISTICS_LEVEL inválido: {level!r}. Valores permitidos: {', '.join(allowed)}"
+            )
+        return (f"ALTER SESSION SET STATISTICS_LEVEL = {level_upper}", {})
+
+    def session_sid(self) -> tuple[str, dict]:
+        """SID da sessão atual."""
+        return ("SELECT sid FROM v$mystat WHERE ROWNUM = 1", {})
+
+    def prev_sql_id(self) -> tuple[str, dict]:
+        """sql_id da query anterior executada na sessão."""
+        return (
+            "SELECT prev_sql_id FROM v$session WHERE sid = SYS_CONTEXT('USERENV', 'SID')",
+            {},
+        )
+
     def db_version(self) -> tuple[str, dict]:
         """Versão do banco Oracle."""
         return (
@@ -728,7 +749,7 @@ class OracleAdapter(DatabaseAdapter):
         cursor.execute(sql, params)
         if cursor.description is None:
             return []
-        columns = [col[0] for col in cursor.description]
+        columns = [col[0].lower() for col in cursor.description]
         rows = []
         for row in cursor:
             converted = []

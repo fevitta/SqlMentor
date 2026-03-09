@@ -196,9 +196,9 @@ def resolve_connection(conn: str | None) -> str:
     )
 
 
-def connect(name: str, timeout: int | None = None) -> Any:
+def connect_with_adapter(name: str, timeout: int | None = None) -> tuple[Any, Any]:
     """
-    Abre uma conexão a partir de um profile salvo.
+    Abre uma conexão e retorna o adapter junto.
 
     Delega ao adapter correspondente ao tipo do profile.
     Após conectar, valida que o user não tem privilégios além de leitura.
@@ -208,6 +208,9 @@ def connect(name: str, timeout: int | None = None) -> Any:
         timeout: Timeout em segundos para operações no banco.
                  Se None, usa o valor do profile (default 180s).
                  Se 0, sem timeout.
+
+    Returns:
+        Tuple (adapter, connection).
     """
     from sqlmentor.adapters import get_adapter
 
@@ -222,6 +225,23 @@ def connect(name: str, timeout: int | None = None) -> Any:
         conn.close()
         raise
 
+    return adapter, conn
+
+
+def connect(name: str, timeout: int | None = None) -> Any:
+    """
+    Abre uma conexão a partir de um profile salvo.
+
+    Delega ao adapter correspondente ao tipo do profile.
+    Após conectar, valida que o user não tem privilégios além de leitura.
+
+    Args:
+        name: Nome do profile de conexão.
+        timeout: Timeout em segundos para operações no banco.
+                 Se None, usa o valor do profile (default 180s).
+                 Se 0, sem timeout.
+    """
+    _adapter, conn = connect_with_adapter(name, timeout)
     return conn
 
 

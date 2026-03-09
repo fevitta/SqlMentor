@@ -166,7 +166,7 @@ def analyze_sql(
         show_all_indexes: Se True, mostra todos os índices. Por padrão, só mostra índices cujas colunas são relevantes ao SQL.
     """
     from sqlmentor.collector import clear_cache, collect_context
-    from sqlmentor.connector import connect, get_connection_config, resolve_connection
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
     from sqlmentor.parser import (
         denormalize_sql,
         detect_sql_binds,
@@ -211,7 +211,7 @@ def analyze_sql(
 
     # Conecta
     try:
-        oracle_conn = connect(conn, timeout=timeout if timeout > 0 else None)
+        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
     except Exception as e:
         return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
 
@@ -258,6 +258,7 @@ def analyze_sql(
             execute=execute,
             bind_params=bind_params or None,
             use_cache=not no_cache,
+            adapter=adapter,
         )
     except Exception as e:
         oracle_conn.close()
@@ -314,9 +315,8 @@ def inspect_sql(
         show_all_indexes: Se True, mostra todos os índices.
     """
     from sqlmentor.collector import clear_cache, collect_context
-    from sqlmentor.connector import connect, get_connection_config, resolve_connection
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql as _parse
-    from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
 
     if err := _validate_timeout_mcp(timeout):
@@ -335,15 +335,16 @@ def inspect_sql(
     effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
 
     try:
-        oracle_conn = connect(conn, timeout=timeout if timeout > 0 else None)
+        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
     except Exception as e:
         return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
 
+    qb = adapter.query_builder
     cursor = oracle_conn.cursor()
 
     # Recupera SQL original do shared pool
     try:
-        sql_query, params = sql_text_by_id(sql_id)
+        sql_query, params = qb.sql_text_by_id(sql_id)
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
         if not row or not row[0]:
@@ -365,7 +366,7 @@ def inspect_sql(
     # Plano real via sql_id
     runtime_plan_lines = None
     try:
-        sql_query, params = runtime_plan(sql_id)
+        sql_query, params = qb.runtime_plan(sql_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
     except Exception as e:
@@ -374,7 +375,7 @@ def inspect_sql(
     # Métricas V$SQL
     runtime_stats_data = None
     try:
-        sql_query, params = sql_runtime_stats(sql_id)
+        sql_query, params = qb.sql_runtime_stats(sql_id)
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
@@ -395,6 +396,7 @@ def inspect_sql(
             expand_functions=expand_functions,
             execute=False,
             use_cache=not no_cache,
+            adapter=adapter,
         )
     except Exception as e:
         oracle_conn.close()

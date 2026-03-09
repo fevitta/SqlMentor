@@ -229,7 +229,7 @@ def analyze(
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
-    from sqlmentor.connector import connect, get_connection_config, resolve_connection
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
     from sqlmentor.parser import (
         denormalize_sql,
         detect_sql_binds,
@@ -297,7 +297,7 @@ def analyze(
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
-        oracle_conn = connect(conn, timeout=timeout)
+        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout)
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
@@ -352,6 +352,7 @@ def analyze(
             execute=execute,
             bind_params=bind_params or None,
             use_cache=not no_cache,
+            adapter=adapter,
         )
     except Exception as e:
         console.print(f"[red]Erro na coleta:[/red] {e}")
@@ -454,9 +455,8 @@ def inspect(
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
-    from sqlmentor.connector import connect, get_connection_config, resolve_connection
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
     from sqlmentor.parser import parse_sql
-    from sqlmentor.queries import runtime_plan, sql_runtime_stats, sql_text_by_id
     from sqlmentor.report import to_json, to_markdown
 
     timer = _StepTimer()
@@ -478,18 +478,19 @@ def inspect(
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
-        oracle_conn = connect(conn, timeout=timeout)
+        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout)
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
     timer.mark("Connect")
 
+    qb = adapter.query_builder
     cursor = oracle_conn.cursor()
 
     # Recupera SQL original do shared pool
     console.print(f"[cyan]Buscando SQL_ID:[/cyan] {sql_id}")
     try:
-        sql_query, params = sql_text_by_id(sql_id)
+        sql_query, params = qb.sql_text_by_id(sql_id)
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
         if not row or not row[0]:
@@ -519,7 +520,7 @@ def inspect(
     # Coleta plano real via sql_id (sem re-executar)
     console.print("[cyan]Coletando plano real...[/cyan]")
     try:
-        sql_query, params = runtime_plan(sql_id)
+        sql_query, params = qb.runtime_plan(sql_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
     except Exception as e:
@@ -529,7 +530,7 @@ def inspect(
     # Coleta métricas de V$SQL
     console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
     try:
-        sql_query, params = sql_runtime_stats(sql_id)
+        sql_query, params = qb.sql_runtime_stats(sql_id)
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
@@ -553,6 +554,7 @@ def inspect(
             expand_functions=expand_functions,
             execute=False,
             use_cache=not no_cache,
+            adapter=adapter,
         )
     except Exception as e:
         console.print(f"[red]Erro na coleta:[/red] {e}")
