@@ -1239,3 +1239,167 @@ class TestStepTimer:
         timer.print_summary()
         captured = capsys.readouterr()
         assert "Total" in captured.out
+
+
+# ─── T7: Testes de regressão para paths descobertos ───────────────────────────
+
+
+class TestAnalyzeNoCache:
+    """--no-cache → clear_cache chamado."""
+
+    def test_analyze_no_cache(self, monkeypatch, tmp_path):
+        sql_file, out_file, _mocks = _analyze_patches(monkeypatch, tmp_path)
+        mock_clear = MagicMock()
+        monkeypatch.setattr("sqlmentor.collector.clear_cache", mock_clear)
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                str(sql_file),
+                "--conn",
+                "test",
+                "--no-cache",
+                "--output",
+                str(out_file),
+            ],
+        )
+        assert result.exit_code == 0
+        mock_clear.assert_called_once()
+
+
+class TestInspectNoCache:
+    """--no-cache no inspect → clear_cache chamado."""
+
+    def test_inspect_no_cache(self, monkeypatch, tmp_path):
+        out_file, _mocks = _inspect_patches(monkeypatch, tmp_path)
+        mock_clear = MagicMock()
+        monkeypatch.setattr("sqlmentor.collector.clear_cache", mock_clear)
+        result = runner.invoke(
+            app,
+            [
+                "inspect",
+                "abc123",
+                "--conn",
+                "test",
+                "--no-cache",
+                "--output",
+                str(out_file),
+            ],
+        )
+        assert result.exit_code == 0
+        mock_clear.assert_called_once()
+
+
+class TestDoctorAdapterException:
+    """get_adapter() raises → doctor imprime erro sem crashear."""
+
+    def test_adapter_exception(self, monkeypatch):
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["broken"])
+        monkeypatch.setattr(
+            "sqlmentor.adapters.get_adapter",
+            MagicMock(side_effect=Exception("ImportError: no module named broken")),
+        )
+        monkeypatch.setattr("sqlmentor.connector.list_connections", lambda: {})
+        result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0
+        assert "broken" in result.output.lower()
+
+
+class TestDoctorRuntimeError:
+    """diagnose_connection raises RuntimeError → output mostra mensagem."""
+
+    def test_runtime_error(self, monkeypatch):
+        mock_adapter = MagicMock()
+        mock_adapter_instance = MagicMock()
+        mock_adapter.return_value = mock_adapter_instance
+        mock_adapter_instance.check_deps.return_value = [
+            {"name": "oracledb", "status": "ok", "detail": "2.1.0"},
+        ]
+        monkeypatch.setattr("sqlmentor.adapters.list_adapters", lambda: ["oracle"])
+        monkeypatch.setattr("sqlmentor.adapters.get_adapter", lambda db_type: mock_adapter)
+        monkeypatch.setattr(
+            "sqlmentor.connector.list_connections",
+            lambda: {"prod": {"host": "db1", "port": 1521, "service": "ORCL"}},
+        )
+        monkeypatch.setattr(
+            "sqlmentor.connector.diagnose_connection",
+            MagicMock(side_effect=RuntimeError("Oracle Instant Client not found")),
+        )
+        result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0
+        assert "Instant Client" in result.output
+
+
+class TestInspectConnectionError:
+    """connect_with_adapter raises → exit 1."""
+
+    def test_connection_error(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        )
+        monkeypatch.setattr(
+            "sqlmentor.connector.connect_with_adapter",
+            MagicMock(side_effect=Exception("ORA-12541: no listener")),
+        )
+        result = runner.invoke(
+            app,
+            ["inspect", "abc123", "--conn", "test", "--output", str(tmp_path / "out.md")],
+        )
+        assert result.exit_code == 1
+        assert "erro de conexão" in result.output.lower()
+
+
+class TestInspectSqlFetchError:
+    """cursor.execute raises generic error on sql_text_by_id → exit 1, 'Erro ao buscar SQL'."""
+
+    def test_sql_fetch_error(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        )
+
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = Exception("ORA-00942: table not found")
+
+        mock_adapter = MagicMock()
+        mock_qb = MagicMock()
+        mock_adapter.query_builder = mock_qb
+        mock_qb.sql_text_by_id = MagicMock(
+            side_effect=lambda sid: (
+                "SELECT sql_fulltext FROM v$sql WHERE sql_id = :sid",
+                {"sid": sid},
+            )
+        )
+
+        monkeypatch.setattr(
+            "sqlmentor.connector.connect_with_adapter",
+            MagicMock(return_value=(mock_adapter, mock_conn)),
+        )
+        result = runner.invoke(
+            app,
+            ["inspect", "abc123", "--conn", "test", "--output", str(tmp_path / "out.md")],
+        )
+        assert result.exit_code == 1
+        assert "erro ao buscar sql" in result.output.lower()
+
+
+class TestInspectCollectError:
+    """collect_context raises → exit 1, 'Erro na coleta'."""
+
+    def test_collect_error(self, monkeypatch, tmp_path):
+        out_file, _mocks = _inspect_patches(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            "sqlmentor.collector.collect_context",
+            MagicMock(side_effect=Exception("ORA-00942: table does not exist")),
+        )
+        result = runner.invoke(
+            app,
+            ["inspect", "abc123", "--conn", "test", "--output", str(out_file)],
+        )
+        assert result.exit_code == 1
+        assert "erro na coleta" in result.output.lower()

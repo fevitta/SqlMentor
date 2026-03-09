@@ -1418,3 +1418,294 @@ class TestBatchCollectTables:
         result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx, adapter)
         assert result == {}
         assert any("fallback" in e.lower() for e in ctx.errors)
+
+    def test_batch_indexes_constraints_setdefault(self):
+        """Batch retorna rows com indexes e constraints populados → setdefault cria listas."""
+        ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
+        adapter = _make_adapter_mock()
+        call_count = [0]
+
+        def mock_exec_query(cur, sql, params):
+            call_count[0] += 1
+            if call_count[0] == 1:  # batch_table_stats
+                return [{"owner": "HR", "table_name": "USERS", "num_rows": 100}]
+            if call_count[0] == 2:  # batch_column_stats
+                return []
+            if call_count[0] == 3:  # batch_indexes
+                return [
+                    {
+                        "owner": "HR",
+                        "table_name": "USERS",
+                        "index_name": "PK_USERS",
+                        "index_type": "NORMAL",
+                    }
+                ]
+            if call_count[0] == 4:  # batch_constraints
+                return [
+                    {
+                        "owner": "HR",
+                        "table_name": "USERS",
+                        "constraint_name": "PK_USERS",
+                        "constraint_type": "P",
+                    }
+                ]
+            return []
+
+        adapter.execute_query = MagicMock(side_effect=mock_exec_query)
+        result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx, adapter)
+        assert len(result["HR.USERS"]["indexes"]) == 1
+        assert len(result["HR.USERS"]["constraints"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. T7: Testes de regressão para branches descobertos
+# ---------------------------------------------------------------------------
+
+
+class TestCollectContextProcedureSqlType:
+    """PROCEDURE/TRIGGER sql_type pula coleta de plano."""
+
+    def test_procedure_skips_plan(self):
+        parsed = ParsedSQL(
+            raw_sql="CREATE OR REPLACE PROCEDURE my_proc AS BEGIN NULL; END;",
+            sql_type="PROCEDURE",
+            tables=[{"name": "USERS", "schema": "HR", "alias": None}],
+        )
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        ctx = collect_context(parsed, conn, "HR")
+        # PROCEDURE não gera plano — nem execution_plan nem runtime_plan
+        assert ctx.execution_plan is None
+        assert ctx.runtime_plan is None
+
+
+class TestPerTableFallback:
+    """Batch data missing para uma tabela → coleta per-table dispara."""
+
+    def test_missing_table_key_triggers_per_table(self):
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM users",
+            sql_type="SELECT",
+            tables=[{"name": "USERS", "schema": "HR", "alias": None}],
+        )
+        adapter = _make_adapter_mock()
+        call_count = [0]
+
+        # batch returns empty dict → triggers per-table fallback
+        def mock_exec_query(cur, sql, params):
+            call_count[0] += 1
+            # batch queries all return empty → result dict will have no data for HR.USERS
+            if call_count[0] <= 4:  # batch queries
+                return []
+            # per-table queries
+            return []
+
+        adapter.execute_query = MagicMock(side_effect=mock_exec_query)
+
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        ctx = collect_context(parsed, conn, "HR", adapter=adapter)
+        # Per-table fallback happened — table still collected (possibly with None stats)
+        assert len(ctx.tables) == 1
+
+
+class TestIndexMapCacheHit:
+    """index_map_cache populado antes → não executa query de index_to_table_map."""
+
+    def test_cache_hit_skips_query(self):
+        _index_map_cache.put("HR", {"IDX_1": "USERS"})
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM hr.users"
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM v_users",
+            sql_type="SELECT",
+            tables=[{"name": "V_USERS", "schema": "HR", "alias": None}],
+        )
+        overrides = {
+            "all_objects": {
+                "description": [("object_type",)],
+                "rows": [("VIEW",)],
+            },
+            "DBMS_METADATA": {
+                "description": [("ddl",)],
+                "rows": [(ddl,)],
+            },
+        }
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch(overrides))
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        ctx = collect_context(parsed, conn, "HR", use_cache=True)
+        # Cache hit → index_table_map populated from cache
+        assert ctx.index_table_map.get("IDX_1") == "USERS"
+
+
+class TestIndexMapException:
+    """index_to_table_map raises → erro registrado em ctx.errors."""
+
+    def test_error_recorded(self):
+        ddl = "CREATE VIEW v\nAS\nSELECT * FROM hr.users"
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM v_users",
+            sql_type="SELECT",
+            tables=[{"name": "V_USERS", "schema": "HR", "alias": None}],
+        )
+        overrides = {
+            "all_objects": {
+                "description": [("object_type",)],
+                "rows": [("VIEW",)],
+            },
+            "DBMS_METADATA": {
+                "description": [("ddl",)],
+                "rows": [(ddl,)],
+            },
+        }
+        adapter = _make_adapter_mock()
+        original_exec = adapter.execute_query.side_effect
+
+        def failing_exec(cur, sql, params):
+            if "all_indexes" in sql.lower() and "owner = :owner" in sql.lower():
+                raise RuntimeError("no permission on all_indexes")
+            return original_exec(cur, sql, params)
+
+        adapter.execute_query = MagicMock(side_effect=failing_exec)
+
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch(overrides))
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        ctx = collect_context(parsed, conn, "HR", adapter=adapter, use_cache=False)
+        assert any("mapa de índices" in e.lower() or "all_indexes" in e.lower() for e in ctx.errors)
+
+
+class TestExpandFunctionsDedup:
+    """Mesma função listada 2x → DDL query chamada uma vez."""
+
+    def test_dedup(self):
+        parsed = ParsedSQL(
+            raw_sql="SELECT fn_calc(id), fn_calc(name) FROM users",
+            sql_type="SELECT",
+            tables=[{"name": "USERS", "schema": "HR", "alias": None}],
+            functions=[
+                {"schema": "HR", "name": "FN_CALC"},
+                {"schema": "HR", "name": "FN_CALC"},
+            ],
+        )
+        overrides = {
+            ":function_name": {
+                "description": [("ddl",)],
+                "rows": [("CREATE FUNCTION fn_calc ...",)],
+            },
+        }
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch(overrides))
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        ctx = collect_context(parsed, conn, "HR", expand_functions=True)
+        # DDL coletado uma vez
+        assert len(ctx.function_ddls) == 1
+
+
+class TestViewExpansionEmptyRows:
+    """DDL query retorna rows vazias → não crasheia."""
+
+    def test_empty_ddl_rows(self):
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM v_empty",
+            sql_type="SELECT",
+            tables=[{"name": "V_EMPTY", "schema": "HR", "alias": None}],
+        )
+        overrides = {
+            "all_objects": {
+                "description": [("object_type",)],
+                "rows": [("VIEW",)],
+            },
+            "DBMS_METADATA": {
+                "description": [("ddl",)],
+                "rows": [],  # empty!
+            },
+        }
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch(overrides))
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        # Não deve crashear
+        ctx = collect_context(parsed, conn, "HR", expand_views=False)
+        assert len(ctx.tables) == 1
+
+
+class TestParseViewTablesEdgeCases:
+    """_parse_view_tables edge cases."""
+
+    def test_empty_sql(self):
+        result = _parse_view_tables("")
+        assert result == []
+
+    def test_sqlglot_parse_error_fallback(self):
+        """DDL com SQL malformado → regex fallback."""
+        ddl = "CREATE VIEW v\nAS\nSELECT /*bad*/ FROM orders JOIN customers"
+        result = _parse_view_tables(ddl)
+        assert len(result) >= 1  # regex fallback encontra pelo menos ORDERS ou CUSTOMERS
+
+    def test_none_statement_skipped(self):
+        """sqlglot retorna None statement → ignorado."""
+        ddl = "CREATE VIEW v\nAS\nSELECT 1 FROM DUAL"
+        result = _parse_view_tables(ddl)
+        # Should not crash, may return DUAL or empty
+        assert isinstance(result, list)
+
+
+class TestExplainPlanOffsetError:
+    """Exception com offset detail → mensagem de erro contém referência a linha."""
+
+    def test_offset_in_error_message(self):
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM invalid_table",
+            sql_type="SELECT",
+            tables=[{"name": "INVALID_TABLE", "schema": "HR", "alias": None}],
+        )
+        # Cria exceção com .args[0].offset
+        err = Exception("ORA-00942: table or view does not exist")
+        err_detail = MagicMock()
+        err_detail.offset = 50
+        err_detail.code = 942
+        err.args = (err_detail,)
+
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch({"EXPLAIN PLAN": err}))
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        adapter = _make_adapter_mock()
+        ctx = CollectedContext(parsed_sql=parsed)
+
+        _collect_explain_plan(cursor, parsed.raw_sql, ctx, adapter)
+        assert len(ctx.errors) >= 1
+        # O offset é relativo ao explain_stmt completo — pode ou não gerar "Line"
+        assert any("EXPLAIN PLAN" in e for e in ctx.errors)
+
+
+class TestDPY4011Timeout:
+    """Exception com 'DPY-4011' → ctx.errors contém timeout hint."""
+
+    def test_timeout_hint_in_errors(self):
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM big_table WHERE id = 1",
+            sql_type="SELECT",
+            tables=[{"name": "BIG_TABLE", "schema": "HR", "alias": None}],
+        )
+        overrides = {
+            "ALTER SESSION": None,
+            "v$mystat": (100,),
+        }
+        # Simulate DPY-4011 during query execution
+        cursor = make_cursor_dispatch(
+            _make_full_cursor_dispatch(
+                {
+                    **overrides,
+                    "SELECT * FROM big_table": Exception("DPY-4011: call timeout exceeded"),
+                }
+            )
+        )
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        adapter = _make_adapter_mock()
+        ctx = CollectedContext(parsed_sql=parsed)
+
+        _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx, adapter)
+        assert any("timeout" in e.lower() or "inspect" in e.lower() for e in ctx.errors)

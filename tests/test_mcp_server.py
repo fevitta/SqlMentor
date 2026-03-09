@@ -646,3 +646,108 @@ class TestMCPGetStatus:
         _table_cache.put("HR.TEST", TableContext(name="TEST", schema="HR"))
         result = json.loads(get_status())
         assert result["cache"]["tables"] >= 1
+
+
+# ─── T7: Testes de regressão para paths descobertos ──────────────────────────
+
+
+class TestMCPAnalyzeNoCache:
+    """no_cache=True → clear_cache chamado."""
+
+    def test_no_cache_calls_clear(self, tmp_connections_file):
+        patches, _mock_conn, _ = _setup_analyze_patches(tmp_connections_file)
+        with (
+            patches["connect"],
+            patches["collect"],
+            patches["to_markdown"],
+            patch("sqlmentor.collector.clear_cache") as mock_clear,
+        ):
+            analyze_sql("SELECT * FROM users", conn="dev", no_cache=True)
+            mock_clear.assert_called_once()
+
+
+class TestMCPInspectNoCache:
+    """no_cache=True no inspect → clear_cache chamado."""
+
+    def test_no_cache_calls_clear(self, tmp_connections_file):
+        patches, _mock_conn, _mock_cursor, _ctx = _setup_inspect_patches(tmp_connections_file)
+        with (
+            patches["connect"],
+            patches["collect"],
+            patches["to_markdown"],
+            patch("sqlmentor.collector.clear_cache") as mock_clear,
+        ):
+            inspect_sql("abc123def456", conn="dev", no_cache=True)
+            mock_clear.assert_called_once()
+
+
+class TestMCPJsonVerbosityWarning:
+    """output_format='json', verbosity='full' → logger.warning chamado."""
+
+    def test_json_verbosity_warning(self, tmp_connections_file):
+        patches, _mock_conn, _ = _setup_analyze_patches(tmp_connections_file)
+        with (
+            patches["connect"],
+            patches["collect"],
+            patches["to_json"],
+            patches["to_markdown"],
+            patch("sqlmentor.mcp_server.logger") as mock_logger,
+        ):
+            analyze_sql(
+                "SELECT * FROM users",
+                conn="dev",
+                output_format="json",
+                verbosity="full",
+            )
+            mock_logger.warning.assert_called_once()
+
+
+class TestMCPInspectSqlTextException:
+    """cursor raises na busca de sql_text_by_id → JSON error."""
+
+    def test_sql_text_exception(self, tmp_connections_file):
+        from sqlmentor.connector import add_connection, set_default_connection
+
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        set_default_connection("dev")
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.execute.side_effect = Exception("ORA-00942: table not found")
+
+        mock_adapter = MagicMock()
+        mock_qb = MagicMock()
+        mock_adapter.query_builder = mock_qb
+        mock_qb.sql_text_by_id = MagicMock(
+            side_effect=lambda sid: (
+                "SELECT sql_fulltext FROM v$sql WHERE sql_id = :sid",
+                {"sid": sid},
+            )
+        )
+
+        with patch(
+            "sqlmentor.connector.connect_with_adapter",
+            return_value=(mock_adapter, mock_conn),
+        ):
+            result = json.loads(inspect_sql("abc123def456", conn="dev"))
+            assert "error" in result
+            assert "buscar" in result["error"].lower() or "sql" in result["error"].lower()
+
+
+class TestMCPInspectCollectException:
+    """collect_context raises → JSON error."""
+
+    def test_collect_exception(self, tmp_connections_file):
+        patches, _mock_conn, _mock_cursor, _ctx = _setup_inspect_patches(tmp_connections_file)
+        with (
+            patches["connect"],
+            patch(
+                "sqlmentor.collector.collect_context",
+                side_effect=RuntimeError("ORA-00942"),
+            ),
+            patches["to_markdown"],
+        ):
+            result = json.loads(inspect_sql("abc123def456", conn="dev"))
+            assert "error" in result
+            assert "coleta" in result["error"].lower() or "ORA" in result["error"]
