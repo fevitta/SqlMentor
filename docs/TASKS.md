@@ -3,7 +3,7 @@
 > Adicionar suporte a MariaDB ao SqlMentor usando o adapter pattern da Fase 1.
 > **Depende de:** Fase 1 completa (T1-T9) ✅
 
-## Status: TODO (0/7)
+## Status: IN PROGRESS (2/7)
 
 ## Ordem de Execução
 
@@ -18,29 +18,31 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ## Tarefas
 
 ### T17: MariaDBAdapter
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T1 ✅, T2 ✅
 - **Bloqueia**: T18, T19, T21, T23
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] `src/sqlmentor/adapters/mariadb.py` — `MariaDBAdapter` implementando `DatabaseAdapter`
-  - [ ] Conexão via `mysql.connector.connect()` com suporte a SSL
-  - [ ] `test_connection()` via `SELECT VERSION()`
-  - [ ] `validate_privileges()` via `SHOW GRANTS`
-  - [ ] `diagnose_connection()` verifica `performance_schema` habilitado
-  - [ ] Dependência opcional: `mysql-connector-python` ou `PyMySQL` no `pyproject.toml`
+  - [x] `src/sqlmentor/adapters/mariadb.py` — `MariaDBAdapter` implementando `DatabaseAdapter`
+  - [x] Conexão via `pymysql.connect()` (PyMySQL driver)
+  - [x] `test_connection()` via `SELECT 1`
+  - [x] `validate_privileges()` via `information_schema.USER_PRIVILEGES`
+  - [x] `diagnose_connection()` verifica `performance_schema` habilitado
+  - [x] Dependência opcional: `PyMySQL` no `pyproject.toml` (`sqlmentor[mariadb]`)
 
 ---
 
 ### T18: queries/mariadb.py
-- **Status**: [ ] TODO
-- **Depende de**: T3 ✅, T17
+- **Status**: [x] DONE
+- **Depende de**: T3 ✅, T17 ✅
 - **Bloqueia**: T19, T21
 - **Esforço**: 7 dias
 - **Entregas**:
-  - [ ] `src/sqlmentor/queries/mariadb.py` — `MariaDBQueryBuilder` implementando `QueryBuilder`
-  - [ ] 30+ queries usando `information_schema` e `performance_schema`
-  - [ ] Assinaturas mantêm `tuple[str, dict]`
+  - [x] `MariaDBQueryBuilder` em `adapters/mariadb.py` (queries inline, não arquivo separado)
+  - [x] 18 query methods + `build_tuple_in_clause()` + `_sanitize_identifier()`
+  - [x] Queries contra `information_schema` e `performance_schema`
+  - [x] Assinaturas mantêm `tuple[str, dict]` com pyformat `%(name)s`
+  - [x] 90 testes (62 novos) incluindo parametrized no-Oracle-binds check
 
 **Equivalências Oracle → MariaDB:**
 
@@ -62,7 +64,7 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 
 ### T19: Coleta de metadata MariaDB
 - **Status**: [ ] TODO
-- **Depende de**: T4 ✅, T9 ✅, T18
+- **Depende de**: T4 ✅, T9 ✅, T18 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
@@ -151,12 +153,12 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 
 | Tarefa | Status | Depende de |
 |--------|--------|------------|
-| T17 MariaDBAdapter | ⬜ TODO | T1 ✅, T2 ✅ |
-| T18 queries/mariadb.py | ⬜ TODO | T3 ✅, T17 |
-| T19 Coleta metadata | ⬜ TODO | T4 ✅, T9 ✅, T18 |
+| T17 MariaDBAdapter | ✅ DONE | T1 ✅, T2 ✅ |
+| T18 queries/mariadb.py | ✅ DONE | T3 ✅, T17 ✅ |
+| T19 Coleta metadata | ⬜ TODO | T4 ✅, T9 ✅, T18 ✅ |
 | T20 MariaDBPlanParser | ⬜ TODO | T1 ✅, T5 ✅ |
 | T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 |
-| T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 |
+| T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 ✅ |
 | T21 Integração MariaDB | ⬜ TODO | T17-T23 |
 
-**Progresso**: 0/7 tarefas concluídas
+**Progresso**: 2/7 tarefas concluídas
