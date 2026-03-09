@@ -575,6 +575,121 @@ class TestOraclePlanParser:
 # ─── Registration ───────────────────────────────────────────────────
 
 
+class TestOracleQueryBuilderValidateSqlId:
+    """validate_sql_id com inputs inválidos."""
+
+    def test_uppercase_rejected(self):
+        with pytest.raises(ValueError, match="inválido"):
+            OracleQueryBuilder.validate_sql_id("ABC123DEF456")
+
+    def test_too_short_rejected(self):
+        with pytest.raises(ValueError, match="inválido"):
+            OracleQueryBuilder.validate_sql_id("abc")
+
+    def test_special_chars_rejected(self):
+        with pytest.raises(ValueError, match="inválido"):
+            OracleQueryBuilder.validate_sql_id("abc$123!")
+
+    def test_empty_string_rejected(self):
+        with pytest.raises(ValueError, match="inválido"):
+            OracleQueryBuilder.validate_sql_id("")
+
+    def test_valid_sql_id_passes(self):
+        # Não deve levantar exceção
+        OracleQueryBuilder.validate_sql_id("abc123def456")
+
+
+class TestOracleQueryBuilderBatchEmpty:
+    """batch_* com lista vazia retornam SELECT 1 FROM DUAL WHERE 1=0."""
+
+    def test_batch_table_stats_empty(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.batch_table_stats([])
+        assert "DUAL" in sql
+        assert "1=0" in sql
+        assert params == {}
+
+    def test_batch_column_stats_empty(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.batch_column_stats([])
+        assert "DUAL" in sql
+        assert params == {}
+
+    def test_batch_indexes_empty(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.batch_indexes([])
+        assert "DUAL" in sql
+        assert params == {}
+
+    def test_batch_constraints_empty(self):
+        qb = OracleQueryBuilder()
+        sql, params = qb.batch_constraints([])
+        assert "DUAL" in sql
+        assert params == {}
+
+
+class TestOracleAdapterCheckDeps:
+    """check_deps quando importlib.metadata.version levanta exceção."""
+
+    def test_missing_oracledb_returns_missing(self):
+        adapter = OracleAdapter()
+        with patch("importlib.metadata.version", side_effect=Exception("not found")):
+            results = adapter.check_deps()
+        assert len(results) == 1
+        assert results[0]["status"] == "missing"
+        assert results[0]["name"] == "oracledb"
+        # Sem thick mode check quando oracledb está missing
+
+
+class TestOraclePlanParserFixture:
+    """Valida parsing do sample_plan.txt fixture."""
+
+    @pytest.fixture
+    def fixture_lines(self):
+        from pathlib import Path
+
+        fixture = Path(__file__).parent / "fixtures" / "sample_plan.txt"
+        return fixture.read_text(encoding="utf-8").splitlines()
+
+    def test_block_count(self, fixture_lines):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan(fixture_lines)
+        assert len(blocks) == 31  # Id 0-30
+
+    def test_id0_select_statement(self, fixture_lines):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan(fixture_lines)
+        b0 = blocks[0]
+        assert b0.id == "0"
+        assert "SELECT STATEMENT" in b0.operation
+
+    def test_id3_index_unique_scan(self, fixture_lines):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan(fixture_lines)
+        b3 = blocks[3]
+        assert b3.id == "3"
+        assert "INDEX UNIQUE SCAN" in b3.operation
+        assert b3.name == "PK_ENTITY_A"
+
+    def test_extract_index_names(self, fixture_lines):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan(fixture_lines)
+        index_names = parser.extract_index_names(blocks)
+        assert "PK_ENTITY_A" in index_names
+        assert "IDX_ATTR_ENTITY_ID" in index_names
+        assert "UK_STATUS_TYPE_REF" in index_names
+        assert "IDX_STATUS_HIST_ENTITY" in index_names
+        assert "PK_ENTITY_B" in index_names
+        assert "IDX_ENTITY_B_ROLE" in index_names
+
+    def test_is_runtime_plan(self, fixture_lines):
+        parser = OraclePlanParser()
+        assert parser.is_runtime_plan(fixture_lines) is True
+
+
+# ─── Registration ───────────────────────────────────────────────────
+
+
 class TestRegistration:
     def test_get_adapter_returns_oracle(self):
         result = get_adapter("oracle")
