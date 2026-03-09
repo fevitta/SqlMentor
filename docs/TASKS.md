@@ -121,7 +121,7 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 
 ### T23: inspect MariaDB (performance_schema → digest)
 - **Status**: [ ] TODO
-- **Depende de**: T6 ✅, T17
+- **Depende de**: T6 ✅, T17 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
@@ -159,6 +159,6 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 | T20 MariaDBPlanParser | ⬜ TODO | T1 ✅, T5 ✅ |
 | T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 |
 | T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 ✅ |
-| T21 Integração MariaDB | ⬜ TODO | T17-T23 |
+| T21 Integração MariaDB | ⬜ TODO | T17 ✅-T23 |
 
 **Progresso**: 2/7 tarefas concluídas
