@@ -55,43 +55,6 @@ class CollapseResult:
     replacement_lines: list[str]
 
 
-# Regex para parsear linha do plano ALLSTATS (runtime)
-
-# Colunas: Id | Operation | Name | Starts | E-Rows | A-Rows | A-Time | Buffers | Reads
-
-# Captura indentação da coluna Operation separadamente para inferir hierarquia
-
-_PLAN_ROW = re.compile(
-    r"\|\*?\s*(\d+)\s*\|"  # Id
-    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation) — captura espaços iniciais
-    r"\s*(.*?)\s*\|"  # Name
-    r"\s*(\d+)\s*\|"  # Starts
-    r"\s*(\d*)\s*\|"  # E-Rows (pode estar vazio)
-    r"\s*(\d+)\s*\|"  # A-Rows
-    r"\s*(\d+:\d+:\d+\.\d+)\s*\|"  # A-Time
-    r"\s*(\d+[KMG]?)\s*\|"  # Buffers
-    r"\s*(\d+)\s*\|",  # Reads
-)
-
-
-# Regex para parsear linha do plano EXPLAIN PLAN (estimado)
-
-# Colunas: Id | Operation | Name | Rows | Bytes | Cost (%CPU) | Time
-
-_PLAN_ROW_ESTIMATED = re.compile(
-    r"\|\*?\s*(\d+)\s*\|"  # Id
-    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation)
-    r"\s*(.*?)\s*\|"  # Name
-    r"\s*(\d*)\s*\|"  # Rows (pode estar vazio)
-    r"\s*(\d*[KMG]?)\s*\|"  # Bytes (pode estar vazio)
-    r"\s*(\d*)\s*[^|]*\|"  # Cost (%CPU) — ignora o (%CPU)
-    r"\s*(\d+:\d+:\d+)?\s*\|",  # Time (pode estar vazio)
-)
-
-
-_BUFFERS_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
-
-
 # Regex genérico para extrair apenas o Id de qualquer linha de plano Oracle
 
 # Funciona tanto com ALLSTATS quanto com EXPLAIN PLAN
@@ -110,104 +73,11 @@ _THRESHOLD_ATIME_MS = 100.0
 _CARDINALITY_RATIO = 10
 
 
-def _parse_buffers(s: str) -> int:
-    """Converte '10K', '2M', '137K' etc. para inteiro."""
-
-    s = s.strip()
-
-    if not s:
-        return 0
-
-    suffix = s[-1].upper()
-
-    if suffix in _BUFFERS_MULTIPLIER:
-        return int(float(s[:-1]) * _BUFFERS_MULTIPLIER[suffix])
-    return int(s)
-
-
-def _parse_atime_ms(s: str) -> float:
-    """Converte 'HH:MM:SS.ss' para milissegundos."""
-
-    parts = s.split(":")
-
-    if len(parts) != 3:
-        return 0.0
-
-    return (int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])) * 1000
-
-
 def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
-    """
+    """Parseia o plano em lista plana de PlanBlock via OraclePlanParser."""
+    from sqlmentor.adapters.oracle import OraclePlanParser
 
-    Parseia o plano em lista plana de PlanBlock.
-
-    Suporta dois formatos Oracle:
-
-    - ALLSTATS LAST (runtime): colunas Starts/E-Rows/A-Rows/A-Time/Buffers/Reads
-
-    - EXPLAIN PLAN (estimado): colunas Rows/Bytes/Cost/Time
-
-
-    No formato estimado, campos de runtime (starts, a_rows, buffers, reads, a_time_ms)
-
-    ficam zerados — R5 (imunidade por threshold) fica inativo, mas R1/R2/R3 funcionam.
-
-    A indentação da coluna Operation é preservada em PlanBlock.indent.
-    """
-
-    blocks: list[PlanBlock] = []
-
-    for line in plan_lines:
-        # Tenta formato ALLSTATS primeiro
-
-        m = _PLAN_ROW.match(line)
-
-        if m:
-            indent = len(m.group(2))
-
-            e_rows_str = m.group(6).strip()
-
-            blocks.append(
-                PlanBlock(
-                    id=m.group(1),
-                    operation=m.group(3).strip(),
-                    name=m.group(4).strip(),
-                    starts=int(m.group(5)),
-                    e_rows=int(e_rows_str) if e_rows_str else None,
-                    a_rows=int(m.group(7)),
-                    a_time_ms=_parse_atime_ms(m.group(8)),
-                    buffers=_parse_buffers(m.group(9)),
-                    reads=int(m.group(10)),
-                    indent=indent,
-                )
-            )
-            continue
-
-        # Tenta formato EXPLAIN PLAN (estimado)
-
-        m2 = _PLAN_ROW_ESTIMATED.match(line)
-
-        if m2:
-            indent = len(m2.group(2))
-
-            e_rows_str = m2.group(5).strip()
-
-            blocks.append(
-                PlanBlock(
-                    id=m2.group(1),
-                    operation=m2.group(3).strip(),
-                    name=m2.group(4).strip(),
-                    starts=0,  # não disponível no plano estimado
-                    e_rows=int(e_rows_str) if e_rows_str else None,
-                    a_rows=0,  # não disponível no plano estimado
-                    a_time_ms=0.0,  # não disponível no plano estimado
-                    buffers=0,  # não disponível no plano estimado
-                    reads=0,  # não disponível no plano estimado
-                    indent=indent,
-                )
-            )
-
-    return blocks
+    return OraclePlanParser().parse_plan(plan_lines)
 
 
 def _apply_thresholds(blocks: list[PlanBlock]) -> None:
@@ -754,30 +624,10 @@ def _strip_column_projection(predicate_lines: list[str]) -> list[str]:
 
 
 def _is_estimated_plan(plan_lines: list[str]) -> bool:
-    """
+    """Detecta se o plano é EXPLAIN PLAN (estimado) via OraclePlanParser."""
+    from sqlmentor.adapters.oracle import OraclePlanParser
 
-    Detecta se o plano é EXPLAIN PLAN (estimado) ou ALLSTATS LAST (runtime).
-
-    O plano estimado tem cabeçalho com colunas 'Rows | Bytes | Cost'.
-    """
-
-    for line in plan_lines:
-        if "| Rows  |" in line or "| Rows |" in line:
-            return True
-
-        if "| Starts |" in line:
-            return False
-
-    # Fallback: tenta parsear a primeira linha de dados
-
-    for line in plan_lines:
-        if _PLAN_ROW.match(line):
-            return False
-
-        if _PLAN_ROW_ESTIMATED.match(line):
-            return True
-
-    return False
+    return not OraclePlanParser().is_runtime_plan(plan_lines)
 
 
 def _compress_plan(
@@ -958,26 +808,10 @@ def _collapse_orphan_predicates_by_ids(plan_lines: list[str], collapsed_ids: set
 def _extract_plan_index_names(plan_lines: list[str]) -> set[str]:
     """Extrai nomes de índices referenciados no plano de execução (R9).
 
-    Parseia linhas do plano e retorna o ``name`` de operações contendo "INDEX".
+    Parseia linhas do plano via PlanBlock e retorna o ``name`` de operações contendo "INDEX".
     """
-    index_names: set[str] = set()
-    for line in plan_lines:
-        m = _PLAN_ROW.match(line)
-        if m:
-            operation = m.group(3).strip()
-            name = m.group(4).strip()
-            if "INDEX" in operation.upper() and name:
-                index_names.add(name)
-            continue
-
-        m2 = _PLAN_ROW_ESTIMATED.match(line)
-        if m2:
-            operation = m2.group(3).strip()
-            name = m2.group(4).strip()
-            if "INDEX" in operation.upper() and name:
-                index_names.add(name)
-
-    return index_names
+    blocks = _detect_plan_blocks(plan_lines)
+    return {b.name for b in blocks if "INDEX" in b.operation.upper() and b.name}
 
 
 def _classify_uniform_columns(
@@ -1112,6 +946,7 @@ def to_markdown(
     *,
     show_sql: bool = False,
     show_all_indexes: bool = False,
+    dialect: str = "oracle",
 ) -> str:
     """
 
@@ -1167,7 +1002,8 @@ def to_markdown(
             lines.append("")
 
         if ctx.runtime_stats:
-            lines.append("## Runtime Stats (V$SQL)")
+            stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+            lines.append(f"## Runtime Stats ({stats_label})")
 
             lines.append(_format_runtime_stats(ctx.runtime_stats))
             lines.append("")
@@ -1332,7 +1168,8 @@ def to_markdown(
     # ─── Runtime: Métricas de Execução ────────────────────────────
 
     if ctx.runtime_stats:
-        lines.append(f"## {section}. Runtime Stats (V$SQL)")
+        stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+        lines.append(f"## {section}. Runtime Stats ({stats_label})")
 
         lines.append(_format_runtime_stats(ctx.runtime_stats))
         lines.append("")
