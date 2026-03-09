@@ -22,6 +22,7 @@ sqlmentor = "sqlmentor.cli:app"
 sqlmentor-mcp = "sqlmentor.mcp_server:main"
 
 [project.optional-dependencies]
+mariadb = ["PyMySQL>=1.0.0"]
 dev = [
     "hypothesis>=6.0",
     "pytest>=7.0",
@@ -33,6 +34,7 @@ dev = [
     "mypy>=1.10.0",
     "types-PyYAML>=6.0",
     "python-semantic-release>=9.0.0",
+    "PyMySQL>=1.0.0",
 ]
 
 [tool.ruff]
@@ -51,7 +53,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["F811", "S101", "S105", "PT011", "RUF002", "RUF003", "RUF005"]
+"tests/*" = ["E402", "F811", "S101", "S105", "S106", "PT011", "RUF002", "RUF003", "RUF005"]
 "src/sqlmentor/report.py" = ["RUF001", "RUF002", "RUF003"]  # unicode intencional em relatórios (×, –, ℹ️)
 
 [tool.pytest.ini_options]
