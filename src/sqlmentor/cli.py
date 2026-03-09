@@ -4,7 +4,7 @@ SqlMentor CLI — Coleta de contexto para tuning de SQL assistido por IA.
 Uso:
     sqlmentor analyze <arquivo.sql> --conn <profile>
     sqlmentor analyze --sql "SELECT ..." --conn <profile>
-    sqlmentor inspect <sql_id> --conn <profile>
+    sqlmentor inspect <statement_id> --conn <profile>
     sqlmentor parse <arquivo.sql> --schema <SCHEMA>
     sqlmentor parse --sql "SELECT ..." --schema <SCHEMA>
     sqlmentor config add --name prod --host ... --port 1521 --service ORCL --user ...
@@ -41,7 +41,7 @@ def _version_callback(value: bool) -> None:
 
 app = typer.Typer(
     name="sqlmentor",
-    help="SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA.",
+    help="SqlMentor — Coleta contexto de banco de dados para tuning de SQL assistido por IA.",
     no_args_is_help=True,
 )
 
@@ -57,7 +57,7 @@ def main(
         help="Exibe a versão e sai.",
     ),
 ) -> None:
-    """SqlMentor — Coleta contexto Oracle para tuning de SQL assistido por IA."""
+    """SqlMentor — Coleta contexto de banco de dados para tuning de SQL assistido por IA."""
 
 
 config_app = typer.Typer(help="Gerencia conexões de banco de dados.")
@@ -225,7 +225,7 @@ def analyze(
         help="Mostra todos os índices, não só os relevantes ao SQL.",
     ),
 ) -> None:
-    """Analisa um SQL e coleta contexto Oracle para tuning."""
+    """Analisa um SQL e coleta contexto do banco para tuning."""
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
@@ -297,7 +297,7 @@ def analyze(
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
-        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout)
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout)
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
@@ -344,7 +344,7 @@ def analyze(
     try:
         ctx = collect_context(
             parsed=parsed,
-            conn=oracle_conn,
+            conn=db_conn,
             default_schema=effective_schema,
             deep=deep,
             expand_views=expand_views,
@@ -358,7 +358,7 @@ def analyze(
         console.print(f"[red]Erro na coleta:[/red] {e}")
         raise typer.Exit(1)
     finally:
-        oracle_conn.close()
+        db_conn.close()
     timer.mark("Collect")
 
     # Relatório
@@ -401,7 +401,9 @@ def analyze(
 
 @app.command()
 def inspect(
-    sql_id: str = typer.Argument(..., help="SQL_ID da query no shared pool Oracle."),
+    statement_id: str = typer.Argument(
+        ..., help="Identificador do statement no banco (ex: sql_id Oracle, queryid PostgreSQL)."
+    ),
     conn: str = typer.Option(
         None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
     ),
@@ -451,7 +453,7 @@ def inspect(
         help="Mostra todos os índices, não só os relevantes ao SQL.",
     ),
 ) -> None:
-    """Coleta contexto de um SQL já executado via sql_id (sem re-executar)."""
+    """Coleta contexto de um SQL já executado via statement_id (sem re-executar)."""
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
@@ -478,34 +480,34 @@ def inspect(
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
-        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout)
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout)
     except Exception as e:
         console.print(f"[red]Erro de conexão:[/red] {e}")
         raise typer.Exit(1)
     timer.mark("Connect")
 
     qb = adapter.query_builder
-    cursor = oracle_conn.cursor()
+    cursor = db_conn.cursor()
 
     # Recupera SQL original do shared pool
-    console.print(f"[cyan]Buscando SQL_ID:[/cyan] {sql_id}")
+    console.print(f"[cyan]Buscando statement:[/cyan] {statement_id}")
     try:
-        sql_query, params = qb.sql_text_by_id(sql_id)
+        sql_query, params = qb.sql_text_by_id(statement_id)
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
         if not row or not row[0]:
             console.print(
-                f"[red]Erro:[/red] SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL)."
+                f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool."
             )
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
-            oracle_conn.close()
+            db_conn.close()
             raise typer.Exit(1)
         sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         if "não encontrado" in str(e) or "Exit" in type(e).__name__:
             raise
         console.print(f"[red]Erro ao buscar SQL:[/red] {e}")
-        oracle_conn.close()
+        db_conn.close()
         raise typer.Exit(1)
     timer.mark("Fetch SQL")
 
@@ -517,10 +519,10 @@ def inspect(
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
     timer.mark("Parse")
 
-    # Coleta plano real via sql_id (sem re-executar)
+    # Coleta plano real via statement_id (sem re-executar)
     console.print("[cyan]Coletando plano real...[/cyan]")
     try:
-        sql_query, params = qb.runtime_plan(sql_id)
+        sql_query, params = qb.runtime_plan(statement_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
     except Exception as e:
@@ -530,7 +532,7 @@ def inspect(
     # Coleta métricas de V$SQL
     console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
     try:
-        sql_query, params = qb.sql_runtime_stats(sql_id)
+        sql_query, params = qb.sql_runtime_stats(statement_id)
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
@@ -547,7 +549,7 @@ def inspect(
     try:
         ctx = collect_context(
             parsed=parsed,
-            conn=oracle_conn,
+            conn=db_conn,
             default_schema=effective_schema,
             deep=deep,
             expand_views=expand_views,
@@ -560,10 +562,10 @@ def inspect(
         console.print(f"[red]Erro na coleta:[/red] {e}")
         raise typer.Exit(1)
     finally:
-        oracle_conn.close()
+        db_conn.close()
     timer.mark("Collect")
 
-    # Injeta plano real e métricas coletados via sql_id
+    # Injeta plano real e métricas coletados via statement_id
     if runtime_plan_lines:
         ctx.runtime_plan = runtime_plan_lines
     if runtime_stats:
@@ -586,7 +588,7 @@ def inspect(
         reports_dir.mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         ext = "json" if format.lower() == "json" else "md"
-        out_path = reports_dir / f"{sql_id}_{ts}.{ext}"
+        out_path = reports_dir / f"{statement_id}_{ts}.{ext}"
 
     out_path.write_text(report, encoding="utf-8")
     timer.mark("Save")
@@ -855,9 +857,11 @@ def config_remove(
 
 @app.command()
 def doctor() -> None:
-    """Diagnóstico do ambiente: Python, oracledb, Instant Client, conexões."""
-    import importlib.metadata
+    """Diagnóstico do ambiente: Python, drivers de banco de dados, conexões."""
     import platform
+
+    from sqlmentor import __version__
+    from sqlmentor.adapters import get_adapter, list_adapters
 
     console.print(Panel.fit("[bold]sqlmentor doctor[/bold]", border_style="cyan"))
 
@@ -865,33 +869,27 @@ def doctor() -> None:
     py_ver = platform.python_version()
     console.print(f"  Python: [bold]{py_ver}[/bold]")
 
-    # oracledb
-    try:
-        oradb_ver = importlib.metadata.version("oracledb")
-        console.print(f"  oracledb: [bold]{oradb_ver}[/bold]")
-    except importlib.metadata.PackageNotFoundError:
-        console.print("  oracledb: [red]não instalado[/red]")
-        return
-
     # sqlmentor
-    from sqlmentor import __version__
-
     console.print(f"  sqlmentor: [bold]{__version__}[/bold]")
 
-    # Oracle Instant Client
+    # Adapter deps
     console.print("")
-    console.print("[cyan]Oracle Instant Client:[/cyan]")
-    from sqlmentor.connector import check_thick_mode_available
-
-    thick_info = check_thick_mode_available()
-    if thick_info["available"] == "True":
-        console.print(f"  [green]✓ Disponível[/green] — {thick_info['detail']}")
-    else:
-        console.print("  [yellow]✗ Não encontrado[/yellow]")
-        console.print("    Necessário apenas para Oracle < 12c (modo thick).")
-        console.print(
-            "    Download: https://www.oracle.com/database/technologies/instant-client.html"
-        )
+    console.print("[cyan]Drivers:[/cyan]")
+    for db_type in list_adapters():
+        try:
+            adapter = get_adapter(db_type)()
+            for dep in adapter.check_deps():
+                name = dep["name"]
+                status = dep["status"]
+                detail = dep["detail"]
+                if status == "ok":
+                    console.print(f"  [green]✓[/green] {name}: [bold]{detail}[/bold]")
+                elif status == "missing":
+                    console.print(f"  [red]✗[/red] {name}: [red]não instalado[/red] — {detail}")
+                else:
+                    console.print(f"  [yellow]⚠[/yellow] {name}: [yellow]{detail}[/yellow]")
+        except Exception as e:
+            console.print(f"  [red]✗[/red] {db_type}: {e}")
 
     # Conexões
     console.print("")

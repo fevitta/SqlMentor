@@ -230,3 +230,11 @@ class DatabaseAdapter(ABC):
     @abstractmethod
     def close_connection(self, conn: Any) -> None:
         """Fecha a conexão com o banco."""
+
+    @abstractmethod
+    def check_deps(self) -> list[dict[str, str]]:
+        """Verifica dependências do driver (packages, bibliotecas nativas).
+
+        Retorna lista de dicts com keys: name, status ('ok'|'missing'|'warning'), detail.
+        Não requer conexão ativa.
+        """

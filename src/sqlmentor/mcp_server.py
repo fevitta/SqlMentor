@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "sqlmentor",
-    instructions="Coleta contexto Oracle (plano de execução, DDLs, índices, stats) para tuning de SQL assistido por IA.",
+    instructions="Coleta contexto de banco de dados (plano de execução, DDLs, índices, stats) para tuning de SQL assistido por IA.",
 )
 
 
@@ -32,7 +32,7 @@ def _validate_timeout_mcp(timeout: int) -> str | None:
 
 @mcp.tool()
 def list_connections() -> str:
-    """Lista os profiles de conexão Oracle configurados.
+    """Lista os profiles de conexão configurados.
 
     Retorna os nomes e detalhes (host, porta, service, user, schema)
     de todas as conexões salvas em ~/.sqlmentor/connections.yaml.
@@ -70,7 +70,7 @@ def list_connections() -> str:
 
 @mcp.tool()
 def test_connection(conn: str) -> str:
-    """Testa uma conexão Oracle e retorna versão do banco e schema.
+    """Testa uma conexão e retorna versão do banco e schema.
 
     Args:
         conn: Nome do profile de conexão (ex: "prod", "dev").
@@ -142,14 +142,14 @@ def analyze_sql(
     show_sql: bool = False,
     show_all_indexes: bool = False,
 ) -> str:
-    """Analisa um SQL conectando no Oracle e coleta contexto completo para tuning.
+    """Analisa um SQL conectando no banco e coleta contexto completo para tuning.
 
     Retorna relatório com: plano de execução, DDLs, estatísticas de tabelas/colunas,
-    índices, constraints, parâmetros do otimizador, e opcionalmente plano real com ALLSTATS.
+    índices, constraints, parâmetros do otimizador, e opcionalmente plano real com estatísticas de runtime.
 
     Args:
         sql_text: O SQL completo a ser analisado.
-        conn: Nome do profile de conexão Oracle. Se omitido, usa a conexão padrão (use list_connections para ver disponíveis e qual é o default).
+        conn: Nome do profile de conexão. Se omitido, usa a conexão padrão (use list_connections para ver disponíveis e qual é o default).
         schema: Schema padrão (sobrescreve o do profile). Opcional.
         deep: Se True, coleta histogramas e partições (mais lento, mais completo).
         expand_views: Se True, coleta DDL e colunas de views referenciadas.
@@ -211,7 +211,7 @@ def analyze_sql(
 
     # Conecta
     try:
-        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
     except Exception as e:
         return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
 
@@ -237,7 +237,7 @@ def analyze_sql(
         provided_upper = {k.upper() for k in bind_params}
         missing = sql_binds_upper - provided_upper
         if missing:
-            oracle_conn.close()
+            db_conn.close()
             return json.dumps(
                 {
                     "error": f"Binds faltantes para --execute: {', '.join(sorted(missing))}",
@@ -250,7 +250,7 @@ def analyze_sql(
     try:
         ctx = collect_context(
             parsed=parsed,
-            conn=oracle_conn,
+            conn=db_conn,
             default_schema=effective_schema,
             deep=deep,
             expand_views=expand_views,
@@ -261,11 +261,11 @@ def analyze_sql(
             adapter=adapter,
         )
     except Exception as e:
-        oracle_conn.close()
+        db_conn.close()
         return json.dumps({"error": f"Erro na coleta: {e}"})
     finally:
         with contextlib.suppress(Exception):
-            oracle_conn.close()
+            db_conn.close()
 
     # Relatório
     if output_format.lower() == "json":
@@ -282,7 +282,7 @@ def analyze_sql(
 
 @mcp.tool()
 def inspect_sql(
-    sql_id: str,
+    statement_id: str,
     conn: str = "",
     schema: str = "",
     deep: bool = False,
@@ -295,14 +295,14 @@ def inspect_sql(
     show_sql: bool = False,
     show_all_indexes: bool = False,
 ) -> str:
-    """Coleta contexto de um SQL já executado via sql_id, sem re-executar a query.
+    """Coleta contexto de um SQL já executado via statement_id, sem re-executar a query.
 
     Útil para queries longas que já rodaram (pelo dev, pelo sistema, etc.).
-    Puxa o plano real e métricas do shared pool Oracle via V$SQL e DBMS_XPLAN.
+    Puxa o plano real e métricas do banco (ex: V$SQL e DBMS_XPLAN no Oracle).
 
     Args:
-        sql_id: SQL_ID da query no shared pool Oracle (ex: "abc123def").
-        conn: Nome do profile de conexão Oracle. Se omitido, usa a conexão padrão.
+        statement_id: Identificador do statement no banco (ex: sql_id Oracle "abc123def", queryid PostgreSQL).
+        conn: Nome do profile de conexão. Se omitido, usa a conexão padrão.
         schema: Schema padrão (sobrescreve o do profile). Opcional.
         deep: Se True, coleta histogramas e partições.
         expand_views: Se True, coleta DDL e colunas de views.
@@ -335,53 +335,53 @@ def inspect_sql(
     effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
 
     try:
-        adapter, oracle_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
     except Exception as e:
         return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
 
     qb = adapter.query_builder
-    cursor = oracle_conn.cursor()
+    cursor = db_conn.cursor()
 
     # Recupera SQL original do shared pool
     try:
-        sql_query, params = qb.sql_text_by_id(sql_id)
+        sql_query, params = qb.sql_text_by_id(statement_id)
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
         if not row or not row[0]:
-            oracle_conn.close()
+            db_conn.close()
             return json.dumps(
                 {
-                    "error": f"SQL_ID '{sql_id}' não encontrado no shared pool (V$SQL).",
+                    "error": f"Statement '{statement_id}' não encontrado no shared pool.",
                     "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
                 }
             )
         sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
     except Exception as e:
-        oracle_conn.close()
+        db_conn.close()
         return json.dumps({"error": f"Erro ao buscar SQL: {e}"})
 
     # Parse
     parsed = _parse(sql_text, default_schema=effective_schema)
 
-    # Plano real via sql_id
+    # Plano real via statement_id
     runtime_plan_lines = None
     try:
-        sql_query, params = qb.runtime_plan(sql_id)
+        sql_query, params = qb.runtime_plan(statement_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
     except Exception as e:
-        logger.warning("Falha ao recuperar plano real para sql_id '%s': %s", sql_id, e)
+        logger.warning("Falha ao recuperar plano real para statement_id '%s': %s", statement_id, e)
 
     # Métricas V$SQL
     runtime_stats_data = None
     try:
-        sql_query, params = qb.sql_runtime_stats(sql_id)
+        sql_query, params = qb.sql_runtime_stats(statement_id)
         cursor.execute(sql_query, params)
         columns = [col[0].lower() for col in cursor.description or []]
         row = cursor.fetchone()
         runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
     except Exception as e:
-        logger.warning("Falha ao recuperar métricas V$SQL para sql_id '%s': %s", sql_id, e)
+        logger.warning("Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e)
 
     cursor.close()
 
@@ -389,7 +389,7 @@ def inspect_sql(
     try:
         ctx = collect_context(
             parsed=parsed,
-            conn=oracle_conn,
+            conn=db_conn,
             default_schema=effective_schema,
             deep=deep,
             expand_views=expand_views,
@@ -399,11 +399,11 @@ def inspect_sql(
             adapter=adapter,
         )
     except Exception as e:
-        oracle_conn.close()
+        db_conn.close()
         return json.dumps({"error": f"Erro na coleta: {e}"})
     finally:
         with contextlib.suppress(Exception):
-            oracle_conn.close()
+            db_conn.close()
 
     # Injeta plano real e métricas
     if runtime_plan_lines:

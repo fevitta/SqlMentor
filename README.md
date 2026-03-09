@@ -31,7 +31,7 @@ sqlmentor analyze minha_query.sql --execute
 sqlmentor analyze minha_query.sql --execute -b id=123 -b status=A
 
 # Inspecionar query já executada (sem re-executar)
-sqlmentor inspect <sql_id>
+sqlmentor inspect <statement_id>
 
 # Parse offline (sem conexão)
 sqlmentor parse minha_query.sql --schema SCHEMA
@@ -93,7 +93,7 @@ Integração com IDEs (Kiro, Claude Desktop, etc.) via Model Context Protocol:
 | `test_connection` | Testa um profile (retorna versão e schema) |
 | `parse_sql` | Parse offline — tabelas, colunas, joins |
 | `analyze_sql` | Análise completa: conecta, coleta contexto, retorna relatório |
-| `inspect_sql` | Contexto de SQL já executado via sql_id |
+| `inspect_sql` | Contexto de SQL já executado via statement_id |
 
 ### Workflow típico
 
@@ -102,7 +102,7 @@ list_connections()                                          # ver profiles
 parse_sql(sql_text="SELECT ...", schema="HR")               # parse offline
 analyze_sql(sql_text="SELECT ...", conn="prod")             # plano estimado
 analyze_sql(sql_text="SELECT ...", conn="prod", execute=True, binds="id=123")  # plano real
-inspect_sql(sql_id="abc123xyz", conn="prod")                # via sql_id
+inspect_sql(statement_id="abc123xyz", conn="prod")           # via statement_id
 ```
 
 ### Kiro Power
