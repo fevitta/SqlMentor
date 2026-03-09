@@ -28,6 +28,7 @@ connections.yaml
 
 # Worktrees e estado de workflow
 .worktrees/
+worktrees/
 .claude/tasks.json
 
 # Reports gerados
