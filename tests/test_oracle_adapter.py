@@ -475,17 +475,101 @@ class TestOracleQueryBuilderShim:
         assert "o0" in params
 
 
-# ─── OraclePlanParser stub ──────────────────────────────────────────
+# ─── OraclePlanParser ─────────────────────────────────────────────────
 
 
-class TestOraclePlanParserStub:
-    def test_parse_plan_raises(self):
-        with pytest.raises(NotImplementedError, match="T5"):
-            OraclePlanParser().parse_plan(["line"])
+class TestOraclePlanParser:
+    """Testes para OraclePlanParser — parsing de planos Oracle."""
 
-    def test_is_runtime_plan_raises(self):
-        with pytest.raises(NotImplementedError, match="T5"):
-            OraclePlanParser().is_runtime_plan(["line"])
+    ALLSTATS_LINE = (
+        "|   3 | INDEX RANGE SCAN        | IDX_USERS_NAME               "
+        "|     1 |     1 |      1 |00:00:00.01 |       2 |       0 |"
+    )
+    ESTIMATED_LINE = (
+        "|   1 | TABLE ACCESS FULL       | USERS                        "
+        "|   100 |  800 |     2  (0)| 00:00:01 |"
+    )
+    ALLSTATS_HEADER = (
+        "| Id  | Operation               | Name                         "
+        "| Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |"
+    )
+    ESTIMATED_HEADER = (
+        "| Id  | Operation               | Name                         "
+        "| Rows  | Bytes | Cost (%CPU)| Time     |"
+    )
+
+    def test_parse_allstats_line(self):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan([self.ALLSTATS_LINE])
+        assert len(blocks) == 1
+        b = blocks[0]
+        assert b.id == "3"
+        assert "INDEX RANGE SCAN" in b.operation
+        assert b.name == "IDX_USERS_NAME"
+        assert b.starts == 1
+        assert b.e_rows == 1
+        assert b.a_rows == 1
+        assert b.a_time_ms == pytest.approx(10.0)
+        assert b.buffers == 2
+        assert b.reads == 0
+
+    def test_parse_estimated_line(self):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan([self.ESTIMATED_LINE])
+        assert len(blocks) == 1
+        b = blocks[0]
+        assert b.id == "1"
+        assert "TABLE ACCESS FULL" in b.operation
+        assert b.name == "USERS"
+        assert b.starts == 0
+        assert b.e_rows == 100
+        assert b.a_rows == 0
+        assert b.a_time_ms == 0.0
+        assert b.buffers == 0
+        assert b.reads == 0
+
+    def test_parse_empty_returns_empty(self):
+        parser = OraclePlanParser()
+        assert parser.parse_plan([]) == []
+
+    def test_parse_buffers_k_m_g(self):
+        assert OraclePlanParser.parse_buffers("10K") == 10 * 1024
+        assert OraclePlanParser.parse_buffers("2M") == 2 * 1024**2
+        assert OraclePlanParser.parse_buffers("1G") == 1024**3
+        assert OraclePlanParser.parse_buffers("42") == 42
+        assert OraclePlanParser.parse_buffers("") == 0
+
+    def test_parse_atime_ms(self):
+        assert OraclePlanParser.parse_atime_ms("00:00:00.01") == pytest.approx(10.0)
+        assert OraclePlanParser.parse_atime_ms("00:01:00.00") == pytest.approx(60_000.0)
+        assert OraclePlanParser.parse_atime_ms("01:00:00.00") == pytest.approx(3_600_000.0)
+        assert OraclePlanParser.parse_atime_ms("invalid") == 0.0
+
+    def test_is_runtime_plan_true(self):
+        parser = OraclePlanParser()
+        assert parser.is_runtime_plan([self.ALLSTATS_HEADER]) is True
+
+    def test_is_runtime_plan_false(self):
+        parser = OraclePlanParser()
+        assert parser.is_runtime_plan([self.ESTIMATED_HEADER]) is False
+
+    def test_is_runtime_plan_fallback_regex(self):
+        parser = OraclePlanParser()
+        # Sem cabeçalho, só linhas de dados — usa fallback regex
+        assert parser.is_runtime_plan([self.ALLSTATS_LINE]) is True
+        assert parser.is_runtime_plan([self.ESTIMATED_LINE]) is False
+
+    def test_extract_index_names(self):
+        parser = OraclePlanParser()
+        blocks = parser.parse_plan(
+            [
+                self.ALLSTATS_LINE,  # INDEX RANGE SCAN → IDX_USERS_NAME
+                "|   2 | TABLE ACCESS FULL       | USERS"
+                "                        |     1 |  1000 |   1000 |00:00:00.05 |      50 |       0 |",
+            ]
+        )
+        result = parser.extract_index_names(blocks)
+        assert result == {"IDX_USERS_NAME"}
 
 
 # ─── Registration ───────────────────────────────────────────────────

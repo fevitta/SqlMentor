@@ -582,17 +582,140 @@ class OracleQueryBuilder(QueryBuilder):
         )
 
 
-# ── OraclePlanParser (stub — T5 substitui) ──────────────────────────
+# ── OraclePlanParser ─────────────────────────────────────────────────
+
+# Regex para parsear linha do plano ALLSTATS (runtime)
+# Colunas: Id | Operation | Name | Starts | E-Rows | A-Rows | A-Time | Buffers | Reads
+_ORACLE_PLAN_ROW = re.compile(
+    r"\|\*?\s*(\d+)\s*\|"  # Id
+    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation)
+    r"\s*(.*?)\s*\|"  # Name
+    r"\s*(\d+)\s*\|"  # Starts
+    r"\s*(\d*)\s*\|"  # E-Rows (pode estar vazio)
+    r"\s*(\d+)\s*\|"  # A-Rows
+    r"\s*(\d+:\d+:\d+\.\d+)\s*\|"  # A-Time
+    r"\s*(\d+[KMG]?)\s*\|"  # Buffers
+    r"\s*(\d+)\s*\|",  # Reads
+)
+
+# Regex para parsear linha do plano EXPLAIN PLAN (estimado)
+# Colunas: Id | Operation | Name | Rows | Bytes | Cost (%CPU) | Time
+_ORACLE_PLAN_ROW_ESTIMATED = re.compile(
+    r"\|\*?\s*(\d+)\s*\|"  # Id
+    r"(\s*)(\S[^|]*?)\s*\|"  # (indent_spaces)(Operation)
+    r"\s*(.*?)\s*\|"  # Name
+    r"\s*(\d*)\s*\|"  # Rows (pode estar vazio)
+    r"\s*(\d*[KMG]?)\s*\|"  # Bytes (pode estar vazio)
+    r"\s*(\d*)\s*[^|]*\|"  # Cost (%CPU) — ignora o (%CPU)
+    r"\s*(\d+:\d+:\d+)?\s*\|",  # Time (pode estar vazio)
+)
+
+_BUFFERS_MULTIPLIER = {"K": 1024, "M": 1024**2, "G": 1024**3}
 
 
 class OraclePlanParser(PlanParser):
-    """Stub — parsing de plano Oracle será implementado em T5."""
+    """Parseia planos de execução Oracle (ALLSTATS LAST e EXPLAIN PLAN)."""
+
+    @staticmethod
+    def parse_buffers(s: str) -> int:
+        """Converte '10K', '2M', '137K' etc. para inteiro."""
+        s = s.strip()
+        if not s:
+            return 0
+        suffix = s[-1].upper()
+        if suffix in _BUFFERS_MULTIPLIER:
+            return int(float(s[:-1]) * _BUFFERS_MULTIPLIER[suffix])
+        return int(s)
+
+    @staticmethod
+    def parse_atime_ms(s: str) -> float:
+        """Converte 'HH:MM:SS.ss' para milissegundos."""
+        parts = s.split(":")
+        if len(parts) != 3:
+            return 0.0
+        return (int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])) * 1000
 
     def parse_plan(self, plan_lines: list[str]) -> list[PlanBlock]:
-        raise NotImplementedError("OraclePlanParser será implementado em T5")
+        """Parseia o plano em lista plana de PlanBlock.
+
+        Suporta dois formatos Oracle:
+        - ALLSTATS LAST (runtime): colunas Starts/E-Rows/A-Rows/A-Time/Buffers/Reads
+        - EXPLAIN PLAN (estimado): colunas Rows/Bytes/Cost/Time
+
+        No formato estimado, campos de runtime (starts, a_rows, buffers, reads, a_time_ms)
+        ficam zerados — R5 (imunidade por threshold) fica inativo, mas R1/R2/R3 funcionam.
+        """
+        from sqlmentor.report import PlanBlock
+
+        blocks: list[PlanBlock] = []
+
+        for line in plan_lines:
+            # Tenta formato ALLSTATS primeiro
+            m = _ORACLE_PLAN_ROW.match(line)
+            if m:
+                indent = len(m.group(2))
+                e_rows_str = m.group(6).strip()
+                blocks.append(
+                    PlanBlock(
+                        id=m.group(1),
+                        operation=m.group(3).strip(),
+                        name=m.group(4).strip(),
+                        starts=int(m.group(5)),
+                        e_rows=int(e_rows_str) if e_rows_str else None,
+                        a_rows=int(m.group(7)),
+                        a_time_ms=self.parse_atime_ms(m.group(8)),
+                        buffers=self.parse_buffers(m.group(9)),
+                        reads=int(m.group(10)),
+                        indent=indent,
+                    )
+                )
+                continue
+
+            # Tenta formato EXPLAIN PLAN (estimado)
+            m2 = _ORACLE_PLAN_ROW_ESTIMATED.match(line)
+            if m2:
+                indent = len(m2.group(2))
+                e_rows_str = m2.group(5).strip()
+                blocks.append(
+                    PlanBlock(
+                        id=m2.group(1),
+                        operation=m2.group(3).strip(),
+                        name=m2.group(4).strip(),
+                        starts=0,
+                        e_rows=int(e_rows_str) if e_rows_str else None,
+                        a_rows=0,
+                        a_time_ms=0.0,
+                        buffers=0,
+                        reads=0,
+                        indent=indent,
+                    )
+                )
+
+        return blocks
 
     def is_runtime_plan(self, plan_lines: list[str]) -> bool:
-        raise NotImplementedError("OraclePlanParser será implementado em T5")
+        """Detecta se o plano contém estatísticas reais (runtime) ou é apenas estimado.
+
+        Retorna True para ALLSTATS LAST (runtime), False para EXPLAIN PLAN (estimado).
+        """
+        for line in plan_lines:
+            if "| Starts |" in line:
+                return True
+            if "| Rows  |" in line or "| Rows |" in line:
+                return False
+
+        # Fallback: tenta parsear a primeira linha de dados
+        for line in plan_lines:
+            if _ORACLE_PLAN_ROW.match(line):
+                return True
+            if _ORACLE_PLAN_ROW_ESTIMATED.match(line):
+                return False
+
+        return True  # default: assume runtime
+
+    def extract_index_names(self, blocks: list[PlanBlock]) -> set[str]:
+        """Extrai nomes de índices referenciados no plano a partir dos PlanBlocks."""
+        return {b.name for b in blocks if "INDEX" in b.operation.upper() and b.name}
 
 
 # ── OracleAdapter ───────────────────────────────────────────────────
