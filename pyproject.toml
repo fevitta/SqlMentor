@@ -90,9 +90,13 @@ disallow_untyped_defs = false
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
+version_variables = ["src/sqlmentor/__init__.py:__version__"]
 branch = "master"
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"
+
+[tool.semantic_release.changelog]
+generate_changelog = false
 
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["feat", "fix", "perf", "refactor", "chore", "ci", "docs", "test"]

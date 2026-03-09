@@ -76,6 +76,14 @@ def oracle_cursor(oracle_conn):
     cursor.close()
 
 
+@pytest.fixture(scope="session")
+def oracle_adapter():
+    """OracleAdapter instanciado para testes de integração."""
+    from sqlmentor.adapters.oracle import OracleAdapter
+
+    return OracleAdapter()
+
+
 # -- Fixtures para testes de inspect (V$SQL) ---------------------------------
 
 _SEED_SQL = (

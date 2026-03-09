@@ -2,7 +2,6 @@
 
 import pytest
 
-from sqlmentor.collector import _execute_query
 from sqlmentor.connector import validate_privileges
 from sqlmentor.queries import db_version, optimizer_params
 
@@ -36,11 +35,11 @@ class TestConnection:
         # Não deve levantar exceção — user tem apenas privilégios de leitura
         validate_privileges(oracle_conn)
 
-    def test_optimizer_params_returns_data(self, oracle_conn):
+    def test_optimizer_params_returns_data(self, oracle_conn, oracle_adapter):
         """optimizer_params() retorna dict não-vazio de V$PARAMETER."""
         cursor = oracle_conn.cursor()
         sql, params = optimizer_params()
-        rows = _execute_query(cursor, sql, params)
+        rows = oracle_adapter.execute_query(cursor, sql, params)
         cursor.close()
         assert len(rows) > 0
         # Verifica que parâmetros conhecidos estão presentes

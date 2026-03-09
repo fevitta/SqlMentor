@@ -11,10 +11,8 @@ from sqlmentor.collector import (
     _collect_indexes,
     _collect_table_stats,
     _detect_object_type,
-    _execute_query,
     collect_context,
 )
-from sqlmentor.queries import index_to_table_map
 
 pytestmark = pytest.mark.oracle
 
@@ -22,40 +20,46 @@ pytestmark = pytest.mark.oracle
 class TestDetectObjectType:
     """Detecta tipo correto (TABLE vs VIEW) via ALL_OBJECTS."""
 
-    def test_table(self, oracle_cursor, oracle_schema):
+    def test_table(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        result = _detect_object_type(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        result = _detect_object_type(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         assert result == "TABLE"
 
-    def test_view(self, oracle_cursor, oracle_schema):
+    def test_view(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        result = _detect_object_type(oracle_cursor, oracle_schema, "V_ACTIVE_EMPLOYEES", ctx)
+        result = _detect_object_type(
+            oracle_cursor, oracle_schema, "V_ACTIVE_EMPLOYEES", ctx, oracle_adapter
+        )
         assert result == "VIEW"
 
-    def test_nonexistent_defaults_to_table(self, oracle_cursor, oracle_schema):
+    def test_nonexistent_defaults_to_table(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        result = _detect_object_type(oracle_cursor, oracle_schema, "NAO_EXISTE_XYZ", ctx)
+        result = _detect_object_type(
+            oracle_cursor, oracle_schema, "NAO_EXISTE_XYZ", ctx, oracle_adapter
+        )
         assert result == "TABLE"
 
 
 class TestTableStats:
     """Coleta de estatísticas via ALL_TABLES."""
 
-    def test_employees_stats(self, oracle_cursor, oracle_schema):
+    def test_employees_stats(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        stats = _collect_table_stats(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        stats = _collect_table_stats(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         assert stats is not None
         assert stats["num_rows"] == 1000
 
-    def test_departments_stats(self, oracle_cursor, oracle_schema):
+    def test_departments_stats(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        stats = _collect_table_stats(oracle_cursor, oracle_schema, "DEPARTMENTS", ctx)
+        stats = _collect_table_stats(
+            oracle_cursor, oracle_schema, "DEPARTMENTS", ctx, oracle_adapter
+        )
         assert stats is not None
         assert stats["num_rows"] == 10
 
-    def test_orders_stats(self, oracle_cursor, oracle_schema):
+    def test_orders_stats(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        stats = _collect_table_stats(oracle_cursor, oracle_schema, "ORDERS", ctx)
+        stats = _collect_table_stats(oracle_cursor, oracle_schema, "ORDERS", ctx, oracle_adapter)
         assert stats is not None
         assert stats["num_rows"] == 5000
 
@@ -63,9 +67,11 @@ class TestTableStats:
 class TestColumnStats:
     """Coleta de colunas via ALL_TAB_COLUMNS + ALL_TAB_COL_STATISTICS."""
 
-    def test_employees_columns(self, oracle_cursor, oracle_schema):
+    def test_employees_columns(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        columns = _collect_column_stats(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        columns = _collect_column_stats(
+            oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter
+        )
         col_names = [c["column_name"] for c in columns]
         assert "EMP_ID" in col_names
         assert "FIRST_NAME" in col_names
@@ -74,17 +80,21 @@ class TestColumnStats:
         assert "STATUS" in col_names
         assert len(columns) == 8
 
-    def test_column_data_types(self, oracle_cursor, oracle_schema):
+    def test_column_data_types(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        columns = _collect_column_stats(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        columns = _collect_column_stats(
+            oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter
+        )
         by_name = {c["column_name"]: c for c in columns}
         assert by_name["EMP_ID"]["data_type"] == "NUMBER"
         assert by_name["FIRST_NAME"]["data_type"] == "VARCHAR2"
         assert by_name["HIRE_DATE"]["data_type"] == "DATE"
 
-    def test_column_nullable(self, oracle_cursor, oracle_schema):
+    def test_column_nullable(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        columns = _collect_column_stats(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        columns = _collect_column_stats(
+            oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter
+        )
         by_name = {c["column_name"]: c for c in columns}
         assert by_name["EMP_ID"]["nullable"] == "N"
         assert by_name["SALARY"]["nullable"] == "Y"
@@ -93,9 +103,9 @@ class TestColumnStats:
 class TestIndexes:
     """Coleta de índices via ALL_INDEXES + ALL_IND_COLUMNS."""
 
-    def test_employees_indexes(self, oracle_cursor, oracle_schema):
+    def test_employees_indexes(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         idx_names = {i["index_name"] for i in idxs}
         # PK gera index implícito + 4 explícitos
         assert len(idxs) == 5
@@ -104,22 +114,22 @@ class TestIndexes:
         assert "IDX_EMP_HIRE" in idx_names
         assert "IDX_EMP_EMAIL" in idx_names
 
-    def test_composite_index_columns(self, oracle_cursor, oracle_schema):
+    def test_composite_index_columns(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         name_idx = next(i for i in idxs if i["index_name"] == "IDX_EMP_NAME")
         assert "LAST_NAME" in name_idx["columns"]
         assert "FIRST_NAME" in name_idx["columns"]
 
-    def test_unique_index(self, oracle_cursor, oracle_schema):
+    def test_unique_index(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        idxs = _collect_indexes(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         email_idx = next(i for i in idxs if i["index_name"] == "IDX_EMP_EMAIL")
         assert email_idx["uniqueness"] == "UNIQUE"
 
-    def test_orders_indexes(self, oracle_cursor, oracle_schema):
+    def test_orders_indexes(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        idxs = _collect_indexes(oracle_cursor, oracle_schema, "ORDERS", ctx)
+        idxs = _collect_indexes(oracle_cursor, oracle_schema, "ORDERS", ctx, oracle_adapter)
         # PK + 3 explícitos
         assert len(idxs) == 4
 
@@ -127,23 +137,23 @@ class TestIndexes:
 class TestConstraints:
     """Coleta de constraints via ALL_CONSTRAINTS + ALL_CONS_COLUMNS."""
 
-    def test_employees_pk(self, oracle_cursor, oracle_schema):
+    def test_employees_pk(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         pk = [c for c in cons if c["constraint_type"] == "P"]
         assert len(pk) == 1
         assert "EMP_ID" in pk[0]["columns"]
 
-    def test_employees_fk(self, oracle_cursor, oracle_schema):
+    def test_employees_fk(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         fks = [c for c in cons if c["constraint_type"] == "R"]
         assert len(fks) == 1
         assert fks[0]["r_table_name"] == "DEPARTMENTS"
 
-    def test_employees_check(self, oracle_cursor, oracle_schema):
+    def test_employees_check(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        cons = _collect_constraints(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         checks = [c for c in cons if c["constraint_type"] == "C"]
         # NOT NULL gera check constraints implícitos + 1 explícito (chk_emp_status)
         assert len(checks) >= 1
@@ -152,24 +162,24 @@ class TestConstraints:
 class TestDDL:
     """Coleta de DDL via DBMS_METADATA.GET_DDL."""
 
-    def test_table_ddl(self, oracle_cursor, oracle_schema):
+    def test_table_ddl(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        ddl = _collect_ddl(oracle_cursor, oracle_schema, "EMPLOYEES", ctx)
+        ddl = _collect_ddl(oracle_cursor, oracle_schema, "EMPLOYEES", ctx, oracle_adapter)
         assert ddl is not None
         assert "CREATE TABLE" in ddl.upper() or "CREATE" in ddl.upper()
         assert "EMPLOYEES" in ddl.upper()
 
-    def test_view_ddl(self, oracle_cursor, oracle_schema):
+    def test_view_ddl(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        ddl = _collect_ddl(oracle_cursor, oracle_schema, "V_ACTIVE_EMPLOYEES", ctx)
+        ddl = _collect_ddl(oracle_cursor, oracle_schema, "V_ACTIVE_EMPLOYEES", ctx, oracle_adapter)
         assert ddl is not None
         assert "VIEW" in ddl.upper()
 
-    def test_function_ddl(self, oracle_cursor, oracle_schema):
+    def test_function_ddl(self, oracle_cursor, oracle_schema, oracle_adapter):
         from sqlmentor.queries import function_ddl
 
         sql, params = function_ddl(oracle_schema, "FN_ANNUAL_SALARY")
-        rows = _execute_query(oracle_cursor, sql, params)
+        rows = oracle_adapter.execute_query(oracle_cursor, sql, params)
         assert len(rows) == 1
         ddl = str(rows[0]["ddl"])
         assert "FUNCTION" in ddl.upper()
@@ -179,10 +189,10 @@ class TestDDL:
 class TestBatchCollect:
     """Coleta batch de múltiplas tabelas em uma query."""
 
-    def test_batch_two_tables(self, oracle_cursor, oracle_schema):
+    def test_batch_two_tables(self, oracle_cursor, oracle_schema, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
         pairs = [(oracle_schema, "EMPLOYEES"), (oracle_schema, "ORDERS")]
-        result = _batch_collect_tables(oracle_cursor, pairs, ctx)
+        result = _batch_collect_tables(oracle_cursor, pairs, ctx, oracle_adapter)
 
         assert f"{oracle_schema}.EMPLOYEES" in result
         assert f"{oracle_schema}.ORDERS" in result
@@ -194,18 +204,18 @@ class TestBatchCollect:
         assert "constraints" in emp_data
         assert emp_data["stats"]["num_rows"] == 1000
 
-    def test_batch_empty_pairs(self, oracle_cursor):
+    def test_batch_empty_pairs(self, oracle_cursor, oracle_adapter):
         ctx = CollectedContext(parsed_sql=None)
-        result = _batch_collect_tables(oracle_cursor, [], ctx)
+        result = _batch_collect_tables(oracle_cursor, [], ctx, oracle_adapter)
         assert result == {}
 
 
 class TestIndexToTableMap:
     """Mapa index_name → table_name via ALL_INDEXES."""
 
-    def test_maps_known_indexes(self, oracle_cursor, oracle_schema):
-        sql, params = index_to_table_map(oracle_schema)
-        rows = _execute_query(oracle_cursor, sql, params)
+    def test_maps_known_indexes(self, oracle_cursor, oracle_schema, oracle_adapter):
+        sql, params = oracle_adapter.query_builder.index_to_table_map(oracle_schema)
+        rows = oracle_adapter.execute_query(oracle_cursor, sql, params)
         idx_map = {r["index_name"]: r["table_name"] for r in rows}
         assert idx_map.get("IDX_EMP_DEPT") == "EMPLOYEES"
         assert idx_map.get("IDX_ORD_EMP") == "ORDERS"

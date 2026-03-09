@@ -2,7 +2,6 @@
 
 import pytest
 
-from sqlmentor.collector import _execute_query
 from sqlmentor.queries import runtime_plan, session_wait_events, sql_runtime_stats, sql_text_by_id
 
 pytestmark = pytest.mark.oracle
@@ -25,10 +24,10 @@ class TestVSQLLookup:
         text = str(row[0])
         assert "SQLMENTOR_SEED_QUERY" in text
 
-    def test_runtime_stats(self, oracle_cursor, seed_query_sql_id):
+    def test_runtime_stats(self, oracle_cursor, seed_query_sql_id, oracle_adapter):
         """sql_runtime_stats() retorna métricas com executions > 0."""
         sql, params = sql_runtime_stats(seed_query_sql_id)
-        rows = _execute_query(oracle_cursor, sql, params)
+        rows = oracle_adapter.execute_query(oracle_cursor, sql, params)
         assert len(rows) == 1
         stats = rows[0]
         assert stats["executions"] >= 1
@@ -61,7 +60,7 @@ class TestDisplayCursor:
 class TestWaitEvents:
     """Testa coleta de wait events da sessão."""
 
-    def test_session_wait_events_returns_list(self, oracle_conn):
+    def test_session_wait_events_returns_list(self, oracle_conn, oracle_adapter):
         """session_wait_events() retorna lista (pode ser vazia se sessão nova)."""
         cursor = oracle_conn.cursor()
         cursor.execute("SELECT sid FROM v$mystat WHERE ROWNUM = 1")
@@ -69,7 +68,7 @@ class TestWaitEvents:
         sid = row[0]
 
         sql, params = session_wait_events(sid)
-        rows = _execute_query(cursor, sql, params)
+        rows = oracle_adapter.execute_query(cursor, sql, params)
         cursor.close()
         # Resultado é uma lista (pode ser vazia, mas não deve dar erro)
         assert isinstance(rows, list)
