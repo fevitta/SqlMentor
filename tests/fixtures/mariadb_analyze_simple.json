@@ -1,0 +1,20 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "table": {
+      "table_name": "orders",
+      "access_type": "range",
+      "possible_keys": ["idx_date"],
+      "key": "idx_date",
+      "key_length": "3",
+      "used_key_parts": ["order_date"],
+      "rows_examined_per_scan": 150,
+      "rows_produced_per_join": 142,
+      "filtered": "100.00",
+      "r_rows": 142,
+      "r_loops": 1,
+      "r_total_time_ms": 0.523,
+      "index_condition": "orders.order_date > '2024-01-01'"
+    }
+  }
+}

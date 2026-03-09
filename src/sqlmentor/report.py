@@ -19,7 +19,7 @@ from sqlmentor.collector import CollectedContext, TableContext
 
 @dataclass
 class PlanBlock:
-    """Representa uma operação do plano de execução Oracle."""
+    """Representa uma operação do plano de execução."""
 
     id: str
 
@@ -35,9 +35,9 @@ class PlanBlock:
 
     a_time_ms: float
 
-    buffers: int
+    buffers: int | None = None
 
-    reads: int
+    reads: int | None = None
 
     indent: int = 0
 
@@ -84,11 +84,11 @@ def _apply_thresholds(blocks: list[PlanBlock]) -> None:
     """Marca blocks.immune=True para operações que atendem R5."""
 
     for b in blocks:
-        if b.reads > 0:
+        if b.reads is not None and b.reads > 0:
             b.immune = True
             continue
 
-        if b.buffers > _THRESHOLD_BUFFERS:
+        if b.buffers is not None and b.buffers > _THRESHOLD_BUFFERS:
             b.immune = True
             continue
 
@@ -182,9 +182,9 @@ def _collapse_config_fields(
             if not immune_any:
                 all_ids = {b.id for b in group}
 
-                total_buffers = sum(b.buffers for b in group)
+                total_buffers = sum(b.buffers for b in group if b.buffers is not None)
 
-                total_reads = sum(b.reads for b in group)
+                total_reads = sum(b.reads for b in group if b.reads is not None)
 
                 a_rows_nonzero = [
                     b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0
@@ -267,7 +267,7 @@ def _collapse_situation_history(
             if not immune_any:
                 all_ids = {b.id for b in all_blocks}
 
-                total_buffers = sum(b.buffers for b in all_blocks)
+                total_buffers = sum(b.buffers for b in all_blocks if b.buffers is not None)
 
                 table_rows = []
 
@@ -288,7 +288,7 @@ def _collapse_situation_history(
                         if filter_val != "?":
                             break
 
-                    table_rows.append((filter_val, root_block.a_rows, root_block.buffers))
+                    table_rows.append((filter_val, root_block.a_rows, (root_block.buffers or 0)))
 
                 if is_estimated:
                     lines = [
@@ -364,7 +364,7 @@ def _collapse_view_zero_rows(blocks: list[PlanBlock]) -> list[CollapseResult]:
             if not immune_any:
                 all_ids = {sb.id for sb in subtree}
 
-                total_buffers = sum(sb.buffers for sb in subtree)
+                total_buffers = sum(sb.buffers for sb in subtree if sb.buffers is not None)
 
                 view_label = b.name if b.name else b.operation
 
@@ -478,7 +478,7 @@ def _collapse_low_cost_nested_loops(blocks: list[PlanBlock]) -> list[CollapseRes
             subtree.append(blocks[j])
             j += 1
 
-        total_buffers = sum(bl.buffers for bl in subtree)
+        total_buffers = sum(bl.buffers for bl in subtree if bl.buffers is not None)
         total_a_rows = sum(bl.a_rows for bl in subtree)
 
         buf_per_iter = total_buffers / b.starts if b.starts > 0 else 0

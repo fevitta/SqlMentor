@@ -3,7 +3,7 @@
 > Adicionar suporte a MariaDB ao SqlMentor usando o adapter pattern da Fase 1.
 > **Depende de:** Fase 1 completa (T1-T9) ✅
 
-## Status: IN PROGRESS (2/7)
+## Status: IN PROGRESS (3/7)
 
 ## Ordem de Execução
 
@@ -77,14 +77,17 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ---
 
 ### T20: MariaDBPlanParser
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T1 ✅, T5 ✅
 - **Bloqueia**: T22
 - **Esforço**: 5 dias
 - **Entregas**:
-  - [ ] `MariaDBPlanParser` implementando `PlanParser` em `adapters/mariadb.py`
-  - [ ] Converter output JSON de `EXPLAIN FORMAT=JSON` / `ANALYZE FORMAT=JSON` em `list[PlanBlock]`
-  - [ ] `buffers` e `reads` como `None` (MariaDB não reporta I/O no plano)
+  - [x] `MariaDBPlanParser` implementando `PlanParser` em `adapters/mariadb.py`
+  - [x] Converter output JSON de `EXPLAIN FORMAT=JSON` / `ANALYZE FORMAT=JSON` em `list[PlanBlock]`
+  - [x] `buffers` e `reads` como `int | None` em `PlanBlock` (8 None-guards em `report.py`)
+  - [x] DFS traversal: table, nested_loop, ordering_operation, grouping_operation, duplicates_removal, union_result, subqueries
+  - [x] `is_runtime_plan()` — detecção recursiva de `r_rows`
+  - [x] 4 fixtures JSON + 34 novos testes (125 total no arquivo)
 
 **Mapeamento de campos:**
 
@@ -103,7 +106,7 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 
 ### T22: Validar regras R1-R12 com planos MariaDB
 - **Status**: [ ] TODO
-- **Depende de**: T5 ✅, T20
+- **Depende de**: T5 ✅, T20 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
@@ -156,9 +159,9 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 | T17 MariaDBAdapter | ✅ DONE | T1 ✅, T2 ✅ |
 | T18 queries/mariadb.py | ✅ DONE | T3 ✅, T17 ✅ |
 | T19 Coleta metadata | ⬜ TODO | T4 ✅, T9 ✅, T18 ✅ |
-| T20 MariaDBPlanParser | ⬜ TODO | T1 ✅, T5 ✅ |
-| T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 |
+| T20 MariaDBPlanParser | ✅ DONE | T1 ✅, T5 ✅ |
+| T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 ✅ |
 | T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 ✅ |
 | T21 Integração MariaDB | ⬜ TODO | T17 ✅-T23 |
 
-**Progresso**: 2/7 tarefas concluídas
+**Progresso**: 3/7 tarefas concluídas

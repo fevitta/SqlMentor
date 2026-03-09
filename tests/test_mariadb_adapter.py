@@ -723,16 +723,222 @@ class TestMariaDBQueryBuilderSanitization:
 # ─── MariaDBPlanParser ──────────────────────────────────────────────
 
 
-class TestMariaDBPlanParser:
-    def test_parse_plan_returns_empty(self):
+def _load_fixture(name: str) -> list[str]:
+    """Carrega fixture JSON e retorna como lista de linhas."""
+    import pathlib
+
+    path = pathlib.Path(__file__).parent / "fixtures" / name
+    return path.read_text().splitlines()
+
+
+class TestMariaDBPlanParserEmptyInvalid:
+    def test_empty_input(self):
         parser = MariaDBPlanParser()
         assert parser.parse_plan([]) == []
-        assert parser.parse_plan(["some line"]) == []
 
-    def test_is_runtime_plan_returns_false(self):
+    def test_invalid_json(self):
+        parser = MariaDBPlanParser()
+        assert parser.parse_plan(["not json at all"]) == []
+
+    def test_non_dict_json(self):
+        parser = MariaDBPlanParser()
+        assert parser.parse_plan(["[1, 2, 3]"]) == []
+
+    def test_empty_object(self):
+        parser = MariaDBPlanParser()
+        assert parser.parse_plan(["{ }"]) == []
+
+
+class TestMariaDBPlanParserSimpleEstimated:
+    @pytest.fixture
+    def blocks(self):
+        parser = MariaDBPlanParser()
+        return parser.parse_plan(_load_fixture("mariadb_explain_simple.json"))
+
+    def test_returns_one_block(self, blocks):
+        assert len(blocks) == 1
+
+    def test_operation_is_access_type(self, blocks):
+        assert blocks[0].operation == "RANGE"
+
+    def test_table_name(self, blocks):
+        assert blocks[0].name == "orders"
+
+    def test_e_rows_from_rows_examined(self, blocks):
+        assert blocks[0].e_rows == 150
+
+    def test_no_runtime_fields(self, blocks):
+        assert blocks[0].a_rows == 0
+        assert blocks[0].a_time_ms == 0.0
+        assert blocks[0].starts == 0
+
+    def test_buffers_and_reads_are_none(self, blocks):
+        assert blocks[0].buffers is None
+        assert blocks[0].reads is None
+
+    def test_indent_is_zero(self, blocks):
+        assert blocks[0].indent == 0
+
+    def test_id_is_sequential(self, blocks):
+        assert blocks[0].id == "1"
+
+
+class TestMariaDBPlanParserSimpleAnalyze:
+    @pytest.fixture
+    def blocks(self):
+        parser = MariaDBPlanParser()
+        return parser.parse_plan(_load_fixture("mariadb_analyze_simple.json"))
+
+    def test_returns_one_block(self, blocks):
+        assert len(blocks) == 1
+
+    def test_a_rows_from_r_rows(self, blocks):
+        assert blocks[0].a_rows == 142
+
+    def test_starts_from_r_loops(self, blocks):
+        assert blocks[0].starts == 1
+
+    def test_a_time_ms_from_r_total_time(self, blocks):
+        assert blocks[0].a_time_ms == pytest.approx(0.523)
+
+    def test_buffers_and_reads_still_none(self, blocks):
+        assert blocks[0].buffers is None
+        assert blocks[0].reads is None
+
+
+class TestMariaDBPlanParserJoin:
+    @pytest.fixture
+    def blocks(self):
+        parser = MariaDBPlanParser()
+        return parser.parse_plan(_load_fixture("mariadb_explain_join.json"))
+
+    def test_returns_two_blocks(self, blocks):
+        assert len(blocks) == 2
+
+    def test_first_table_is_customers(self, blocks):
+        assert blocks[0].name == "customers"
+        assert blocks[0].operation == "ALL"
+
+    def test_second_table_is_orders(self, blocks):
+        assert blocks[1].name == "orders"
+        assert blocks[1].operation == "REF"
+
+    def test_sequential_ids(self, blocks):
+        assert blocks[0].id == "1"
+        assert blocks[1].id == "2"
+
+    def test_e_rows_populated(self, blocks):
+        assert blocks[0].e_rows == 1000
+        assert blocks[1].e_rows == 5
+
+    def test_all_buffers_none(self, blocks):
+        for b in blocks:
+            assert b.buffers is None
+            assert b.reads is None
+
+
+class TestMariaDBPlanParserSubquery:
+    @pytest.fixture
+    def blocks(self):
+        parser = MariaDBPlanParser()
+        return parser.parse_plan(_load_fixture("mariadb_analyze_subquery.json"))
+
+    def test_returns_three_blocks(self, blocks):
+        """ORDERING + orders table + order_items subquery table."""
+        assert len(blocks) == 3
+
+    def test_ordering_is_structural(self, blocks):
+        assert blocks[0].operation == "ORDERING"
+
+    def test_ordering_runtime_fields(self, blocks):
+        assert blocks[0].a_rows == 50
+        assert blocks[0].a_time_ms == pytest.approx(3.214)
+        assert blocks[0].starts == 1
+
+    def test_orders_table_deeper_indent(self, blocks):
+        assert blocks[1].name == "orders"
+        assert blocks[1].indent > blocks[0].indent
+
+    def test_subquery_table_deepest_indent(self, blocks):
+        assert blocks[2].name == "order_items"
+        assert blocks[2].indent > blocks[1].indent
+
+    def test_subquery_runtime_fields(self, blocks):
+        assert blocks[2].starts == 500
+        assert blocks[2].a_rows == 3
+        assert blocks[2].a_time_ms == pytest.approx(12.567)
+
+    def test_all_buffers_none(self, blocks):
+        for b in blocks:
+            assert b.buffers is None
+            assert b.reads is None
+
+
+class TestMariaDBPlanParserIsRuntime:
+    def test_empty_is_false(self):
         parser = MariaDBPlanParser()
         assert parser.is_runtime_plan([]) is False
-        assert parser.is_runtime_plan(["some line"]) is False
+
+    def test_invalid_json_is_false(self):
+        parser = MariaDBPlanParser()
+        assert parser.is_runtime_plan(["not json"]) is False
+
+    def test_estimated_plan_is_false(self):
+        parser = MariaDBPlanParser()
+        assert parser.is_runtime_plan(_load_fixture("mariadb_explain_simple.json")) is False
+
+    def test_analyze_plan_is_true(self):
+        parser = MariaDBPlanParser()
+        assert parser.is_runtime_plan(_load_fixture("mariadb_analyze_simple.json")) is True
+
+    def test_analyze_subquery_is_true(self):
+        parser = MariaDBPlanParser()
+        assert parser.is_runtime_plan(_load_fixture("mariadb_analyze_subquery.json")) is True
+
+
+class TestPlanBlockNoneGuards:
+    """Verifica que PlanBlock com buffers/reads=None não causa crash no pipeline."""
+
+    def test_apply_thresholds_with_none_buffers(self):
+        from sqlmentor.report import PlanBlock, _apply_thresholds
+
+        blocks = [
+            PlanBlock(
+                id="1",
+                operation="ALL",
+                name="t1",
+                starts=0,
+                e_rows=10,
+                a_rows=5,
+                a_time_ms=0.1,
+                buffers=None,
+                reads=None,
+                indent=0,
+            ),
+        ]
+        # Não deve levantar TypeError
+        _apply_thresholds(blocks)
+        assert blocks[0].immune is False
+
+    def test_apply_thresholds_with_int_buffers(self):
+        from sqlmentor.report import PlanBlock, _apply_thresholds
+
+        blocks = [
+            PlanBlock(
+                id="1",
+                operation="ALL",
+                name="t1",
+                starts=0,
+                e_rows=10,
+                a_rows=5,
+                a_time_ms=0.1,
+                buffers=5000,
+                reads=10,
+                indent=0,
+            ),
+        ]
+        _apply_thresholds(blocks)
+        assert blocks[0].immune is True
 
 
 # ─── Registration ───────────────────────────────────────────────────

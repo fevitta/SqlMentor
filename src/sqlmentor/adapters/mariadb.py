@@ -8,6 +8,7 @@ e performance_schema. explain_plan/runtime_plan permanecem stubs (T20).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any
@@ -555,14 +556,237 @@ class MariaDBQueryBuilder(QueryBuilder):
 
 
 class MariaDBPlanParser(PlanParser):
-    """Parser de planos MariaDB — stub para T20."""
+    """Parser de planos MariaDB (EXPLAIN/ANALYZE FORMAT=JSON).
+
+    Parseia JSON de plano MariaDB em lista plana de PlanBlock via DFS.
+    MariaDB não reporta buffers/reads no plano — esses campos ficam None.
+    """
 
     def parse_plan(self, plan_lines: list[str]) -> list[PlanBlock]:
-        """Stub — será implementado em T20."""
-        return []
+        """Parseia JSON do plano MariaDB em lista de PlanBlock."""
+        raw = "".join(plan_lines).strip()
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return []
+
+        if not isinstance(data, dict):
+            return []
+
+        counter = [0]
+        blocks: list[PlanBlock] = []
+        query_block = data.get("query_block")
+        if query_block:
+            blocks.extend(self._walk_node(query_block, depth=0, counter=counter))
+        return blocks
+
+    def _walk_node(self, node: dict, depth: int, counter: list[int]) -> list[PlanBlock]:
+        """Percorre recursivamente o JSON do plano MariaDB via DFS."""
+        from sqlmentor.report import PlanBlock
+
+        blocks: list[PlanBlock] = []
+        if not isinstance(node, dict):
+            return blocks
+
+        # table node — operação concreta de acesso
+        if "table" in node:
+            tbl = node["table"]
+            counter[0] += 1
+            blocks.append(
+                PlanBlock(
+                    id=str(counter[0]),
+                    operation=tbl.get("access_type", "UNKNOWN").upper(),
+                    name=tbl.get("table_name", ""),
+                    starts=tbl.get("r_loops", 0),
+                    e_rows=tbl.get("rows_examined_per_scan", tbl.get("rows", 0)),
+                    a_rows=tbl.get("r_rows", 0),
+                    a_time_ms=tbl.get("r_total_time_ms", 0.0),
+                    buffers=None,
+                    reads=None,
+                    indent=depth,
+                )
+            )
+            # Recurse subqueries attached to this table
+            for key in ("subqueries", "attached_subqueries"):
+                for sq in tbl.get(key, []):
+                    blocks.extend(self._walk_node(sq, depth + 1, counter))
+            if "materialized_from_subquery" in tbl:
+                mat = tbl["materialized_from_subquery"]
+                qb = mat.get("query_block", mat)
+                blocks.extend(self._walk_node(qb, depth + 1, counter))
+            return blocks
+
+        # nested_loop — array of child nodes
+        if "nested_loop" in node:
+            for item in node["nested_loop"]:
+                blocks.extend(self._walk_node(item, depth, counter))
+            # Also process other keys besides nested_loop
+            for key in ("subqueries", "attached_subqueries"):
+                for sq in node.get(key, []):
+                    blocks.extend(self._walk_node(sq, depth + 1, counter))
+            if "ordering_operation" in node:
+                blocks.extend(self._walk_ordering(node["ordering_operation"], depth, counter))
+            return blocks
+
+        # ordering_operation — structural node
+        if "ordering_operation" in node:
+            blocks.extend(self._walk_ordering(node["ordering_operation"], depth, counter))
+            # Process other children at this level
+            for key in ("subqueries", "attached_subqueries"):
+                for sq in node.get(key, []):
+                    blocks.extend(self._walk_node(sq, depth + 1, counter))
+            return blocks
+
+        # grouping_operation — structural node
+        if "grouping_operation" in node:
+            grp = node["grouping_operation"]
+            counter[0] += 1
+            blocks.append(
+                PlanBlock(
+                    id=str(counter[0]),
+                    operation="GROUPING",
+                    name=grp.get("using_temporary_table", ""),
+                    starts=grp.get("r_loops", 0),
+                    e_rows=grp.get("rows", 0),
+                    a_rows=grp.get("r_rows", 0),
+                    a_time_ms=grp.get("r_total_time_ms", 0.0),
+                    buffers=None,
+                    reads=None,
+                    indent=depth,
+                )
+            )
+            # Recurse nested_loop or table inside grouping
+            blocks.extend(self._walk_children(grp, depth + 1, counter))
+            return blocks
+
+        # duplicates_removal — structural node
+        if "duplicates_removal" in node:
+            dup = node["duplicates_removal"]
+            counter[0] += 1
+            blocks.append(
+                PlanBlock(
+                    id=str(counter[0]),
+                    operation="DUPLICATES REMOVAL",
+                    name="",
+                    starts=dup.get("r_loops", 0),
+                    e_rows=dup.get("rows", 0),
+                    a_rows=dup.get("r_rows", 0),
+                    a_time_ms=dup.get("r_total_time_ms", 0.0),
+                    buffers=None,
+                    reads=None,
+                    indent=depth,
+                )
+            )
+            blocks.extend(self._walk_children(dup, depth + 1, counter))
+            return blocks
+
+        # union_result — structural node
+        if "union_result" in node:
+            ur = node["union_result"]
+            counter[0] += 1
+            blocks.append(
+                PlanBlock(
+                    id=str(counter[0]),
+                    operation="UNION RESULT",
+                    name=ur.get("table_name", ""),
+                    starts=ur.get("r_loops", 0),
+                    e_rows=0,
+                    a_rows=ur.get("r_rows", 0),
+                    a_time_ms=ur.get("r_total_time_ms", 0.0),
+                    buffers=None,
+                    reads=None,
+                    indent=depth,
+                )
+            )
+            for qs in ur.get("query_specifications", []):
+                blocks.extend(self._walk_node(qs, depth + 1, counter))
+            return blocks
+
+        # query_block — container, recurse children
+        if "select_id" in node:
+            blocks.extend(self._walk_children(node, depth, counter))
+            return blocks
+
+        # Generic: try to find known children
+        blocks.extend(self._walk_children(node, depth, counter))
+        return blocks
+
+    def _walk_ordering(self, ord_node: dict, depth: int, counter: list[int]) -> list[PlanBlock]:
+        """Processa nó ordering_operation."""
+        from sqlmentor.report import PlanBlock
+
+        blocks: list[PlanBlock] = []
+        counter[0] += 1
+        blocks.append(
+            PlanBlock(
+                id=str(counter[0]),
+                operation="ORDERING",
+                name=ord_node.get("using_filesort", ""),
+                starts=ord_node.get("r_loops", 0),
+                e_rows=ord_node.get("rows", 0),
+                a_rows=ord_node.get("r_rows", 0),
+                a_time_ms=ord_node.get("r_total_time_ms", 0.0),
+                buffers=None,
+                reads=None,
+                indent=depth,
+            )
+        )
+        blocks.extend(self._walk_children(ord_node, depth + 1, counter))
+        return blocks
+
+    def _walk_children(self, node: dict, depth: int, counter: list[int]) -> list[PlanBlock]:
+        """Percorre filhos conhecidos de um nó genérico."""
+        blocks: list[PlanBlock] = []
+        if "nested_loop" in node:
+            for item in node["nested_loop"]:
+                blocks.extend(self._walk_node(item, depth, counter))
+        if "table" in node:
+            blocks.extend(self._walk_node({"table": node["table"]}, depth, counter))
+        for key in ("subqueries", "attached_subqueries"):
+            for sq in node.get(key, []):
+                blocks.extend(self._walk_node(sq, depth + 1, counter))
+        if "ordering_operation" in node:
+            blocks.extend(self._walk_ordering(node["ordering_operation"], depth, counter))
+        if "grouping_operation" in node:
+            blocks.extend(
+                self._walk_node({"grouping_operation": node["grouping_operation"]}, depth, counter)
+            )
+        if "duplicates_removal" in node:
+            blocks.extend(
+                self._walk_node({"duplicates_removal": node["duplicates_removal"]}, depth, counter)
+            )
+        if "union_result" in node:
+            blocks.extend(self._walk_node({"union_result": node["union_result"]}, depth, counter))
+        if "materialized_from_subquery" in node:
+            mat = node["materialized_from_subquery"]
+            qb = mat.get("query_block", mat)
+            blocks.extend(self._walk_node(qb, depth + 1, counter))
+        if "query_block" in node:
+            blocks.extend(self._walk_node(node["query_block"], depth + 1, counter))
+        return blocks
 
     def is_runtime_plan(self, plan_lines: list[str]) -> bool:
-        """Stub — será implementado em T20."""
+        """Detecta se o plano contém estatísticas reais (r_rows) — indica ANALYZE."""
+        raw = "".join(plan_lines).strip()
+        if not raw:
+            return False
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return self._has_runtime_key(data)
+
+    @staticmethod
+    def _has_runtime_key(obj: Any) -> bool:
+        """Busca recursivamente a chave 'r_rows' no JSON."""
+        if isinstance(obj, dict):
+            if "r_rows" in obj:
+                return True
+            return any(MariaDBPlanParser._has_runtime_key(v) for v in obj.values())
+        if isinstance(obj, list):
+            return any(MariaDBPlanParser._has_runtime_key(item) for item in obj)
         return False
 
 
