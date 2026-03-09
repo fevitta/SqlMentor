@@ -201,6 +201,15 @@ class _StubQueryBuilder(QueryBuilder):
     def runtime_plan(self, sql_id: str, child_number: int = 0) -> tuple[str, dict]:
         return ("SELECT ...", {"sql_id": sql_id})
 
+    def set_statistics_level(self, level: str) -> tuple[str, dict]:
+        return (f"ALTER SESSION SET STATISTICS_LEVEL = {level}", {})
+
+    def session_sid(self) -> tuple[str, dict]:
+        return ("SELECT sid FROM ...", {})
+
+    def prev_sql_id(self) -> tuple[str, dict]:
+        return ("SELECT prev_sql_id FROM ...", {})
+
     def db_version(self) -> tuple[str, dict]:
         return ("SELECT version()", {})
 

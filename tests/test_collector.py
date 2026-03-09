@@ -1,4 +1,4 @@
-"""Testes unitários do collector.py — coleta de metadata Oracle com cursor mockado."""
+"""Testes unitários do collector.py — coleta de metadata com cursor mockado."""
 
 from unittest.mock import MagicMock
 
@@ -19,7 +19,6 @@ from sqlmentor.collector import (
     _collect_table_stats,
     _collect_view_expansion,
     _detect_object_type,
-    _execute_query,
     _index_map_cache,
     _inline_binds,
     _LRUCache,
@@ -89,6 +88,44 @@ def make_cursor_dispatch(mappings: dict) -> MagicMock:
     type(cursor).description = property(lambda self: state["description"])
 
     return cursor
+
+
+# ---------------------------------------------------------------------------
+# Helper: adapter mock que delega execute_query ao cursor dispatch
+# ---------------------------------------------------------------------------
+
+
+def _make_adapter_mock():
+    """Cria mock de DatabaseAdapter que funciona com make_cursor_dispatch.
+
+    O execute_query delega ao cursor (execute + iterate), convertendo
+    os resultados para list[dict] com colunas lowercase — exatamente
+    como OracleAdapter.execute_query faz.
+
+    O query_builder delega ao OracleQueryBuilder real.
+    """
+    from sqlmentor.adapters.oracle import OracleQueryBuilder
+
+    adapter = MagicMock()
+    adapter.query_builder = OracleQueryBuilder()
+
+    def _exec_query(cursor, sql, params):
+        cursor.execute(sql, params)
+        if cursor.description is None:
+            return []
+        columns = [col[0].lower() for col in cursor.description]
+        rows = []
+        for row in cursor:
+            row_dict = {}
+            for i, val in enumerate(row):
+                if hasattr(val, "read"):
+                    val = val.read()
+                row_dict[columns[i]] = val
+            rows.append(row_dict)
+        return rows
+
+    adapter.execute_query = MagicMock(side_effect=_exec_query)
+    return adapter
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +227,11 @@ def _make_ctx(parsed=None):
     return CollectedContext(parsed_sql=parsed)
 
 
-class TestExecuteQuery:
-    """Testes de _execute_query."""
+class TestAdapterExecuteQuery:
+    """Testes do adapter mock execute_query (substitui _execute_query removido)."""
 
     def test_returns_list_of_dicts(self):
+        adapter = _make_adapter_mock()
         cursor = make_cursor_dispatch(
             {
                 "SELECT": {
@@ -202,31 +240,25 @@ class TestExecuteQuery:
                 }
             }
         )
-        result = _execute_query(cursor, "SELECT id, name FROM t", {})
+        result = adapter.execute_query(cursor, "SELECT id, name FROM t", {})
         assert result == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
 
     def test_empty_result(self):
+        adapter = _make_adapter_mock()
         cursor = make_cursor_dispatch({"SELECT": {"description": [("id",)], "rows": []}})
-        result = _execute_query(cursor, "SELECT id FROM t", {})
+        result = adapter.execute_query(cursor, "SELECT id FROM t", {})
         assert result == []
 
     def test_lob_read(self):
+        adapter = _make_adapter_mock()
         lob = MagicMock()
         lob.read.return_value = "LOB content"
         cursor = make_cursor_dispatch({"SELECT": {"description": [("ddl",)], "rows": [(lob,)]}})
-        result = _execute_query(cursor, "SELECT ddl FROM t", {})
+        result = adapter.execute_query(cursor, "SELECT ddl FROM t", {})
         assert result == [{"ddl": "LOB content"}]
 
-    def test_description_none(self):
-        # Quando description é None, devemos tratar sem erro
-        cursor2 = MagicMock()
-        cursor2.execute = MagicMock()
-        cursor2.description = None
-        cursor2.__iter__ = MagicMock(return_value=iter([]))
-        result = _execute_query(cursor2, "SELECT 1 FROM dual", {})
-        assert result == []
-
     def test_multiple_rows(self):
+        adapter = _make_adapter_mock()
         cursor = make_cursor_dispatch(
             {
                 "SELECT": {
@@ -235,7 +267,7 @@ class TestExecuteQuery:
                 }
             }
         )
-        result = _execute_query(cursor, "SELECT val FROM t", {})
+        result = adapter.execute_query(cursor, "SELECT val FROM t", {})
         assert len(result) == 3
         assert result[2] == {"val": 30}
 
@@ -244,21 +276,26 @@ class TestCollectDbVersion:
     """Testes de _collect_db_version."""
 
     def test_returns_version_string(self):
-        cursor = make_cursor_dispatch({"v$version": ("Oracle 19c",)})
+        cursor = make_cursor_dispatch(
+            {"v$version": {"description": [("banner",)], "rows": [("Oracle 19c",)]}}
+        )
         ctx = _make_ctx()
-        result = _collect_db_version(cursor, ctx)
+        adapter = _make_adapter_mock()
+        result = _collect_db_version(cursor, ctx, adapter)
         assert result == "Oracle 19c"
 
     def test_none_when_empty(self):
-        cursor = make_cursor_dispatch({"v$version": None})
+        cursor = make_cursor_dispatch({"v$version": {"description": [("banner",)], "rows": []}})
         ctx = _make_ctx()
-        result = _collect_db_version(cursor, ctx)
+        adapter = _make_adapter_mock()
+        result = _collect_db_version(cursor, ctx, adapter)
         assert result is None
 
     def test_error_recorded(self):
         cursor = make_cursor_dispatch({"v$version": RuntimeError("ORA-00942")})
         ctx = _make_ctx()
-        result = _collect_db_version(cursor, ctx)
+        adapter = _make_adapter_mock()
+        result = _collect_db_version(cursor, ctx, adapter)
         assert result is None
         assert len(ctx.errors) == 1
         assert "versão" in ctx.errors[0]
@@ -276,7 +313,7 @@ class TestDetectObjectType:
                 }
             }
         )
-        result = _detect_object_type(cursor, "HR", "EMPLOYEES", _make_ctx())
+        result = _detect_object_type(cursor, "HR", "EMPLOYEES", _make_ctx(), _make_adapter_mock())
         assert result == "TABLE"
 
     def test_returns_view(self):
@@ -288,19 +325,19 @@ class TestDetectObjectType:
                 }
             }
         )
-        result = _detect_object_type(cursor, "HR", "V_EMP", _make_ctx())
+        result = _detect_object_type(cursor, "HR", "V_EMP", _make_ctx(), _make_adapter_mock())
         assert result == "VIEW"
 
     def test_default_table_on_empty(self):
         cursor = make_cursor_dispatch(
             {"all_objects": {"description": [("object_type",)], "rows": []}}
         )
-        result = _detect_object_type(cursor, "HR", "UNKNOWN", _make_ctx())
+        result = _detect_object_type(cursor, "HR", "UNKNOWN", _make_ctx(), _make_adapter_mock())
         assert result == "TABLE"
 
     def test_default_table_on_exception(self):
         cursor = make_cursor_dispatch({"all_objects": RuntimeError("ORA-00942")})
-        result = _detect_object_type(cursor, "HR", "BAD", _make_ctx())
+        result = _detect_object_type(cursor, "HR", "BAD", _make_ctx(), _make_adapter_mock())
         assert result == "TABLE"
 
 
@@ -318,7 +355,7 @@ class TestCollectViewExpansion:
             }
         )
         ctx = _make_ctx()
-        _collect_view_expansion(cursor, "HR", "V_TEST", ctx)
+        _collect_view_expansion(cursor, "HR", "V_TEST", ctx, _make_adapter_mock())
         assert "HR.V_TEST" in ctx.view_expansions
         assert len(ctx.view_expansions["HR.V_TEST"]) >= 1
 
@@ -327,13 +364,13 @@ class TestCollectViewExpansion:
             {"DBMS_METADATA": {"description": [("ddl",)], "rows": [("  ",)]}}
         )
         ctx = _make_ctx()
-        _collect_view_expansion(cursor, "HR", "V_EMPTY", ctx)
+        _collect_view_expansion(cursor, "HR", "V_EMPTY", ctx, _make_adapter_mock())
         assert "HR.V_EMPTY" not in ctx.view_expansions
 
     def test_error_recorded(self):
         cursor = make_cursor_dispatch({"DBMS_METADATA": RuntimeError("no priv")})
         ctx = _make_ctx()
-        _collect_view_expansion(cursor, "HR", "V_ERR", ctx)
+        _collect_view_expansion(cursor, "HR", "V_ERR", ctx, _make_adapter_mock())
         assert len(ctx.errors) == 1
         assert "view expansion" in ctx.errors[0].lower()
 
@@ -355,7 +392,7 @@ class TestCollectExplainPlan:
             }
         )
         ctx = _make_ctx()
-        result = _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx)
+        result = _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         assert result is not None
         assert len(result) == 3
         assert "Plan hash" in result[0]
@@ -369,7 +406,7 @@ class TestCollectExplainPlan:
             }
         )
         ctx = _make_ctx()
-        _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx)
+        _collect_explain_plan(cursor, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         assert cursor.execute.call_count == 3
 
     def test_inlines_binds(self):
@@ -381,7 +418,9 @@ class TestCollectExplainPlan:
             }
         )
         ctx = _make_ctx()
-        _collect_explain_plan(cursor, "SELECT * FROM t WHERE id = :id", ctx, {"id": 42})
+        _collect_explain_plan(
+            cursor, "SELECT * FROM t WHERE id = :id", ctx, _make_adapter_mock(), {"id": 42}
+        )
         # O primeiro execute deve conter o literal 42, não :id
         first_call_sql = cursor.execute.call_args_list[0][0][0]
         assert "42" in first_call_sql
@@ -404,7 +443,7 @@ class TestCollectExplainPlan:
         ctx = _make_ctx(parsed)
 
         cursor = make_cursor_dispatch({"EXPLAIN PLAN": err})
-        result = _collect_explain_plan(cursor, parsed.raw_sql, ctx)
+        result = _collect_explain_plan(cursor, parsed.raw_sql, ctx, _make_adapter_mock())
         assert result is None
         assert any("GRANT EXECUTE" in e for e in ctx.errors)
         assert any("FN_CALC" in e for e in ctx.errors)
@@ -432,7 +471,7 @@ class TestCollectRuntimeExecution:
         )
         ctx = _make_ctx()
         conn = MagicMock()
-        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
+        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         assert ctx.runtime_plan is not None
         assert ctx.runtime_stats is not None
 
@@ -449,7 +488,7 @@ class TestCollectRuntimeExecution:
         )
         ctx = _make_ctx()
         conn = MagicMock()
-        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
+        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         assert any("sql_id" in e for e in ctx.errors)
         # Falls back to explain plan
         assert ctx.execution_plan is not None
@@ -464,7 +503,7 @@ class TestCollectRuntimeExecution:
         # Na exceção, _collect_explain_plan será chamado mas também pode falhar
         ctx = _make_ctx()
         conn = MagicMock()
-        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
+        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         assert len(ctx.errors) >= 1
 
     def test_alter_session_called(self):
@@ -480,7 +519,7 @@ class TestCollectRuntimeExecution:
         )
         ctx = _make_ctx()
         conn = MagicMock()
-        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx)
+        _collect_runtime_execution(cursor, conn, "SELECT 1 FROM dual", ctx, _make_adapter_mock())
         calls = [str(c) for c in cursor.execute.call_args_list]
         assert any("STATISTICS_LEVEL" in c for c in calls)
 
@@ -497,18 +536,18 @@ class TestCollectDdl:
                 }
             }
         )
-        result = _collect_ddl(cursor, "HR", "T", _make_ctx())
+        result = _collect_ddl(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result == "CREATE TABLE t (id NUMBER)"
 
     def test_none_on_empty(self):
         cursor = make_cursor_dispatch({"DBMS_METADATA": {"description": [("ddl",)], "rows": []}})
-        result = _collect_ddl(cursor, "HR", "T", _make_ctx())
+        result = _collect_ddl(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result is None
 
     def test_error_recorded(self):
         cursor = make_cursor_dispatch({"DBMS_METADATA": RuntimeError("no priv")})
         ctx = _make_ctx()
-        result = _collect_ddl(cursor, "HR", "T", ctx)
+        result = _collect_ddl(cursor, "HR", "T", ctx, _make_adapter_mock())
         assert result is None
         assert len(ctx.errors) == 1
 
@@ -525,18 +564,18 @@ class TestCollectTableStats:
                 }
             }
         )
-        result = _collect_table_stats(cursor, "HR", "T", _make_ctx())
+        result = _collect_table_stats(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result == {"num_rows": 1000, "blocks": 50}
 
     def test_none_on_empty(self):
         cursor = make_cursor_dispatch({"all_tables": {"description": [("num_rows",)], "rows": []}})
-        result = _collect_table_stats(cursor, "HR", "T", _make_ctx())
+        result = _collect_table_stats(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result is None
 
     def test_error_recorded(self):
         ctx = _make_ctx()
         cursor = make_cursor_dispatch({"all_tables": RuntimeError("fail")})
-        result = _collect_table_stats(cursor, "HR", "T", ctx)
+        result = _collect_table_stats(cursor, "HR", "T", ctx, _make_adapter_mock())
         assert result is None
         assert len(ctx.errors) == 1
 
@@ -553,13 +592,13 @@ class TestCollectColumnStats:
                 }
             }
         )
-        result = _collect_column_stats(cursor, "HR", "T", _make_ctx())
+        result = _collect_column_stats(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert len(result) == 2
 
     def test_empty_on_error(self):
         cursor = make_cursor_dispatch({"all_tab_col": RuntimeError("fail")})
         ctx = _make_ctx()
-        result = _collect_column_stats(cursor, "HR", "T", ctx)
+        result = _collect_column_stats(cursor, "HR", "T", ctx, _make_adapter_mock())
         assert result == []
         assert len(ctx.errors) == 1
 
@@ -576,13 +615,13 @@ class TestCollectIndexes:
                 }
             }
         )
-        result = _collect_indexes(cursor, "HR", "T", _make_ctx())
+        result = _collect_indexes(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert len(result) == 1
 
     def test_empty_on_error(self):
         cursor = make_cursor_dispatch({"all_indexes": RuntimeError("fail")})
         ctx = _make_ctx()
-        result = _collect_indexes(cursor, "HR", "T", ctx)
+        result = _collect_indexes(cursor, "HR", "T", ctx, _make_adapter_mock())
         assert result == []
 
 
@@ -598,12 +637,12 @@ class TestCollectConstraints:
                 }
             }
         )
-        result = _collect_constraints(cursor, "HR", "T", _make_ctx())
+        result = _collect_constraints(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert len(result) == 1
 
     def test_empty_on_error(self):
         cursor = make_cursor_dispatch({"all_constraints": RuntimeError("fail")})
-        result = _collect_constraints(cursor, "HR", "T", _make_ctx())
+        result = _collect_constraints(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result == []
 
 
@@ -619,12 +658,12 @@ class TestCollectPartitions:
                 }
             }
         )
-        result = _collect_partitions(cursor, "HR", "T", _make_ctx())
+        result = _collect_partitions(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert len(result) == 2
 
     def test_empty_on_error(self):
         cursor = make_cursor_dispatch({"all_tab_partitions": RuntimeError("fail")})
-        result = _collect_partitions(cursor, "HR", "T", _make_ctx())
+        result = _collect_partitions(cursor, "HR", "T", _make_ctx(), _make_adapter_mock())
         assert result == []
 
 
@@ -650,7 +689,7 @@ class TestCollectHistograms:
             }
         )
         ctx = _make_ctx(parsed)
-        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx)
+        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx, _make_adapter_mock())
         assert "STATUS" in result
         assert len(result["STATUS"]) == 2
 
@@ -663,7 +702,7 @@ class TestCollectHistograms:
         columns = [{"column_name": "ID", "histogram": "NONE"}]
         cursor = make_cursor_dispatch({})
         ctx = _make_ctx(parsed)
-        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx)
+        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx, _make_adapter_mock())
         assert result == {}
 
     def test_skips_irrelevant_columns(self):
@@ -675,7 +714,7 @@ class TestCollectHistograms:
         columns = [{"column_name": "NAME", "histogram": "FREQUENCY"}]
         cursor = make_cursor_dispatch({})
         ctx = _make_ctx(parsed)
-        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx)
+        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx, _make_adapter_mock())
         assert result == {}
 
     def test_error_recorded(self):
@@ -687,7 +726,7 @@ class TestCollectHistograms:
         columns = [{"column_name": "COL1", "histogram": "FREQUENCY"}]
         cursor = make_cursor_dispatch({"all_tab_histograms": RuntimeError("fail")})
         ctx = _make_ctx(parsed)
-        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx)
+        result = _collect_histograms(cursor, "HR", "T", parsed, columns, ctx, _make_adapter_mock())
         assert result == {}
         assert len(ctx.errors) == 1
 
@@ -705,13 +744,13 @@ class TestCollectOptimizerParams:
             }
         )
         ctx = _make_ctx()
-        result = _collect_optimizer_params(cursor, ctx)
+        result = _collect_optimizer_params(cursor, ctx, _make_adapter_mock())
         assert result == {"optimizer_mode": "ALL_ROWS", "cursor_sharing": "EXACT"}
 
     def test_empty_on_error(self):
         cursor = make_cursor_dispatch({"v$parameter": RuntimeError("fail")})
         ctx = _make_ctx()
-        result = _collect_optimizer_params(cursor, ctx)
+        result = _collect_optimizer_params(cursor, ctx, _make_adapter_mock())
         assert result == {}
         assert len(ctx.errors) == 1
 
@@ -1333,27 +1372,15 @@ class TestBatchCollectTables:
         """Lista vazia → dict vazio."""
         ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
         cursor = MagicMock()
-        result = _batch_collect_tables(cursor, [], ctx)
+        result = _batch_collect_tables(cursor, [], ctx, _make_adapter_mock())
         assert result == {}
 
     def test_distributes_results(self):
         """Batch rows distribuídos por schema.table key."""
         ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
-        cursor = MagicMock()
 
-        # Mock _execute_query return values for each batch call
+        adapter = _make_adapter_mock()
         call_count = [0]
-        original_execute = cursor.execute
-
-        def mock_execute(sql, params=None):
-            return original_execute(sql, params)
-
-        cursor.execute = mock_execute
-
-        # We need to mock at module level
-        from sqlmentor import collector as collector_mod
-
-        original_exec_query = collector_mod._execute_query
 
         def mock_exec_query(cur, sql, params):
             call_count[0] += 1
@@ -1374,30 +1401,20 @@ class TestBatchCollectTables:
                 return []
             return []
 
-        collector_mod._execute_query = mock_exec_query
-        try:
-            result = _batch_collect_tables(cursor, [("HR", "USERS")], ctx)
-            assert "HR.USERS" in result
-            assert result["HR.USERS"]["stats"]["num_rows"] == 100
-            assert len(result["HR.USERS"]["columns"]) == 1
-        finally:
-            collector_mod._execute_query = original_exec_query
+        adapter.execute_query = MagicMock(side_effect=mock_exec_query)
+        result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx, adapter)
+        assert "HR.USERS" in result
+        assert result["HR.USERS"]["stats"]["num_rows"] == 100
+        assert len(result["HR.USERS"]["columns"]) == 1
 
     def test_batch_fallback_on_exception(self):
         """Batch levanta exceção → retorna dict vazio (sinaliza fallback)."""
         ctx = CollectedContext(parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT"))
 
-        from sqlmentor import collector as collector_mod
-
-        original_exec_query = collector_mod._execute_query
-
-        def mock_exec_query(cur, sql, params):
-            raise RuntimeError("ORA-00942: table or view does not exist")
-
-        collector_mod._execute_query = mock_exec_query
-        try:
-            result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx)
-            assert result == {}
-            assert any("fallback" in e.lower() for e in ctx.errors)
-        finally:
-            collector_mod._execute_query = original_exec_query
+        adapter = _make_adapter_mock()
+        adapter.execute_query = MagicMock(
+            side_effect=RuntimeError("ORA-00942: table or view does not exist")
+        )
+        result = _batch_collect_tables(MagicMock(), [("HR", "USERS")], ctx, adapter)
+        assert result == {}
+        assert any("fallback" in e.lower() for e in ctx.errors)

@@ -45,6 +45,18 @@ class QueryBuilder(ABC):
         """Parâmetros relevantes do otimizador."""
 
     @abstractmethod
+    def set_statistics_level(self, level: str) -> tuple[str, dict]:
+        """ALTER SESSION SET STATISTICS_LEVEL (DDL, não aceita binds)."""
+
+    @abstractmethod
+    def session_sid(self) -> tuple[str, dict]:
+        """SID da sessão atual."""
+
+    @abstractmethod
+    def prev_sql_id(self) -> tuple[str, dict]:
+        """sql_id da query anterior executada na sessão."""
+
+    @abstractmethod
     def session_wait_events(self, session_id: int) -> tuple[str, dict]:
         """Wait events da sessão (top por tempo)."""
 

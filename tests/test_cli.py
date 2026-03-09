@@ -101,11 +101,18 @@ def _analyze_patches(
     )
 
     mock_conn = MagicMock()
+    mock_adapter = MagicMock()
     if connect_exc:
-        monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(side_effect=connect_exc))
+        monkeypatch.setattr(
+            "sqlmentor.connector.connect_with_adapter", MagicMock(side_effect=connect_exc)
+        )
     else:
-        monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(return_value=mock_conn))
+        monkeypatch.setattr(
+            "sqlmentor.connector.connect_with_adapter",
+            MagicMock(return_value=(mock_adapter, mock_conn)),
+        )
     mocks["conn"] = mock_conn
+    mocks["adapter"] = mock_adapter
 
     monkeypatch.setattr("sqlmentor.parser.parse_sql", lambda sql, **kw: _make_parsed())
     monkeypatch.setattr("sqlmentor.parser.is_normalized_sql", lambda sql: is_normalized)
@@ -201,24 +208,28 @@ def _inspect_patches(
     else:
         mock_cursor.description = [("sql_id",), ("executions",)]
 
-    monkeypatch.setattr("sqlmentor.connector.connect", MagicMock(return_value=mock_conn))
+    mock_adapter = MagicMock()
+    mock_qb = MagicMock()
+    mock_adapter.query_builder = mock_qb
+    mock_qb.sql_text_by_id = MagicMock(
+        side_effect=lambda sid: ("SELECT sql_fulltext FROM v$sql WHERE sql_id = :sid", {"sid": sid})
+    )
+    mock_qb.runtime_plan = MagicMock(
+        side_effect=lambda sid: ("SELECT plan_table_output FROM ...", {"sid": sid})
+    )
+    mock_qb.sql_runtime_stats = MagicMock(
+        side_effect=lambda sid: ("SELECT * FROM v$sql WHERE sql_id = :sid", {"sid": sid})
+    )
+
+    monkeypatch.setattr(
+        "sqlmentor.connector.connect_with_adapter",
+        MagicMock(return_value=(mock_adapter, mock_conn)),
+    )
     mocks["conn"] = mock_conn
     mocks["cursor"] = mock_cursor
+    mocks["adapter"] = mock_adapter
 
     monkeypatch.setattr("sqlmentor.parser.parse_sql", lambda sql, **kw: _make_parsed())
-
-    monkeypatch.setattr(
-        "sqlmentor.queries.sql_text_by_id",
-        lambda sid: ("SELECT sql_fulltext FROM v$sql WHERE sql_id = :sid", {"sid": sid}),
-    )
-    monkeypatch.setattr(
-        "sqlmentor.queries.runtime_plan",
-        lambda sid: ("SELECT plan_table_output FROM ...", {"sid": sid}),
-    )
-    monkeypatch.setattr(
-        "sqlmentor.queries.sql_runtime_stats",
-        lambda sid: ("SELECT * FROM v$sql WHERE sql_id = :sid", {"sid": sid}),
-    )
 
     if sql_not_found:
         # collect_context won't be called
