@@ -70,6 +70,7 @@ Todo colapso é explícito: `replacement_lines[0]` sempre começa com `[COLAPSAD
 ```
 CollectedContext (collector.py)
 ├── parsed_sql: ParsedSQL
+├── db_type: str                        # "oracle" (default) ou "mariadb"
 ├── db_version: str | None
 ├── execution_plan: list[str] | None     # EXPLAIN PLAN estimado
 ├── runtime_plan: list[str] | None       # ALLSTATS LAST (execute=True ou inspect)
@@ -92,7 +93,8 @@ TableContext (collector.py)
 PlanBlock (report.py)
 ├── id, operation, name
 ├── starts, e_rows, a_rows, a_time_ms
-├── buffers, reads      # já convertidos de K/M/G
+├── buffers: int | None # já convertidos de K/M/G (None em MariaDB)
+├── reads: int | None   # (None em MariaDB)
 ├── indent              # proxy de profundidade
 ├── immune: bool        # setado só por _apply_thresholds
 └── children: list      # reservado, não usado nas regras

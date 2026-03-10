@@ -306,18 +306,22 @@ class TestMariaDBQueryBuilder:
         assert "1=0" in sql
         assert params == {}
 
-    def test_explain_plan_stub(self):
+    def test_explain_plan_returns_explain_format_json(self):
         qb = MariaDBQueryBuilder()
-        result = qb.explain_plan("SELECT 1")
+        result = qb.explain_plan("SELECT * FROM orders WHERE id = 1")
         assert isinstance(result, list)
         assert len(result) == 1
-        assert "1=0" in result[0][0]
+        sql, params = result[0]
+        assert sql.startswith("EXPLAIN FORMAT=JSON ")
+        assert "SELECT * FROM orders WHERE id = 1" in sql
+        assert params == {}
 
-    def test_runtime_plan_stub(self):
+    def test_runtime_plan_queries_perf_schema(self):
         qb = MariaDBQueryBuilder()
         sql, params = qb.runtime_plan("abc123")
-        assert "1=0" in sql
-        assert params == {}
+        assert "performance_schema" in sql
+        assert "DIGEST" in sql
+        assert params == {"sql_id": "abc123"}
 
     def test_all_methods_return_valid_tuples(self):
         """Todos os métodos retornam tuple[str, dict] com SQL válido."""

@@ -73,8 +73,13 @@ _THRESHOLD_ATIME_MS = 100.0
 _CARDINALITY_RATIO = 10
 
 
-def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
-    """Parseia o plano em lista plana de PlanBlock via OraclePlanParser."""
+def _detect_plan_blocks(plan_lines: list[str], db_type: str = "oracle") -> list[PlanBlock]:
+    """Parseia o plano em lista plana de PlanBlock via parser do banco."""
+    if db_type == "mariadb":
+        from sqlmentor.adapters.mariadb import MariaDBPlanParser
+
+        return MariaDBPlanParser().parse_plan(plan_lines)
+
     from sqlmentor.adapters.oracle import OraclePlanParser
 
     return OraclePlanParser().parse_plan(plan_lines)
@@ -623,8 +628,13 @@ def _strip_column_projection(predicate_lines: list[str]) -> list[str]:
     return result
 
 
-def _is_estimated_plan(plan_lines: list[str]) -> bool:
-    """Detecta se o plano é EXPLAIN PLAN (estimado) via OraclePlanParser."""
+def _is_estimated_plan(plan_lines: list[str], db_type: str = "oracle") -> bool:
+    """Detecta se o plano é estimado via parser do banco."""
+    if db_type == "mariadb":
+        from sqlmentor.adapters.mariadb import MariaDBPlanParser
+
+        return not MariaDBPlanParser().is_runtime_plan(plan_lines)
+
     from sqlmentor.adapters.oracle import OraclePlanParser
 
     return not OraclePlanParser().is_runtime_plan(plan_lines)
@@ -634,6 +644,7 @@ def _compress_plan(
     plan_lines: list[str],
     predicate_lines: list[str],
     verbosity: str,
+    db_type: str = "oracle",
 ) -> tuple[list[str], list[str]]:
     """
 
@@ -652,13 +663,13 @@ def _compress_plan(
     if verbosity == "full":
         return plan_lines, predicate_lines
 
-    blocks = _detect_plan_blocks(plan_lines)
+    blocks = _detect_plan_blocks(plan_lines, db_type=db_type)
 
     _apply_thresholds(blocks)
 
     pred_map = _build_predicate_map(plan_lines)
 
-    is_estimated = _is_estimated_plan(plan_lines)
+    is_estimated = _is_estimated_plan(plan_lines, db_type=db_type)
 
     # Coleta todos os colapsos
 
@@ -805,12 +816,12 @@ def _collapse_orphan_predicates_by_ids(plan_lines: list[str], collapsed_ids: set
     return result
 
 
-def _extract_plan_index_names(plan_lines: list[str]) -> set[str]:
+def _extract_plan_index_names(plan_lines: list[str], db_type: str = "oracle") -> set[str]:
     """Extrai nomes de índices referenciados no plano de execução (R9).
 
     Parseia linhas do plano via PlanBlock e retorna o ``name`` de operações contendo "INDEX".
     """
-    blocks = _detect_plan_blocks(plan_lines)
+    blocks = _detect_plan_blocks(plan_lines, db_type=db_type)
     return {b.name for b in blocks if "INDEX" in b.operation.upper() and b.name}
 
 
@@ -1086,7 +1097,9 @@ def to_markdown(
         if verbosity != "full":
             predicate_lines = _strip_column_projection(predicate_lines)
 
-        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        plan_compressed, pred_compressed = _compress_plan(
+            plan_lines, predicate_lines, verbosity, db_type=ctx.db_type
+        )
 
         for line in plan_compressed + pred_compressed:
             lines.append(line)
@@ -1128,7 +1141,9 @@ def to_markdown(
         if verbosity != "full":
             predicate_lines = _strip_column_projection(predicate_lines)
 
-        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        plan_compressed, pred_compressed = _compress_plan(
+            plan_lines, predicate_lines, verbosity, db_type=ctx.db_type
+        )
 
         for line in plan_compressed + pred_compressed:
             lines.append(line)
@@ -1296,7 +1311,7 @@ def to_markdown(
     plan_index_names: set[str] = set()
     for plan_source_r9 in (ctx.runtime_plan, ctx.execution_plan):
         if plan_source_r9:
-            plan_index_names.update(_extract_plan_index_names(plan_source_r9))
+            plan_index_names.update(_extract_plan_index_names(plan_source_r9, db_type=ctx.db_type))
 
     # Separa tabelas pequenas (< 1000 rows) pra formato compacto
 

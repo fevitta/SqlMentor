@@ -107,6 +107,7 @@ def _make_adapter_mock():
     from sqlmentor.adapters.oracle import OracleQueryBuilder
 
     adapter = MagicMock()
+    adapter.db_type = "oracle"
     adapter.query_builder = OracleQueryBuilder()
 
     def _exec_query(cursor, sql, params):

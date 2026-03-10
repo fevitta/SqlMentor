@@ -66,19 +66,24 @@ def _load_connections() -> dict[str, dict]:
     return connections
 
 
-def validate_privileges(conn: Any) -> None:
+def validate_privileges(conn: Any, adapter: Any | None = None) -> None:
     """
     Verifica se o user conectado tem apenas privilégios de leitura.
 
-    Delega ao adapter Oracle e levanta PermissionError se encontrar
+    Delega ao adapter correspondente e levanta PermissionError se encontrar
     qualquer privilégio de escrita/DDL ou role perigosa.
+
+    Args:
+        conn: Conexão ativa.
+        adapter: DatabaseAdapter. Se None, usa OracleAdapter (backward compat).
 
     Raises:
         PermissionError: Se o user tiver privilégios além de leitura.
     """
-    from sqlmentor.adapters import get_adapter
+    if adapter is None:
+        from sqlmentor.adapters import get_adapter
 
-    adapter = get_adapter("oracle")()
+        adapter = get_adapter("oracle")()
     result = adapter.validate_privileges(conn)
 
     problems: list[str] = []
@@ -88,7 +93,7 @@ def validate_privileges(conn: Any) -> None:
         problems.append(f"Roles perigosas: {', '.join(result['dangerous_roles'])}")
 
     if problems:
-        user = conn.username or "desconhecido"
+        user = getattr(conn, "username", None) or getattr(conn, "user", "desconhecido")
         raise PermissionError(
             f"Usuário '{user}' tem permissões além de leitura. "
             f"O sqlmentor recusa conexão por segurança.\n"
@@ -220,7 +225,7 @@ def connect_with_adapter(name: str, timeout: int | None = None) -> tuple[Any, An
 
     # Valida que o user não tem privilégios além de leitura
     try:
-        validate_privileges(conn)
+        validate_privileges(conn, adapter=adapter)
     except PermissionError:
         conn.close()
         raise

@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import pymysql  # type: ignore[import-untyped]
 
@@ -62,12 +62,19 @@ class MariaDBQueryBuilder(QueryBuilder):
     # ── Plano de execução ────────────────────────────────────────────
 
     def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
-        """Stub — será implementado em T20."""
-        return [("SELECT 1 WHERE 1=0", {})]
+        """EXPLAIN FORMAT=JSON — 1 step (MariaDB não usa PLAN_TABLE)."""
+        return [("EXPLAIN FORMAT=JSON " + sql_text, {})]
 
     def runtime_plan(self, sql_id: str, child_number: int = 0) -> tuple[str, dict]:
-        """Stub — será implementado em T20."""
-        return ("SELECT 1 WHERE 1=0", {})
+        """Best-effort: busca plano via performance_schema por DIGEST."""
+        return (
+            """
+            SELECT DIGEST_TEXT AS plan_table_output
+            FROM performance_schema.events_statements_summary_by_digest
+            WHERE DIGEST = %(sql_id)s
+            """,
+            {"sql_id": sql_id},
+        )
 
     # ── Sessão / instância ───────────────────────────────────────────
 
@@ -904,15 +911,25 @@ class MariaDBAdapter(DatabaseAdapter):
         finally:
             conn.close()
 
+    # Mapeamento de colunas SHOW CREATE → "ddl" (compatível com Oracle DDL flow)
+    _DDL_COL_REMAP: ClassVar[dict[str, str]] = {
+        "create table": "ddl",
+        "create view": "ddl",
+        "create function": "ddl",
+        "create procedure": "ddl",
+    }
+
     def execute_query(self, cursor: Any, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Executa query e retorna resultados como lista de dicts.
 
         Sem LOB handling — PyMySQL já retorna tipos Python nativos.
+        Remapeia colunas de SHOW CREATE (Create Table → ddl) para compatibilidade.
         """
         cursor.execute(sql, params or None)
         if cursor.description is None:
             return []
         columns = [col[0].lower() for col in cursor.description]
+        columns = [self._DDL_COL_REMAP.get(c, c) for c in columns]
         rows = []
         for row in cursor:
             rows.append(dict(zip(columns, row, strict=False)))

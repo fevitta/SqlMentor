@@ -101,6 +101,7 @@ class CollectedContext:
     """Contexto completo coletado para análise."""
 
     parsed_sql: ParsedSQL
+    db_type: str = "oracle"
     db_version: str | None = None
     execution_plan: list[str] | None = None
     runtime_plan: list[str] | None = None
@@ -216,7 +217,7 @@ def collect_context(
         adapter = _get_default_adapter()
 
     qb = adapter.query_builder
-    ctx = CollectedContext(parsed_sql=parsed)
+    ctx = CollectedContext(parsed_sql=parsed, db_type=adapter.db_type)
     cursor = conn.cursor()
 
     # Remove terminador SQL*Plus (;) — Oracle não aceita via cursor.execute()
@@ -427,8 +428,11 @@ def _collect_view_expansion(
         if not ddl_text.strip():
             return
 
+        # Deriva dialect do adapter para sqlglot
+        dialect = "mysql" if adapter.db_type == "mariadb" else "oracle"
+
         # Extrai o SELECT da view (tudo depois de "AS")
-        view_tables = _parse_view_tables(ddl_text)
+        view_tables = _parse_view_tables(ddl_text, dialect=dialect)
         if view_tables:
             ctx.view_expansions[view_key] = view_tables
 
@@ -436,7 +440,7 @@ def _collect_view_expansion(
         ctx.errors.append(f"Erro ao coletar view expansion de {view_key}: {e}")
 
 
-def _parse_view_tables(ddl_text: str) -> list[str]:
+def _parse_view_tables(ddl_text: str, dialect: str = "oracle") -> list[str]:
     """Extrai tabelas referenciadas na DDL de uma view via sqlglot."""
     # Tenta encontrar o SELECT dentro da DDL da view
     # DDL típica: CREATE OR REPLACE VIEW "SCHEMA"."VIEW" AS SELECT ... FROM ...
@@ -454,7 +458,7 @@ def _parse_view_tables(ddl_text: str) -> list[str]:
         return []
 
     try:
-        statements = sqlglot.parse(select_sql, dialect="oracle")
+        statements = sqlglot.parse(select_sql, dialect=dialect)
     except sqlglot.errors.ParseError:
         # Fallback: regex simples pra FROM/JOIN
         import re
@@ -532,6 +536,16 @@ def _collect_explain_plan(
         inlined_sql = _inline_binds(sql_text, bind_params)
         steps = adapter.query_builder.explain_plan(inlined_sql)
 
+        if len(steps) == 1:
+            # MariaDB: EXPLAIN FORMAT=JSON em 1 step — retorna JSON em single row
+            explain_stmt, params = steps[0]
+            cursor.execute(explain_stmt, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                return str(row[0]).splitlines()
+            return None
+
+        # Oracle: 3-step flow (EXPLAIN PLAN FOR → SELECT PLAN → DELETE)
         # Step 1: EXPLAIN PLAN FOR ... (sem binds, já inlined)
         explain_stmt, params = steps[0]
         cursor.execute(explain_stmt, params)
@@ -548,35 +562,32 @@ def _collect_explain_plan(
         return plan_lines
     except Exception as e:
         msg = f"Erro ao coletar EXPLAIN PLAN: {e}"
-        # Extrai offset do erro Oracle pra indicar a linha problemática
-        if hasattr(e, "args") and e.args and hasattr(e.args[0], "offset"):
-            offset = e.args[0].offset
-            if offset and offset > 0:
-                # O offset é relativo ao explain_stmt completo
-                # Desconta o prefixo "EXPLAIN PLAN SET STATEMENT_ID = '...' FOR "
-                prefix_len = len(explain_stmt) - len(inlined_sql)
-                adj_offset = offset - prefix_len
-                if 0 <= adj_offset < len(inlined_sql):
-                    # Calcula linha e coluna no SQL com binds inlined
-                    before = inlined_sql[:adj_offset]
-                    line_no = before.count("\n") + 1
-                    line_start = before.rfind("\n") + 1
-                    line_end = inlined_sql.find("\n", adj_offset)
-                    if line_end == -1:
-                        line_end = len(inlined_sql)
-                    offending_line = inlined_sql[line_start:line_end].strip()
-                    msg += f'\n- Line {line_no}: "{offending_line}"'
+        # Detalhes de erro Oracle (offset, ORA-01031)
+        if adapter.db_type == "oracle":
+            if hasattr(e, "args") and e.args and hasattr(e.args[0], "offset"):
+                offset = e.args[0].offset
+                if offset and offset > 0:
+                    prefix_len = len(explain_stmt) - len(inlined_sql)
+                    adj_offset = offset - prefix_len
+                    if 0 <= adj_offset < len(inlined_sql):
+                        before = inlined_sql[:adj_offset]
+                        line_no = before.count("\n") + 1
+                        line_start = before.rfind("\n") + 1
+                        line_end = inlined_sql.find("\n", adj_offset)
+                        if line_end == -1:
+                            line_end = len(inlined_sql)
+                        offending_line = inlined_sql[line_start:line_end].strip()
+                        msg += f'\n- Line {line_no}: "{offending_line}"'
 
-        # Sugere GRANTs de EXECUTE pra funções PL/SQL quando ORA-01031
-        err_code = getattr(e.args[0], "code", 0) if e.args else 0
-        if err_code == 1031 and ctx.parsed_sql.functions:
-            msg += "\nHelp: https://docs.oracle.com/error-help/db/ora-01031/"
-            msg += "\nFix: conceda EXECUTE nas funções PL/SQL referenciadas:"
-            for fn in ctx.parsed_sql.functions:
-                schema = fn.get("schema", "")
-                name = fn.get("name", "")
-                qualified = f"{schema}.{name}" if schema else name
-                msg += f"\n  GRANT EXECUTE ON {qualified} TO SQLMENTOR_EXEC_ROLE;"
+            err_code = getattr(e.args[0], "code", 0) if e.args else 0
+            if err_code == 1031 and ctx.parsed_sql.functions:
+                msg += "\nHelp: https://docs.oracle.com/error-help/db/ora-01031/"
+                msg += "\nFix: conceda EXECUTE nas funções PL/SQL referenciadas:"
+                for fn in ctx.parsed_sql.functions:
+                    schema = fn.get("schema", "")
+                    name = fn.get("name", "")
+                    qualified = f"{schema}.{name}" if schema else name
+                    msg += f"\n  GRANT EXECUTE ON {qualified} TO SQLMENTOR_EXEC_ROLE;"
 
         ctx.errors.append(msg)
         return None
@@ -598,6 +609,41 @@ def _collect_runtime_execution(
     """
     qb = adapter.query_builder
     try:
+        if adapter.db_type == "mariadb":
+            # MariaDB: ANALYZE FORMAT=JSON executa e retorna plano real em 1 step
+            # Pega SID antes de executar
+            sql, params = qb.session_sid()
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            sid = row[0] if row else None
+
+            # ANALYZE FORMAT=JSON re-executa a query — inline binds
+            inlined_sql = _inline_binds(sql_text, bind_params)
+            analyze_sql = "ANALYZE FORMAT=JSON " + inlined_sql
+            cursor.execute(analyze_sql)
+            row = cursor.fetchone()
+            if row and row[0]:
+                ctx.runtime_plan = str(row[0]).splitlines()
+
+            # Coleta sql_id e stats via performance_schema
+            sql, params = qb.prev_sql_id()
+            cursor.execute(sql, params)
+            row = cursor.fetchone()
+            sql_id = row[0] if row else None
+
+            if sql_id:
+                sql, params = qb.sql_runtime_stats(sql_id)
+                rows = adapter.execute_query(cursor, sql, params)
+                ctx.runtime_stats = rows[0] if rows else None
+
+            if sid:
+                sql, params = qb.session_wait_events(sid)
+                ctx.wait_events = adapter.execute_query(cursor, sql, params)
+
+            ctx.errors.append("MariaDB ANALYZE re-executa a query — use com cautela em produção.")
+            return
+
+        # Oracle: GATHER_PLAN_STATISTICS + DBMS_XPLAN.DISPLAY_CURSOR
         # Ativa coleta de estatísticas na sessão
         sql, params = qb.set_statistics_level("ALL")
         cursor.execute(sql, params)
@@ -644,7 +690,11 @@ def _collect_runtime_execution(
 
     except Exception as e:
         err_msg = str(e)
-        if "DPY-4011" in err_msg or "call timeout" in err_msg.lower():
+        if (
+            "DPY-4011" in err_msg
+            or "call timeout" in err_msg.lower()
+            or "timed out" in err_msg.lower()
+        ):
             ctx.errors.append(
                 "Query cancelada por timeout. "
                 "Execute o SQL diretamente no banco e use "

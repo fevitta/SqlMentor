@@ -3,7 +3,7 @@
 > Adicionar suporte a MariaDB ao SqlMentor usando o adapter pattern da Fase 1.
 > **Depende de:** Fase 1 completa (T1-T9) ✅
 
-## Status: IN PROGRESS (3/7)
+## Status: IN PROGRESS (4/7)
 
 ## Ordem de Execução
 
@@ -63,16 +63,21 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ---
 
 ### T19: Coleta de metadata MariaDB
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T4 ✅, T9 ✅, T18 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] Integrar `MariaDBQueryBuilder` no collector via adapter
-  - [ ] DDL via `SHOW CREATE TABLE` (mais simples que Oracle)
-  - [ ] Sem LOBs — resultados são strings diretas
-  - [ ] `EXPLAIN ANALYZE` com alerta ao usuário (pode afetar stats da tabela)
-  - [ ] Tratar diferenças de storage engine (InnoDB vs MyISAM)
+  - [x] `db_type` em `CollectedContext` — propaga tipo do adapter para report
+  - [x] `_collect_explain_plan` generalizado: 1-step (MariaDB) vs 3-step (Oracle)
+  - [x] `_collect_runtime_execution` branch MariaDB: ANALYZE FORMAT=JSON + warning
+  - [x] DDL column remap em `execute_query`: `Create Table` → `ddl`
+  - [x] `validate_privileges` adapter-aware (backward compat sem adapter)
+  - [x] `_parse_view_tables` com dialect parametrizável (mysql vs oracle)
+  - [x] `report.py`: `db_type` em `_detect_plan_blocks`, `_is_estimated_plan`, `_compress_plan`, `_extract_plan_index_names`
+  - [x] `explain_plan` → `EXPLAIN FORMAT=JSON`, `runtime_plan` → performance_schema
+  - [x] Timeout MariaDB: `"timed out"` pattern
+  - [x] Testes: `test_collector_mariadb.py` (9 testes) + adapter stubs atualizados
 
 ---
 
@@ -158,10 +163,10 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 |--------|--------|------------|
 | T17 MariaDBAdapter | ✅ DONE | T1 ✅, T2 ✅ |
 | T18 queries/mariadb.py | ✅ DONE | T3 ✅, T17 ✅ |
-| T19 Coleta metadata | ⬜ TODO | T4 ✅, T9 ✅, T18 ✅ |
+| T19 Coleta metadata | ✅ DONE | T4 ✅, T9 ✅, T18 ✅ |
 | T20 MariaDBPlanParser | ✅ DONE | T1 ✅, T5 ✅ |
 | T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 ✅ |
 | T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 ✅ |
 | T21 Integração MariaDB | ⬜ TODO | T17 ✅-T23 |
 
-**Progresso**: 3/7 tarefas concluídas
+**Progresso**: 4/7 tarefas concluídas
