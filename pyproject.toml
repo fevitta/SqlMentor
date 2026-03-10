@@ -58,10 +58,11 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=tests/integration"
+addopts = "--ignore=tests/integration --ignore=tests/integration/mariadb"
 markers = [
     "slow: requer conexão Oracle real",
     "oracle: integration test requiring a live Oracle database",
+    "mariadb: integration test requiring a live MariaDB database",
 ]
 
 [tool.coverage.run]
@@ -78,7 +79,8 @@ test-q   = "pytest tests/ -q"
 lint     = "ruff check src/ tests/"
 lint-fix = "ruff check src/ tests/ --fix"
 format       = "ruff format src/ tests/"
-test-oracle  = "pytest tests/integration/ -v --tb=short"
+test-oracle  = "pytest tests/integration/ -v --tb=short --ignore=tests/integration/mariadb"
+test-mariadb = "pytest tests/integration/mariadb/ -v --tb=short"
 test-all     = "pytest tests/ tests/integration/ -v --tb=short"
 build-dev    = "pip install -e .[dev]"
 build-deploy = "python -m build --wheel --outdir dist/"

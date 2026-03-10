@@ -367,7 +367,7 @@ class MariaDBQueryBuilder(QueryBuilder):
                    0 AS plan_hash_value,
                    COUNT_STAR AS executions,
                    SUM_TIMER_WAIT / 1000000 AS elapsed_time,
-                   SUM_CPU_TIME / 1000000 AS cpu_time,
+                   0 AS cpu_time,
                    SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED AS buffer_gets,
                    SUM_SORT_MERGE_PASSES AS disk_reads,
                    SUM_ROWS_SENT AS rows_processed,
@@ -380,9 +380,7 @@ class MariaDBQueryBuilder(QueryBuilder):
                    CASE WHEN COUNT_STAR > 0
                         THEN SUM_TIMER_WAIT / COUNT_STAR / 1000000000
                         ELSE 0 END AS avg_elapsed_ms,
-                   CASE WHEN COUNT_STAR > 0
-                        THEN SUM_CPU_TIME / COUNT_STAR / 1000000000
-                        ELSE 0 END AS avg_cpu_ms,
+                   0 AS avg_cpu_ms,
                    CASE WHEN COUNT_STAR > 0
                         THEN (SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) / COUNT_STAR
                         ELSE 0 END AS avg_buffer_gets,
@@ -517,7 +515,14 @@ class MariaDBQueryBuilder(QueryBuilder):
         """Constraints de múltiplas tabelas em uma query."""
         if not pairs:
             return ("SELECT 1 WHERE 1=0", {})
-        where_clause, params = self.build_tuple_in_clause(pairs)
+        # Qualified WHERE para evitar ambiguidade com JOINs (tc.TABLE_SCHEMA)
+        parts: list[str] = []
+        params: dict[str, str] = {}
+        for i, (owner, table_name) in enumerate(pairs):
+            parts.append(f"(tc.TABLE_SCHEMA = %(o{i})s AND tc.TABLE_NAME = %(t{i})s)")
+            params[f"o{i}"] = owner.upper()
+            params[f"t{i}"] = table_name.upper()
+        where_clause = " OR ".join(parts)
         return (
             f"""
             SELECT tc.TABLE_SCHEMA AS owner, tc.TABLE_NAME AS table_name,

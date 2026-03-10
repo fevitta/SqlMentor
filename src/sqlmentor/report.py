@@ -1927,6 +1927,7 @@ def to_json(ctx: CollectedContext) -> str:
 
     data: dict[str, Any] = {
         "generated_at": datetime.now().isoformat(),
+        "db_type": ctx.db_type,
         "db_version": ctx.db_version,
         "sql": {
             "raw": ctx.parsed_sql.raw_sql,

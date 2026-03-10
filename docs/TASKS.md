@@ -3,7 +3,7 @@
 > Adicionar suporte a MariaDB ao SqlMentor usando o adapter pattern da Fase 1.
 > **Depende de:** Fase 1 completa (T1-T9) ✅
 
-## Status: IN PROGRESS (6/7)
+## Status: COMPLETE (7/7)
 
 ## Ordem de Execução
 
@@ -151,15 +151,21 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ---
 
 ### T21: Testes de integração MariaDB
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T17, T18, T19, T22, T23
 - **Bloqueia**: T24 (CI multi-database)
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] `docker-compose.yml` com MariaDB 10.6 + `performance_schema` habilitado
-  - [ ] Schema de teste com tabelas InnoDB, índices, constraints, partições
-  - [ ] Testes: analyze (estimado), analyze --execute (real), inspect, parse
-  - [ ] CI condicional (`if: github.event.inputs.run_mariadb_tests`)
+  - [x] `docker-compose.yml` com MariaDB 10.6 + `performance_schema` habilitado
+  - [x] Schema de teste com tabelas InnoDB, índices, constraints, partições (ORDER_ARCHIVE)
+  - [x] `tests/integration/mariadb/conftest.py` — session fixtures + seed_query_digest
+  - [x] `test_connection.py` — 5 testes (version, database, privileges, optimizer, dangerous)
+  - [x] `test_collector.py` — 15 testes (object_type, stats, columns, indexes, constraints, DDL, batch, index_map, full collect, view expansion, partitions)
+  - [x] `test_explain_plan.py` — 8 testes (EXPLAIN JSON, JOIN, ANALYZE JSON, parser, is_runtime)
+  - [x] `test_inspect.py` — 5 testes (digest lookup, sql_text, runtime_stats, inspect flow, wait events)
+  - [x] `test_report_e2e.py` — 6 testes (markdown sections, compact vs full, JSON valid, db_type, runtime)
+  - [x] CI: `check-mariadb-paths` + `integration-mariadb` job com `workflow_dispatch`
+  - [x] `pyproject.toml`: marker `mariadb` + task `test-mariadb`
 
 ---
 
@@ -173,6 +179,6 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 | T20 MariaDBPlanParser | ✅ DONE | T1 ✅, T5 ✅ |
 | T22 Validar R1-R12 | ✅ DONE | T5 ✅, T20 ✅ |
 | T23 inspect MariaDB | ✅ DONE | T6 ✅, T17 ✅ |
-| T21 Integração MariaDB | ⬜ TODO | T17 ✅-T23 ✅ |
+| T21 Integração MariaDB | ✅ DONE | T17 ✅-T23 ✅ |
 
-**Progresso**: 6/7 tarefas concluídas
+**Progresso**: 7/7 tarefas concluídas
