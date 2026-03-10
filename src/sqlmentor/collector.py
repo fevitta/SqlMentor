@@ -244,11 +244,15 @@ def collect_context(
 
     # 2. Metadata de cada tabela — two-phase: detect+DDL per-table, then batch
     collected_objects: set[str] = set()
+    _fold = adapter.fold_case  # Oracle: uppercase identifiers; MariaDB: preserve case
     # Phase 1: detect object type, collect DDL, identify tables for batch
     tables_for_batch: list[tuple[str, str, str, TableContext]] = []  # (schema, name, key, tctx)
     for table in parsed.tables:
-        schema = (table.get("schema") or default_schema).upper()
-        name = table["name"].upper()
+        schema = table.get("schema") or default_schema
+        name = table["name"]
+        if _fold:
+            schema = schema.upper()
+            name = name.upper()
         obj_key = f"{schema}.{name}"
 
         # Pula se já coletou esse objeto (mesma view/tabela referenciada 2x)
@@ -329,7 +333,7 @@ def collect_context(
             for tbl in inner_tables:
                 parts = tbl.split(".")
                 if len(parts) == 2:
-                    schemas_to_map.add(parts[0].upper())
+                    schemas_to_map.add(parts[0].upper() if _fold else parts[0])
         # Inclui schema das tabelas diretas também (podem ter índices no plano)
         for t in ctx.tables:
             schemas_to_map.add(t.schema)
@@ -347,7 +351,10 @@ def collect_context(
                     idx_name = row.get("index_name", "")
                     tbl_name = row.get("table_name", "")
                     if idx_name and tbl_name:
-                        schema_map[idx_name.upper()] = tbl_name.upper()
+                        if _fold:
+                            schema_map[idx_name.upper()] = tbl_name.upper()
+                        else:
+                            schema_map[idx_name] = tbl_name
                 ctx.index_table_map.update(schema_map)
                 if use_cache:
                     _index_map_cache.put(schema, schema_map)
@@ -481,8 +488,8 @@ def _parse_view_tables(ddl_text: str, dialect: str = "oracle") -> list[str]:
             continue
         for table in stmt.find_all(exp.Table):
             if table.name:
-                tname = table.name.upper()
-                tschema = (table.db or "").upper()
+                tname = table.name.upper() if dialect == "oracle" else table.name
+                tschema = (table.db or "").upper() if dialect == "oracle" else (table.db or "")
                 if tschema:
                     tables.add(f"{tschema}.{tname}")
                 else:

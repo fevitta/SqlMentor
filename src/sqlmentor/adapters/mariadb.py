@@ -55,8 +55,8 @@ class MariaDBQueryBuilder(QueryBuilder):
         params: dict[str, str] = {}
         for i, (owner, table_name) in enumerate(pairs):
             parts.append(f"(TABLE_SCHEMA = %(o{i})s AND TABLE_NAME = %(t{i})s)")
-            params[f"o{i}"] = owner.upper()
-            params[f"t{i}"] = table_name.upper()
+            params[f"o{i}"] = owner
+            params[f"t{i}"] = table_name
         return " OR ".join(parts), params
 
     # ── Plano de execução ────────────────────────────────────────────
@@ -171,7 +171,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             WHERE TABLE_SCHEMA = %(owner)s
             AND TABLE_NAME = %(object_name)s
             """,
-            {"owner": owner.upper(), "object_name": object_name.upper()},
+            {"owner": owner, "object_name": object_name},
         )
 
     def table_ddl(self, owner: str, table_name: str) -> tuple[str, dict]:
@@ -213,7 +213,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             WHERE TABLE_SCHEMA = %(owner)s
             AND TABLE_NAME = %(table_name)s
             """,
-            {"owner": owner.upper(), "table_name": table_name.upper()},
+            {"owner": owner, "table_name": table_name},
         )
 
     def column_stats(self, owner: str, table_name: str) -> tuple[str, dict]:
@@ -237,7 +237,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             AND TABLE_NAME = %(table_name)s
             ORDER BY ORDINAL_POSITION
             """,
-            {"owner": owner.upper(), "table_name": table_name.upper()},
+            {"owner": owner, "table_name": table_name},
         )
 
     def indexes(self, owner: str, table_name: str) -> tuple[str, dict]:
@@ -264,7 +264,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             GROUP BY INDEX_NAME, INDEX_TYPE, NON_UNIQUE, CARDINALITY
             ORDER BY INDEX_NAME
             """,
-            {"owner": owner.upper(), "table_name": table_name.upper()},
+            {"owner": owner, "table_name": table_name},
         )
 
     def constraints(self, owner: str, table_name: str) -> tuple[str, dict]:
@@ -304,7 +304,7 @@ class MariaDBQueryBuilder(QueryBuilder):
                      rc.UNIQUE_CONSTRAINT_NAME, kcu2.TABLE_NAME, kcu2.TABLE_SCHEMA
             ORDER BY tc.CONSTRAINT_TYPE, tc.CONSTRAINT_NAME
             """,
-            {"owner": owner.upper(), "table_name": table_name.upper()},
+            {"owner": owner, "table_name": table_name},
         )
 
     def histograms(self, owner: str, table_name: str, column_name: str) -> tuple[str, dict]:
@@ -319,9 +319,9 @@ class MariaDBQueryBuilder(QueryBuilder):
             AND COLUMN_NAME = %(column_name)s
             """,
             {
-                "owner": owner.upper(),
-                "table_name": table_name.upper(),
-                "column_name": column_name.upper(),
+                "owner": owner,
+                "table_name": table_name,
+                "column_name": column_name,
             },
         )
 
@@ -341,7 +341,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             AND PARTITION_NAME IS NOT NULL
             ORDER BY PARTITION_ORDINAL_POSITION
             """,
-            {"owner": owner.upper(), "table_name": table_name.upper()},
+            {"owner": owner, "table_name": table_name},
         )
 
     def index_to_table_map(self, owner: str) -> tuple[str, dict]:
@@ -353,7 +353,7 @@ class MariaDBQueryBuilder(QueryBuilder):
             FROM information_schema.STATISTICS
             WHERE TABLE_SCHEMA = %(owner)s
             """,
-            {"owner": owner.upper()},
+            {"owner": owner},
         )
 
     # ── Runtime stats ────────────────────────────────────────────────
@@ -520,8 +520,8 @@ class MariaDBQueryBuilder(QueryBuilder):
         params: dict[str, str] = {}
         for i, (owner, table_name) in enumerate(pairs):
             parts.append(f"(tc.TABLE_SCHEMA = %(o{i})s AND tc.TABLE_NAME = %(t{i})s)")
-            params[f"o{i}"] = owner.upper()
-            params[f"t{i}"] = table_name.upper()
+            params[f"o{i}"] = owner
+            params[f"t{i}"] = table_name
         where_clause = " OR ".join(parts)
         return (
             f"""
@@ -817,6 +817,10 @@ class MariaDBAdapter(DatabaseAdapter):
         return "mariadb"
 
     @property
+    def fold_case(self) -> bool:
+        return False
+
+    @property
     def query_builder(self) -> MariaDBQueryBuilder:
         if self._query_builder is None:
             self._query_builder = MariaDBQueryBuilder()
@@ -837,7 +841,7 @@ class MariaDBAdapter(DatabaseAdapter):
             port=config["port"],
             user=config["user"],
             password=config["password"],
-            database=config.get("service"),
+            database=config.get("database", config.get("service")),
             connect_timeout=effective_timeout,
             charset="utf8mb4",
         )
@@ -889,7 +893,7 @@ class MariaDBAdapter(DatabaseAdapter):
             port=config["port"],
             user=config["user"],
             password=config["password"],
-            database=config.get("service"),
+            database=config.get("database", config.get("service")),
             connect_timeout=config.get("timeout", 30),
             charset="utf8mb4",
         )
@@ -962,7 +966,7 @@ class MariaDBAdapter(DatabaseAdapter):
                 {
                     "name": "PyMySQL",
                     "status": "missing",
-                    "detail": "pip install sqlmentor[mariadb]",
+                    "detail": "pip install PyMySQL",
                 }
             )
         return results

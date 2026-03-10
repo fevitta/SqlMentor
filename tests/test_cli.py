@@ -370,6 +370,7 @@ class TestConfigCLI:
             [
                 "config",
                 "add",
+                "oracle",
                 "--name",
                 "test",
                 "--host",
@@ -504,6 +505,7 @@ class TestConfigAdd:
         cmd = [
             "config",
             "add",
+            "oracle",
             "--name",
             "t",
             "--host",
@@ -548,47 +550,15 @@ class TestConfigAdd:
         assert result.exit_code == 0  # connection saved, validation warning
         assert "validação falhou" in result.output.lower()
 
-    def test_db_type_default_oracle(self, monkeypatch):
-        """Sem --db-type → add_connection recebe db_type='oracle'."""
-        captured_kwargs = {}
-
-        def _capture(**kw):
-            captured_kwargs.update(kw)
-
-        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
-        monkeypatch.setattr(
-            "sqlmentor.connector.diagnose_connection",
-            lambda name: {
-                "version": "Oracle 19c",
-                "schema": "HR",
-                "mode": "thin",
-                "major_version": "19",
-            },
-        )
-        result = runner.invoke(
-            app,
-            [
-                "config",
-                "add",
-                "--name",
-                "t",
-                "--host",
-                "h",
-                "--port",
-                "1521",
-                "--service",
-                "s",
-                "--user",
-                "u",
-                "--password",
-                "p",
-            ],
-        )
+    def test_add_shows_subcommands(self):
+        """config add sem subcomando → mostra oracle e mariadb."""
+        result = runner.invoke(app, ["config", "add", "--help"])
         assert result.exit_code == 0
-        assert captured_kwargs.get("db_type") == "oracle"
+        assert "oracle" in result.output
+        assert "mariadb" in result.output
 
-    def test_db_type_explicit(self, monkeypatch):
-        """--db-type oracle → add_connection recebe db_type='oracle'."""
+    def test_db_type_explicit_oracle(self, monkeypatch):
+        """'config add oracle' → add_connection recebe db_type='oracle'."""
         captured_kwargs = {}
 
         def _capture(**kw):
@@ -609,36 +579,7 @@ class TestConfigAdd:
             [
                 "config",
                 "add",
-                "--name",
-                "t",
-                "--host",
-                "h",
-                "--port",
-                "1521",
-                "--service",
-                "s",
-                "--user",
-                "u",
-                "--password",
-                "p",
-                "--db-type",
                 "oracle",
-            ],
-        )
-        assert result.exit_code == 0
-        assert captured_kwargs.get("db_type") == "oracle"
-
-    def test_db_type_invalid_raises(self, monkeypatch):
-        """--db-type redis → add_connection raises ValueError → exit 1."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.add_connection",
-            MagicMock(side_effect=ValueError("Tipo de banco não suportado: 'redis'")),
-        )
-        result = runner.invoke(
-            app,
-            [
-                "config",
-                "add",
                 "--name",
                 "t",
                 "--host",
@@ -651,12 +592,97 @@ class TestConfigAdd:
                 "u",
                 "--password",
                 "p",
-                "--db-type",
-                "redis",
             ],
         )
-        assert result.exit_code == 1
-        assert "não suportado" in result.output.lower()
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "oracle"
+
+    def test_db_type_mariadb(self, monkeypatch):
+        """'config add mariadb' → add_connection recebe db_type='mariadb', port 3306."""
+        captured_kwargs = {}
+
+        def _capture(**kw):
+            captured_kwargs.update(kw)
+
+        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
+        monkeypatch.setattr(
+            "sqlmentor.connector.diagnose_connection",
+            lambda name: {
+                "version": "10.6.20-MariaDB",
+                "schema": "mydb",
+                "performance_schema": "1",
+            },
+        )
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "mariadb",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--database",
+                "mydb",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "mariadb"
+        assert captured_kwargs.get("database") == "mydb"
+        assert captured_kwargs.get("port") == 3306
+        assert "performance_schema: ON" in result.output
+
+    def test_mariadb_requires_database(self):
+        """'config add mariadb' sem --database → exit 2 (Typer missing required)."""
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "mariadb",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "--database" in result.output
+
+    def test_oracle_requires_service(self):
+        """'config add oracle' sem --service → exit 2 (Typer missing required)."""
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "oracle",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 2
+        assert "--service" in result.output
+
+    def test_invalid_subcommand(self):
+        """'config add redis' → exit 2 (subcomando inexistente)."""
+        result = runner.invoke(app, ["config", "add", "redis"])
+        assert result.exit_code == 2
 
 
 class TestConfigListShowsType:

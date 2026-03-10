@@ -1,8 +1,8 @@
 ---
 name: "sqlmentor"
-displayName: "SqlMentor — Oracle Performance Analysis"
-description: "Coleta contexto Oracle (plano de execução, DDLs, índices, estatísticas, constraints) e analisa SQL para tuning assistido por IA. Gera relatórios estruturados otimizados para consumo por LLMs."
-keywords: ["sqlmentor", "oracle", "tuning", "performance", "dba", "explain-plan"]
+displayName: "SqlMentor — SQL Performance Analysis"
+description: "Coleta contexto Oracle/MariaDB (plano de execução, DDLs, índices, estatísticas, constraints) e analisa SQL para tuning assistido por IA. Gera relatórios estruturados otimizados para consumo por LLMs."
+keywords: ["sqlmentor", "oracle", "mariadb", "tuning", "performance", "dba", "explain-plan"]
 author: "Felipe"
 ---
 
@@ -10,7 +10,7 @@ author: "Felipe"
 
 ## Overview
 
-SqlMentor é uma CLI Python que conecta em bancos Oracle 11g+ e coleta toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
+SqlMentor é uma CLI Python que conecta em bancos Oracle 11g+ e MariaDB 10.6+, coletando toda a metadata necessária para análise de performance de SQL: plano de execução, DDLs, estatísticas de tabelas e colunas, índices, constraints, e parâmetros do otimizador.
 
 O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que uma IA possa analisar e sugerir otimizações com base em evidência concreta extraída do banco.
 
@@ -21,7 +21,7 @@ O objetivo é gerar relatórios estruturados (Markdown/JSON) otimizados para que
 ## Tools Disponíveis
 
 ### list_connections
-Lista os profiles de conexão Oracle configurados e qual é a padrão. Use primeiro para saber qual `conn` passar, ou omita para usar a padrão.
+Lista os profiles de conexão configurados (Oracle/MariaDB) e qual é a padrão. Use primeiro para saber qual `conn` passar, ou omita para usar a padrão.
 
 ### test_connection
 Testa se um profile de conexão funciona. Retorna versão do banco e schema.

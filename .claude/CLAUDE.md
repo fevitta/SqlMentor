@@ -1,8 +1,8 @@
 # SqlMentor
 
-CLI + MCP Server Python para Oracle 11g+. Extrai metadata de SQL (plano, DDLs, índices, stats, constraints, optimizer params) e gera relatórios Markdown/JSON otimizados para LLMs. Licença MIT.
+CLI + MCP Server Python para Oracle 11g+ e MariaDB 10.6+. Extrai metadata de SQL (plano, DDLs, índices, stats, constraints, optimizer params) e gera relatórios Markdown/JSON otimizados para LLMs. Licença MIT.
 
-Público-alvo: DBAs e desenvolvedores que querem contexto Oracle estruturado para tuning assistido por IA.
+Público-alvo: DBAs e desenvolvedores que querem contexto estruturado para tuning assistido por IA.
 
 ## Interfaces
 
@@ -25,7 +25,8 @@ sqlmentor/
 │       ├── architecture.md       # Pipeline compressão R1-R12, contratos de dados
 │       └── sync-checklist.md     # Checklists para alterações
 ├── scripts/
-│   ├── oracle_create_user.sql    # Script DBA para criar user read-only
+│   ├── oracle_create_user.sql    # Script DBA para criar user read-only Oracle
+│   ├── mariadb_create_user.sql   # Script DBA para criar user read-only MariaDB
 │   └── batch_inspect.py          # Batch inspect (CSV → relatórios em 3 verbosidades)
 ├── tests/                        # pytest + hypothesis
 │   └── fixtures/sample_plan.txt  # Fixture de plano Oracle para testes de compressão
@@ -44,17 +45,19 @@ Entry points: `sqlmentor` → `cli.py:app` | `sqlmentor-mcp` → `mcp_server.py:
 
 ## Tech Stack
 
-Python 3.12+ · setuptools · Typer + Rich · FastMCP (stdio) · sqlglot (Oracle) · oracledb (thin/thick) · PyYAML · pytest + hypothesis · ruff · mypy · GitHub Actions CI (cobertura ≥ 90%)
+Python 3.12+ · setuptools · Typer + Rich · FastMCP (stdio) · sqlglot (Oracle/MySQL) · oracledb (thin/thick) · PyMySQL · PyYAML · pytest + hypothesis · ruff · mypy · GitHub Actions CI (cobertura ≥ 90%)
 
 ## Comandos
 
 ```bash
-pip install -e .                                         # install dev
+pip install -e .                                         # install dev (Oracle + MariaDB)
 sqlmentor analyze <file.sql> --conn <profile>            # plano estimado
 sqlmentor analyze <file.sql> --conn <profile> --execute  # plano real
 sqlmentor inspect <sql_id> --conn <profile>              # plano real via V$SQL
 sqlmentor parse <file.sql> --schema <SCHEMA>             # parse offline
-sqlmentor config add|list|test|remove                    # gerenciar conexões
+sqlmentor config add oracle  -n prod -h host -s ORCL -u user   # conexão Oracle
+sqlmentor config add mariadb -n dev  -h host -d mydb -u user   # conexão MariaDB
+sqlmentor config list|test|remove                        # gerenciar conexões
 sqlmentor doctor                                         # diagnóstico de ambiente
 task lint                                                # ruff check + format
 task test                                                # pytest

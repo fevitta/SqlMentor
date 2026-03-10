@@ -7,7 +7,8 @@ Uso:
     sqlmentor inspect <statement_id> --conn <profile>
     sqlmentor parse <arquivo.sql> --schema <SCHEMA>
     sqlmentor parse --sql "SELECT ..." --schema <SCHEMA>
-    sqlmentor config add --name prod --host ... --port 1521 --service ORCL --user ...
+    sqlmentor config add oracle --name prod --host ... --service ORCL --user ...
+    sqlmentor config add mariadb --name dev --host ... --database mydb --user ...
     sqlmentor config list
     sqlmentor config test --name prod
     sqlmentor config remove --name prod
@@ -274,7 +275,10 @@ def analyze(
 
     # Resolve schema
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    _user_fallback = cfg.get("user", "")
+    if cfg.get("type", "oracle") != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    effective_schema = schema or cfg.get("schema", _user_fallback)
 
     # Parse
     console.print(f"[cyan]Parsing:[/cyan] {source_label}")
@@ -475,7 +479,10 @@ def inspect(
 
     # Resolve schema
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    _user_fallback = cfg.get("user", "")
+    if cfg.get("type", "oracle") != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    effective_schema = schema or cfg.get("schema", _user_fallback)
 
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
@@ -728,21 +735,71 @@ def _print_summary(ctx) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 
-@config_app.command("add")
-def config_add(
+config_add_app = typer.Typer(help="Adiciona um profile de conexão.")
+config_app.add_typer(config_add_app, name="add")
+
+
+def _post_add_validate(name: str) -> None:
+    """Valida conexão recém-criada e mostra diagnóstico."""
+    console.print("[cyan]Validando conexão...[/cyan]")
+    try:
+        from sqlmentor.connector import diagnose_connection
+
+        info = diagnose_connection(name)
+        console.print("[green]✓ Conectado![/green]")
+        console.print(f"  Versão: {info['version']}")
+        console.print(f"  Schema: {info['schema']}")
+
+        if info.get("mode"):
+            # Oracle: schema + mode + thick/thin checks
+            console.print(f"  Modo: [bold]{info['mode']}[/bold]")
+            major = int(info["major_version"])
+            if major > 0 and major < 12:
+                console.print(
+                    f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
+                )
+                if info["mode"] == "thick":
+                    console.print("  [green]✓ Thick mode ativo — tudo certo.[/green]")
+                else:
+                    console.print(
+                        f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
+                        f"    https://www.oracle.com/database/technologies/instant-client.html\n"
+                        f"    Após instalar, adicione ao PATH e re-teste com: sqlmentor config test -n {name}"
+                    )
+        else:
+            # MariaDB: performance_schema check
+            perf_schema = info.get("performance_schema", "false").lower() in ("true", "1")
+            if perf_schema:
+                console.print("  [green]✓ performance_schema: ON[/green]")
+            else:
+                console.print(
+                    "  [yellow]⚠ performance_schema: OFF — inspect não funcionará[/yellow]"
+                )
+    except RuntimeError as e:
+        # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+        console.print(
+            f"  Verifique host/porta/credenciais e re-teste com: sqlmentor config test -n {name}"
+        )
+
+
+@config_add_app.command("oracle")
+def config_add_oracle(
     name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
     host: str = typer.Option(..., "--host", "-h", help="Host do banco."),
     port: int = typer.Option(1521, "--port", "-p", help="Porta."),
-    service: str = typer.Option(..., "--service", "-s", help="Service name."),
+    service: str = typer.Option(..., "--service", "-s", help="Service name Oracle."),
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
     password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
     schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
-    timeout: int = typer.Option(
-        180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
-    ),
-    db_type: str = typer.Option("oracle", "--db-type", help="Tipo de banco (default: oracle)."),
+    timeout: int = typer.Option(180, "--timeout", "-t", help="Timeout em segundos (default: 180)."),
 ) -> None:
-    """Adiciona um profile de conexão."""
+    """Adiciona um profile Oracle.
+
+    Exemplo: sqlmentor config add oracle -n prod -h dbhost -s ORCL -u sqlmentor
+    """
     _validate_timeout(timeout)
     from sqlmentor.connector import add_connection
 
@@ -756,45 +813,50 @@ def config_add(
             password=password,
             schema=schema_name,
             timeout=timeout,
-            db_type=db_type,
+            db_type="oracle",
         )
     except ValueError as e:
         console.print(f"[red]Erro:[/red] {e}")
         raise typer.Exit(1)
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
+    _post_add_validate(name)
 
-    # Valida conexão e detecta versão/modo automaticamente
-    console.print("[cyan]Validando conexão...[/cyan]")
+
+@config_add_app.command("mariadb")
+def config_add_mariadb(
+    name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
+    host: str = typer.Option(..., "--host", "-h", help="Host do banco."),
+    port: int = typer.Option(3306, "--port", "-p", help="Porta."),
+    database: str = typer.Option(..., "--database", "-d", help="Nome do database."),
+    user: str = typer.Option(..., "--user", "-u", help="Usuário."),
+    password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
+    schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
+    timeout: int = typer.Option(180, "--timeout", "-t", help="Timeout em segundos (default: 180)."),
+) -> None:
+    """Adiciona um profile MariaDB.
+
+    Exemplo: sqlmentor config add mariadb -n dev -h dbhost -d mydb -u sqlmentor
+    """
+    _validate_timeout(timeout)
+    from sqlmentor.connector import add_connection
+
     try:
-        from sqlmentor.connector import diagnose_connection
-
-        info = diagnose_connection(name)
-        console.print("[green]✓ Conectado![/green]")
-        console.print(f"  Versão: {info['version']}")
-        console.print(f"  Schema: {info['schema']}")
-        console.print(f"  Modo: [bold]{info['mode']}[/bold]")
-
-        major = int(info["major_version"])
-        if major > 0 and major < 12:
-            console.print(
-                f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
-            )
-            if info["mode"] == "thick":
-                console.print("  [green]✓ Thick mode ativo — tudo certo.[/green]")
-            else:
-                console.print(
-                    f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
-                    f"    https://www.oracle.com/database/technologies/instant-client.html\n"
-                    f"    Após instalar, adicione ao PATH e re-teste com: sqlmentor config test -n {name}"
-                )
-    except RuntimeError as e:
-        # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
-        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
-    except Exception as e:
-        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
-        console.print(
-            f"  Verifique host/porta/service/credenciais e re-teste com: sqlmentor config test -n {name}"
+        add_connection(
+            name=name,
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+            schema=schema_name,
+            timeout=timeout,
+            db_type="mariadb",
         )
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
+    _post_add_validate(name)
 
 
 @config_app.command("list")
@@ -806,7 +868,8 @@ def config_list() -> None:
     if not connections:
         console.print("[yellow]Nenhuma conexão configurada.[/yellow]")
         console.print(
-            "Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>"
+            "Use: sqlmentor config add --name <nome> --host <host> --user <user> --service <service>  (Oracle)\n"
+            "     sqlmentor config add --name <nome> --host <host> --user <user> --database <db> --db-type mariadb"
         )
         return
 
@@ -817,7 +880,7 @@ def config_list() -> None:
     table.add_column("Tipo")
     table.add_column("Host")
     table.add_column("Porta")
-    table.add_column("Service")
+    table.add_column("Service/Database")
     table.add_column("User")
     table.add_column("Schema")
     table.add_column("Timeout")
@@ -825,12 +888,13 @@ def config_list() -> None:
 
     for name, cfg in connections.items():
         is_default = "★" if name == default_name else ""
+        svc_or_db = cfg.get("database") or cfg.get("service") or "?"
         table.add_row(
             name,
             cfg.get("type", "oracle"),
             cfg.get("host", "?"),
             str(cfg.get("port", "?")),
-            cfg.get("service", "?"),
+            svc_or_db,
             cfg.get("user", "?"),
             cfg.get("schema", "?"),
             f"{cfg.get('timeout', 180)}s",
@@ -938,8 +1002,9 @@ def doctor() -> None:
         return
 
     for name, cfg in connections.items():
+        svc_or_db = cfg.get("database") or cfg.get("service") or "?"
         console.print(
-            f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{cfg.get('service', '?')})"
+            f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{svc_or_db})"
         )
         try:
             info = diagnose_connection(name)

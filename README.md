@@ -1,24 +1,37 @@
 # SqlMentor
 
-CLI + MCP Server Python para coleta de contexto Oracle 11g+, otimizado para tuning de SQL assistido por IA.
+CLI + MCP Server Python para coleta de contexto Oracle 11g+ e MariaDB 10.6+, otimizado para tuning de SQL assistido por IA.
 
-Dado um SQL (query, procedure, trigger, function), o `sqlmentor` conecta no banco Oracle, extrai automaticamente todo o metadata relevante (plano de execução real, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
+Dado um SQL (query, procedure, trigger, function), o `sqlmentor` conecta no banco, extrai automaticamente todo o metadata relevante (plano de execução, DDLs, índices, estatísticas, constraints, parâmetros do otimizador) e gera um relatório estruturado (Markdown ou JSON) pronto para ser consumido por um LLM.
 
 ## Instalação
 
 ```bash
-pip install -e .
+pip install sqlmentor                # instalar via PyPI
+pip install --upgrade sqlmentor      # atualizar para última versão
 ```
 
-Pré-requisitos: Python 3.12+ e acesso a um Oracle 11g+ (driver `oracledb` em modo thin, sem Oracle Client).
+Para desenvolvimento (clone do repo):
+
+```bash
+pip install -e ".[dev]"
+```
+
+Inclui drivers Oracle (`oracledb`) e MariaDB (`PyMySQL`) automaticamente.
+
+Pré-requisitos: Python 3.12+ e acesso a um Oracle 11g+ ou MariaDB 10.6+.
 
 > Para Oracle < 12c (modo thick), veja [docs/oracle-instant-client.md](docs/oracle-instant-client.md).
 
 ## Uso Rápido
 
 ```bash
-# Configurar conexão
-sqlmentor config add --name prod --host 192.168.0.1 --port 1521 --service ORCL --user SQLMENTOR --schema SQLMENTOR
+# Configurar conexão Oracle
+sqlmentor config add oracle  -n prod -h 192.168.0.1 -s ORCL -u SQLMENTOR --schema SQLMENTOR
+
+# Configurar conexão MariaDB
+sqlmentor config add mariadb -n dev  -h 192.168.0.1 -d mydb -u SQLMENTOR --schema mydb
+
 sqlmentor config set-default -n prod
 
 # Análise com plano estimado
@@ -123,7 +136,6 @@ CI (GitHub Actions): Python 3.12, ruff check, ruff format --check, mypy, pytest 
 
 ## Roadmap
 
-- [ ] Suporte a outros bancos de dados
 - [ ] Suporte a versões mais novas do Oracle
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
 

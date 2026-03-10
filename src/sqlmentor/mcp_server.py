@@ -60,7 +60,7 @@ def list_connections() -> str:
                 "port": cfg.get("port", "?"),
                 "service": cfg.get("service", "?"),
                 "user": cfg.get("user", "?"),
-                "schema": cfg.get("schema", cfg.get("user", "?")).upper(),
+                "schema": cfg.get("schema", cfg.get("user", "?")),
                 "timeout": cfg.get("timeout", 180),
                 "default": name == default_name,
             }
@@ -206,7 +206,10 @@ def analyze_sql(
 
     # Resolve schema
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    _user_fallback = cfg.get("user", "")
+    if cfg.get("type", "oracle") != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    effective_schema = schema or cfg.get("schema", _user_fallback)
     parsed = _parse(sql_text, default_schema=effective_schema)
 
     # Conecta
@@ -332,7 +335,10 @@ def inspect_sql(
         return json.dumps({"error": str(e)})
 
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    _user_fallback = cfg.get("user", "")
+    if cfg.get("type", "oracle") != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    effective_schema = schema or cfg.get("schema", _user_fallback)
 
     try:
         adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)

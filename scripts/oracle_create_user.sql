@@ -107,7 +107,7 @@ BEGIN
     DBMS_OUTPUT.PUT_LINE('============================================');
     DBMS_OUTPUT.PUT_LINE('');
     DBMS_OUTPUT.PUT_LINE('Configurar no cli:');
-    DBMS_OUTPUT.PUT_LINE('  sqlmentor config add \');
+    DBMS_OUTPUT.PUT_LINE('  sqlmentor config add oracle \');
     DBMS_OUTPUT.PUT_LINE('    --name prod \');
     DBMS_OUTPUT.PUT_LINE('    --host <HOST> --port 1521 \');
     DBMS_OUTPUT.PUT_LINE('    --service <SERVICE> \');

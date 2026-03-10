@@ -284,7 +284,7 @@ class TestMariaDBAdapterCheckDeps:
         assert len(results) == 1
         assert results[0]["status"] == "missing"
         assert results[0]["name"] == "PyMySQL"
-        assert "sqlmentor[mariadb]" in results[0]["detail"]
+        assert "PyMySQL" in results[0]["detail"]
 
 
 # ─── MariaDBQueryBuilder ────────────────────────────────────────────
@@ -415,8 +415,8 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "'TABLE'" in sql
         assert "'VIEW'" in sql
         assert "object_type" in sql.lower()
-        assert params["owner"] == "MYDB"
-        assert params["object_name"] == "USERS"
+        assert params["owner"] == "mydb"
+        assert params["object_name"] == "users"
 
     def test_table_ddl_uses_show_create(self):
         qb = MariaDBQueryBuilder()
@@ -457,8 +457,8 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "temporary" in sql.lower()
         assert "degree" in sql.lower()
         assert "compression" in sql.lower()
-        assert params["owner"] == "MYDB"
-        assert params["table_name"] == "ORDERS"
+        assert params["owner"] == "mydb"
+        assert params["table_name"] == "orders"
 
     def test_column_stats_column_aliases(self):
         qb = MariaDBQueryBuilder()
@@ -471,7 +471,7 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "histogram" in sql.lower()
         assert "data_default" in sql.lower()
         assert "ORDINAL_POSITION" in sql
-        assert params["owner"] == "MYDB"
+        assert params["owner"] == "mydb"
 
     def test_indexes_uses_statistics(self):
         qb = MariaDBQueryBuilder()
@@ -481,7 +481,7 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "index_type" in sql.lower()
         assert "uniqueness" in sql.lower()
         assert "GROUP_CONCAT" in sql
-        assert params["owner"] == "MYDB"
+        assert params["owner"] == "mydb"
 
     def test_constraints_joins_three_tables(self):
         qb = MariaDBQueryBuilder()
@@ -494,7 +494,7 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "r_constraint_name" in sql.lower()
         assert "r_table_name" in sql.lower()
         assert "r_owner" in sql.lower()
-        assert params["owner"] == "MYDB"
+        assert params["owner"] == "mydb"
 
     def test_constraints_type_mapping(self):
         """Mapeia tipos MariaDB para letras Oracle: P, R, U, C."""
@@ -509,9 +509,9 @@ class TestMariaDBQueryBuilderObjectMethods:
         qb = MariaDBQueryBuilder()
         sql, params = qb.histograms("mydb", "orders", "price")
         assert "information_schema.COLUMN_STATISTICS" in sql
-        assert params["owner"] == "MYDB"
-        assert params["table_name"] == "ORDERS"
-        assert params["column_name"] == "PRICE"
+        assert params["owner"] == "mydb"
+        assert params["table_name"] == "orders"
+        assert params["column_name"] == "price"
 
     def test_table_partitions_uses_partitions_table(self):
         qb = MariaDBQueryBuilder()
@@ -521,7 +521,7 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "partition_position" in sql.lower()
         assert "high_value" in sql.lower()
         assert "PARTITION_NAME IS NOT NULL" in sql
-        assert params["owner"] == "MYDB"
+        assert params["owner"] == "mydb"
 
     def test_index_to_table_map(self):
         qb = MariaDBQueryBuilder()
@@ -530,7 +530,7 @@ class TestMariaDBQueryBuilderObjectMethods:
         assert "index_name" in sql.lower()
         assert "table_name" in sql.lower()
         assert "DISTINCT" in sql
-        assert params["owner"] == "MYDB"
+        assert params["owner"] == "mydb"
 
 
 # ─── MariaDBQueryBuilder — Runtime Methods ──────────────────────────
@@ -583,10 +583,10 @@ class TestMariaDBQueryBuilderBatchMethods:
         assert "TABLE_SCHEMA = %(o0)s AND TABLE_NAME = %(t0)s" in clause
         assert "TABLE_SCHEMA = %(o1)s AND TABLE_NAME = %(t1)s" in clause
         assert " OR " in clause
-        assert params["o0"] == "MYDB"
-        assert params["t0"] == "USERS"
-        assert params["o1"] == "MYDB"
-        assert params["t1"] == "ORDERS"
+        assert params["o0"] == "mydb"
+        assert params["t0"] == "users"
+        assert params["o1"] == "mydb"
+        assert params["t1"] == "orders"
 
     def test_build_tuple_in_clause_single_pair(self):
         pairs = [("db", "tbl")]
@@ -594,11 +594,11 @@ class TestMariaDBQueryBuilderBatchMethods:
         assert " OR " not in clause
         assert len(params) == 2
 
-    def test_build_tuple_in_clause_uppercases(self):
+    def test_build_tuple_in_clause_preserves_case(self):
         pairs = [("myDB", "Users")]
         _, params = MariaDBQueryBuilder.build_tuple_in_clause(pairs)
-        assert params["o0"] == "MYDB"
-        assert params["t0"] == "USERS"
+        assert params["o0"] == "myDB"
+        assert params["t0"] == "Users"
 
     def test_batch_table_stats_empty_pairs(self):
         qb = MariaDBQueryBuilder()

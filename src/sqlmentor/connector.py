@@ -112,9 +112,10 @@ def add_connection(
     name: str,
     host: str,
     port: int,
-    service: str,
-    user: str,
-    password: str,
+    service: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
     schema: str | None = None,
     timeout: int | None = None,
     db_type: str = "oracle",
@@ -122,16 +123,20 @@ def add_connection(
     """Adiciona ou atualiza um profile de conexão."""
     validated_type = _validate_db_type(db_type)
     connections = _load_connections()
-    connections[name] = {
+    cfg: dict[str, Any] = {
         "type": validated_type,
         "host": host,
         "port": port,
-        "service": service,
         "user": user,
         "password": password,
-        "schema": schema or user.upper(),
+        "schema": schema or ((user or "").upper() if validated_type != "mariadb" else (user or "")),
         "timeout": timeout if timeout is not None else 180,
     }
+    if validated_type == "mariadb":
+        cfg["database"] = database
+    else:
+        cfg["service"] = service
+    connections[name] = cfg
     _save_connections(connections)
 
 

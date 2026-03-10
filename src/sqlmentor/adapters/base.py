@@ -169,6 +169,15 @@ class DatabaseAdapter(ABC):
         """Identificador do tipo de banco (ex: 'oracle', 'postgresql', 'mariadb')."""
 
     @property
+    def fold_case(self) -> bool:
+        """Se True, identifiers são normalizados para uppercase (Oracle).
+
+        Se False, preserva case original (MariaDB, PostgreSQL).
+        Usado pelo collector e query builder para decidir se aplica .upper().
+        """
+        return True
+
+    @property
     @abstractmethod
     def query_builder(self) -> QueryBuilder:
         """Instância do QueryBuilder específico deste banco."""
