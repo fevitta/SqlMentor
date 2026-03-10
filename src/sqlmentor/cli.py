@@ -519,27 +519,57 @@ def inspect(
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
     timer.mark("Parse")
 
-    # Coleta plano real via statement_id (sem re-executar)
-    console.print("[cyan]Coletando plano real...[/cyan]")
-    try:
-        sql_query, params = qb.runtime_plan(statement_id)
-        cursor.execute(sql_query, params)
-        runtime_plan_lines = [r[0] for r in cursor]
-    except Exception as e:
-        console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
+    # Coleta plano e métricas — fluxo difere entre MariaDB e Oracle
+    if adapter.db_type == "mariadb":
+        # MariaDB: sem planos históricos — usa EXPLAIN FORMAT=JSON no SQL recuperado
+        console.print(
+            "[cyan]Coletando plano estimado (MariaDB não armazena planos históricos)...[/cyan]"
+        )
         runtime_plan_lines = None
+        try:
+            steps = qb.explain_plan(sql_text)
+            explain_sql, explain_params = steps[0]
+            cursor.execute(explain_sql, explain_params)
+            row = cursor.fetchone()
+            execution_plan_lines = str(row[0]).splitlines() if row and row[0] else None
+        except Exception as e:
+            console.print(f"[yellow]⚠ Plano não disponível:[/yellow] {e}")
+            execution_plan_lines = None
 
-    # Coleta métricas de V$SQL
-    console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
-    try:
-        sql_query, params = qb.sql_runtime_stats(statement_id)
-        cursor.execute(sql_query, params)
-        columns = [col[0].lower() for col in cursor.description or []]
-        row = cursor.fetchone()
-        runtime_stats = dict(zip(columns, row, strict=False)) if row else None
-    except Exception as e:
-        console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
-        runtime_stats = None
+        # Métricas via performance_schema
+        console.print("[cyan]Coletando métricas performance_schema...[/cyan]")
+        try:
+            sql_query, params = qb.sql_runtime_stats(statement_id)
+            cursor.execute(sql_query, params)
+            columns = [col[0].lower() for col in cursor.description or []]
+            row = cursor.fetchone()
+            runtime_stats = dict(zip(columns, row, strict=False)) if row else None
+        except Exception as e:
+            console.print(f"[yellow]⚠ Métricas não disponíveis:[/yellow] {e}")
+            runtime_stats = None
+    else:
+        # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
+        execution_plan_lines = None
+        console.print("[cyan]Coletando plano real...[/cyan]")
+        try:
+            sql_query, params = qb.runtime_plan(statement_id)
+            cursor.execute(sql_query, params)
+            runtime_plan_lines = [r[0] for r in cursor]
+        except Exception as e:
+            console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
+            runtime_plan_lines = None
+
+        # Coleta métricas de V$SQL
+        console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
+        try:
+            sql_query, params = qb.sql_runtime_stats(statement_id)
+            cursor.execute(sql_query, params)
+            columns = [col[0].lower() for col in cursor.description or []]
+            row = cursor.fetchone()
+            runtime_stats = dict(zip(columns, row, strict=False)) if row else None
+        except Exception as e:
+            console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
+            runtime_stats = None
     timer.mark("Runtime")
 
     cursor.close()
@@ -565,9 +595,15 @@ def inspect(
         db_conn.close()
     timer.mark("Collect")
 
-    # Injeta plano real e métricas coletados via statement_id
-    if runtime_plan_lines:
-        ctx.runtime_plan = runtime_plan_lines
+    # Injeta plano e métricas coletados via statement_id
+    if adapter.db_type == "mariadb":
+        # MariaDB: plano estimado (EXPLAIN) vai em execution_plan
+        if execution_plan_lines:
+            ctx.execution_plan = execution_plan_lines
+    else:
+        # Oracle: plano real (DBMS_XPLAN) vai em runtime_plan
+        if runtime_plan_lines:
+            ctx.runtime_plan = runtime_plan_lines
     if runtime_stats:
         ctx.runtime_stats = runtime_stats
 
@@ -907,18 +943,34 @@ def doctor() -> None:
         )
         try:
             info = diagnose_connection(name)
-            major = int(info["major_version"])
-            mode_color = "green"
             console.print(f"    [green]✓ Conectado[/green] — {info['version']}")
-            console.print(
-                f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]"
-            )
-            if major > 0 and major < 12 and info["mode"] == "thick":
-                console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
-            elif major > 0 and major < 12 and info["mode"] == "thin":
+            if info.get("mode"):
+                # Oracle: schema + mode + thick/thin checks
+                major = int(info["major_version"])
+                mode_color = "green"
                 console.print(
-                    f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]"
+                    f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]"
                 )
+                if major > 0 and major < 12 and info["mode"] == "thick":
+                    console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
+                elif major > 0 and major < 12 and info["mode"] == "thin":
+                    console.print(
+                        f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]"
+                    )
+            else:
+                # MariaDB ou outro: version + performance_schema
+                schema = info.get("schema", "?")
+                console.print(f"    Schema: {schema}")
+                perf_schema = info.get("performance_schema", "false").lower() in (
+                    "true",
+                    "1",
+                )
+                if perf_schema:
+                    console.print("    [green]✓ performance_schema: ON[/green]")
+                else:
+                    console.print(
+                        "    [red]✗ performance_schema: OFF — inspect não funcionará[/red]"
+                    )
         except RuntimeError as e:
             console.print(f"    [red]✗ {e}[/red]")
         except Exception as e:

@@ -363,25 +363,56 @@ def inspect_sql(
     # Parse
     parsed = _parse(sql_text, default_schema=effective_schema)
 
-    # Plano real via statement_id
+    # Plano e métricas — fluxo difere entre MariaDB e Oracle
     runtime_plan_lines = None
-    try:
-        sql_query, params = qb.runtime_plan(statement_id)
-        cursor.execute(sql_query, params)
-        runtime_plan_lines = [r[0] for r in cursor]
-    except Exception as e:
-        logger.warning("Falha ao recuperar plano real para statement_id '%s': %s", statement_id, e)
-
-    # Métricas V$SQL
+    execution_plan_lines = None
     runtime_stats_data = None
-    try:
-        sql_query, params = qb.sql_runtime_stats(statement_id)
-        cursor.execute(sql_query, params)
-        columns = [col[0].lower() for col in cursor.description or []]
-        row = cursor.fetchone()
-        runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
-    except Exception as e:
-        logger.warning("Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e)
+
+    if adapter.db_type == "mariadb":
+        # MariaDB: sem planos históricos — usa EXPLAIN FORMAT=JSON no SQL recuperado
+        try:
+            steps = qb.explain_plan(sql_text)
+            explain_sql, explain_params = steps[0]
+            cursor.execute(explain_sql, explain_params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                execution_plan_lines = str(row[0]).splitlines()
+        except Exception as e:
+            logger.warning(
+                "Falha ao gerar plano estimado para statement_id '%s': %s", statement_id, e
+            )
+
+        try:
+            sql_query, params = qb.sql_runtime_stats(statement_id)
+            cursor.execute(sql_query, params)
+            columns = [col[0].lower() for col in cursor.description or []]
+            row = cursor.fetchone()
+            runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
+        except Exception as e:
+            logger.warning(
+                "Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e
+            )
+    else:
+        # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
+        try:
+            sql_query, params = qb.runtime_plan(statement_id)
+            cursor.execute(sql_query, params)
+            runtime_plan_lines = [r[0] for r in cursor]
+        except Exception as e:
+            logger.warning(
+                "Falha ao recuperar plano real para statement_id '%s': %s", statement_id, e
+            )
+
+        try:
+            sql_query, params = qb.sql_runtime_stats(statement_id)
+            cursor.execute(sql_query, params)
+            columns = [col[0].lower() for col in cursor.description or []]
+            row = cursor.fetchone()
+            runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
+        except Exception as e:
+            logger.warning(
+                "Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e
+            )
 
     cursor.close()
 
@@ -405,9 +436,13 @@ def inspect_sql(
         with contextlib.suppress(Exception):
             db_conn.close()
 
-    # Injeta plano real e métricas
-    if runtime_plan_lines:
-        ctx.runtime_plan = runtime_plan_lines
+    # Injeta plano e métricas
+    if adapter.db_type == "mariadb":
+        if execution_plan_lines:
+            ctx.execution_plan = execution_plan_lines
+    else:
+        if runtime_plan_lines:
+            ctx.runtime_plan = runtime_plan_lines
     if runtime_stats_data:
         ctx.runtime_stats = runtime_stats_data
 

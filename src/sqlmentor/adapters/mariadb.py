@@ -899,6 +899,10 @@ class MariaDBAdapter(DatabaseAdapter):
             row = cursor.fetchone()
             perf_schema = bool(row[0]) if row else False
 
+            cursor.execute("SELECT DATABASE()")
+            row = cursor.fetchone()
+            current_db = row[0] if row else "?"
+
             match = re.search(r"(\d+)", version)
             major = int(match.group(1)) if match else 0
 
@@ -907,6 +911,7 @@ class MariaDBAdapter(DatabaseAdapter):
                 "version": version,
                 "major_version": str(major),
                 "performance_schema": str(perf_schema),
+                "schema": current_db,
             }
         finally:
             conn.close()

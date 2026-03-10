@@ -205,6 +205,7 @@ class TestMariaDBAdapterDiagnoseConnection:
         mock_cursor.fetchone.side_effect = [
             ("10.6.12-MariaDB",),
             (1,),
+            ("mydb",),
         ]
         with patch.object(pymysql, "connect", return_value=mock_conn):
             result = MariaDBAdapter().diagnose_connection(config)
@@ -212,6 +213,7 @@ class TestMariaDBAdapterDiagnoseConnection:
             assert result["version"] == "10.6.12-MariaDB"
             assert result["major_version"] == "10"
             assert result["performance_schema"] == "True"
+            assert result["schema"] == "mydb"
             mock_conn.close.assert_called_once()
 
     def test_perf_schema_disabled(self, config):
@@ -221,11 +223,13 @@ class TestMariaDBAdapterDiagnoseConnection:
         mock_cursor.fetchone.side_effect = [
             ("11.4.0-MariaDB",),
             (0,),
+            ("testdb",),
         ]
         with patch.object(pymysql, "connect", return_value=mock_conn):
             result = MariaDBAdapter().diagnose_connection(config)
             assert result["performance_schema"] == "False"
             assert result["major_version"] == "11"
+            assert result["schema"] == "testdb"
 
 
 # ─── MariaDBAdapter.execute_query ───────────────────────────────────
