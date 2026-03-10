@@ -399,11 +399,12 @@ def _collapse_union_all_branches(blocks: list[PlanBlock]) -> list[CollapseResult
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if "UNION-ALL" not in b.operation.upper().replace(" ", "-"):
+        op_normalized = b.operation.upper().replace(" ", "-")
+        if "UNION-ALL" not in op_normalized and "UNION-RESULT" not in op_normalized:
             i += 1
             continue
 
-        # Encontrou UNION-ALL — coletar filhos diretos (subtrees)
+        # Encontrou UNION-ALL/UNION RESULT — coletar filhos diretos (subtrees)
         union_indent = b.indent
         j = i + 1
         branches: list[list[PlanBlock]] = []
@@ -957,7 +958,6 @@ def to_markdown(
     *,
     show_sql: bool = False,
     show_all_indexes: bool = False,
-    dialect: str = "oracle",
 ) -> str:
     """
 
@@ -1013,7 +1013,7 @@ def to_markdown(
             lines.append("")
 
         if ctx.runtime_stats:
-            stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+            stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
             lines.append(f"## Runtime Stats ({stats_label})")
 
             lines.append(_format_runtime_stats(ctx.runtime_stats))
@@ -1022,7 +1022,7 @@ def to_markdown(
         if ctx.optimizer_params:
             lines.append("## Parâmetros do Otimizador")
 
-            lines.append(_format_optimizer_params(ctx.optimizer_params))
+            lines.append(_format_optimizer_params(ctx.optimizer_params, db_type=ctx.db_type))
             lines.append("")
 
         if ctx.errors:
@@ -1112,15 +1112,19 @@ def to_markdown(
     # ─── Runtime: Plano Real ──────────────────────────────────────
 
     if ctx.runtime_plan:
-        lines.append(f"## {section}. Runtime Execution Plan (ALLSTATS LAST)")
-        lines.append(
-            "> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
-            "O plano mostra a última execução (LAST)."
-        )
+        if ctx.db_type == "mariadb":
+            lines.append(f"## {section}. Runtime Execution Plan (ANALYZE FORMAT=JSON)")
+            lines.append("> Coletado via `ANALYZE FORMAT=JSON`. O plano mostra a última execução.")
+        else:
+            lines.append(f"## {section}. Runtime Execution Plan (ALLSTATS LAST)")
+            lines.append(
+                "> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
+                "O plano mostra a última execução (LAST)."
+            )
 
         executions = ctx.runtime_stats.get("executions", 1) if ctx.runtime_stats else 1
 
-        if executions and executions > 1:
+        if ctx.db_type != "mariadb" and executions and executions > 1:
             lines.append(
                 f"> ⚠️ SQL_ID já existia no shared pool com {executions} execuções. "
                 "Stats de V$SQL são acumuladas, mas o plano ALLSTATS LAST é da última execução."
@@ -1183,7 +1187,7 @@ def to_markdown(
     # ─── Runtime: Métricas de Execução ────────────────────────────
 
     if ctx.runtime_stats:
-        stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+        stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
         lines.append(f"## {section}. Runtime Stats ({stats_label})")
 
         lines.append(_format_runtime_stats(ctx.runtime_stats))
@@ -1207,13 +1211,21 @@ def to_markdown(
         lines.append(f"## {section}. View Expansion Summary")
         lines.append("")
 
-        # Extrai tabelas realmente acessadas no plano via mapa de índices
+        # Extrai tabelas realmente acessadas no plano (suporta Oracle e MariaDB)
 
         plan_source = ctx.runtime_plan or ctx.execution_plan or []
 
-        plan_ops = _parse_plan_operations(plan_source) if plan_source else []
-
-        plan_tables = _extract_plan_tables(plan_ops, ctx.index_table_map)
+        plan_tables: set[str] = set()
+        if plan_source:
+            blocks = _detect_plan_blocks(plan_source, db_type=ctx.db_type)
+            for b in blocks:
+                if b.name:
+                    clean = b.name.strip('"').upper()
+                    if not clean.startswith("<"):
+                        plan_tables.add(clean)
+                    # Index → table mapping
+                    if b.name in ctx.index_table_map:
+                        plan_tables.add(ctx.index_table_map[b.name].upper())
 
         # Tabelas do SQL original (sem views)
 
@@ -1486,7 +1498,7 @@ def to_markdown(
     if ctx.optimizer_params:
         lines.append("## Parâmetros do Otimizador")
 
-        lines.append(_format_optimizer_params(ctx.optimizer_params))
+        lines.append(_format_optimizer_params(ctx.optimizer_params, db_type=ctx.db_type))
         lines.append("")
 
     # ─── Erros ────────────────────────────────────────────────────
@@ -1866,15 +1878,33 @@ _OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
     "result_cache_mode": ("MANUAL", "Cache de resultados"),
 }
 
+_MARIADB_OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
+    "optimizer_switch": ("", "Flags do otimizador MariaDB"),
+    "optimizer_use_condition_selectivity": ("4", "Nível de seletividade (1-5)"),
+    "optimizer_search_depth": ("62", "Profundidade de busca do otimizador"),
+    "join_buffer_size": ("262144", "Buffer de join (bytes)"),
+    "sort_buffer_size": ("2097152", "Buffer de sort (bytes)"),
+    "tmp_table_size": ("16777216", "Tamanho máximo de temp table em memória"),
+    "max_heap_table_size": ("16777216", "Tamanho máximo de MEMORY table"),
+    "read_buffer_size": ("131072", "Buffer de leitura sequencial"),
+    "read_rnd_buffer_size": ("262144", "Buffer de leitura aleatória"),
+    "eq_range_index_dive_limit": ("200", "Limite de index dives para estimativa"),
+    "histogram_size": ("254", "Tamanho dos histogramas"),
+    "histogram_type": ("DOUBLE_PREC_HB", "Tipo de histograma"),
+    "use_stat_tables": ("PREFERABLY_FOR_QUERIES", "Uso de tabelas de estatísticas"),
+}
 
-def _format_optimizer_params(params: dict[str, str]) -> str:
+
+def _format_optimizer_params(params: dict[str, str], db_type: str = "oracle") -> str:
     """Formata parâmetros do otimizador — só os relevantes, com warnings pra valores não-default."""
+
+    defaults = _MARIADB_OPTIMIZER_DEFAULTS if db_type == "mariadb" else _OPTIMIZER_DEFAULTS
 
     lines = []
 
     warnings = []
 
-    for name, (default_val, _description) in _OPTIMIZER_DEFAULTS.items():
+    for name, (default_val, _description) in defaults.items():
         value = params.get(name)
 
         if value is None:

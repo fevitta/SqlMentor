@@ -450,6 +450,9 @@ def parse_sql(
         for where in statement.find_all(exp.Where):
             for col in where.find_all(exp.Column):
                 col_str = f"{col.table}.{col.name}" if col.table else col.name
+                # Filtra strings vazias e literais que sqlglot confundiu com colunas
+                if not col_str or col_str.startswith(("'", '"')):
+                    continue
                 if col_str not in result.where_columns:
                     result.where_columns.append(col_str)
 

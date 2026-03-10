@@ -206,11 +206,15 @@ def analyze_sql(
 
     # Resolve schema
     cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
     _user_fallback = cfg.get("user", "")
-    if cfg.get("type", "oracle") != "mariadb":
+    if dialect != "mariadb":
         _user_fallback = _user_fallback.upper()
-    effective_schema = schema or cfg.get("schema", _user_fallback)
-    parsed = _parse(sql_text, default_schema=effective_schema)
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
+    parsed = _parse(sql_text, default_schema=effective_schema, dialect=dialect)
 
     # Conecta
     try:
@@ -335,10 +339,14 @@ def inspect_sql(
         return json.dumps({"error": str(e)})
 
     cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
     _user_fallback = cfg.get("user", "")
-    if cfg.get("type", "oracle") != "mariadb":
+    if dialect != "mariadb":
         _user_fallback = _user_fallback.upper()
-    effective_schema = schema or cfg.get("schema", _user_fallback)
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
 
     try:
         adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
@@ -367,7 +375,7 @@ def inspect_sql(
         return json.dumps({"error": f"Erro ao buscar SQL: {e}"})
 
     # Parse
-    parsed = _parse(sql_text, default_schema=effective_schema)
+    parsed = _parse(sql_text, default_schema=effective_schema, dialect=dialect)
 
     # Plano e métricas — fluxo difere entre MariaDB e Oracle
     runtime_plan_lines = None

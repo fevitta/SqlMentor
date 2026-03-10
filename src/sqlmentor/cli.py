@@ -275,14 +275,18 @@ def analyze(
 
     # Resolve schema
     cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
     _user_fallback = cfg.get("user", "")
-    if cfg.get("type", "oracle") != "mariadb":
+    if dialect != "mariadb":
         _user_fallback = _user_fallback.upper()
-    effective_schema = schema or cfg.get("schema", _user_fallback)
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
 
     # Parse
     console.print(f"[cyan]Parsing:[/cyan] {source_label}")
-    parsed = parse_sql(sql_text, default_schema=effective_schema)
+    parsed = parse_sql(sql_text, default_schema=effective_schema, dialect=dialect)
     timer.mark("Parse")
 
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
@@ -479,10 +483,14 @@ def inspect(
 
     # Resolve schema
     cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
     _user_fallback = cfg.get("user", "")
-    if cfg.get("type", "oracle") != "mariadb":
+    if dialect != "mariadb":
         _user_fallback = _user_fallback.upper()
-    effective_schema = schema or cfg.get("schema", _user_fallback)
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
 
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
@@ -521,7 +529,7 @@ def inspect(
     console.print(f"[green]✓[/green] SQL recuperado ({len(sql_text)} chars)")
 
     # Parse
-    parsed = parse_sql(sql_text, default_schema=effective_schema)
+    parsed = parse_sql(sql_text, default_schema=effective_schema, dialect=dialect)
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
     timer.mark("Parse")
@@ -1066,6 +1074,11 @@ def parse(
         "--denorm-mode",
         help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...).",
     ),
+    dialect: str = typer.Option(
+        "oracle",
+        "--dialect",
+        help="Dialeto SQL: oracle, mariadb, postgresql.",
+    ),
 ) -> None:
     """Parse offline — mostra tabelas e colunas sem conectar no banco."""
     from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
@@ -1081,7 +1094,7 @@ def parse(
     if normalized:
         sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
-    parsed = parse_sql(sql_text, default_schema=schema)
+    parsed = parse_sql(sql_text, default_schema=schema, dialect=dialect)
 
     console.print(
         Panel.fit(

@@ -228,8 +228,9 @@ def collect_context(
     ctx.db_version = _collect_db_version(cursor, ctx, adapter)
 
     # 1. Execution Plan
-    if parsed.sql_type in ("SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"):
-        if execute and parsed.sql_type == "SELECT":
+    collectible_types = ("SELECT", "INSERT", "UPDATE", "DELETE", "MERGE")
+    if parsed.sql_type in collectible_types or (parsed.sql_type == "UNKNOWN" and execute):
+        if execute and parsed.sql_type in ("SELECT", "UNKNOWN"):
             # Executa a query real com GATHER_PLAN_STATISTICS e coleta plano + stats
             _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx, adapter, bind_params)
         else:
@@ -246,8 +247,13 @@ def collect_context(
     collected_objects: set[str] = set()
     _fold = adapter.fold_case  # Oracle: uppercase identifiers; MariaDB: preserve case
     # Phase 1: detect object type, collect DDL, identify tables for batch
+    # Usa fila para permitir adicionar base tables de views durante iteração
+    tables_to_collect: list[dict] = list(parsed.tables)
     tables_for_batch: list[tuple[str, str, str, TableContext]] = []  # (schema, name, key, tctx)
-    for table in parsed.tables:
+    i = 0
+    while i < len(tables_to_collect):
+        table = tables_to_collect[i]
+        i += 1
         schema = table.get("schema") or default_schema
         name = table["name"]
         if _fold:
@@ -279,6 +285,20 @@ def collect_context(
         # View expansion: coleta tabelas internas da view (sempre, é barato)
         if tctx.object_type == "VIEW":
             _collect_view_expansion(cursor, schema, name, ctx, adapter)
+            # Adiciona base tables da view à fila de coleta
+            view_key = f"{schema}.{name}"
+            for inner in ctx.view_expansions.get(view_key, []):
+                parts = inner.split(".", 1)
+                inner_schema = parts[0] if len(parts) > 1 else default_schema
+                inner_name = parts[-1]
+                if _fold:
+                    inner_schema = inner_schema.upper()
+                    inner_name = inner_name.upper()
+                inner_key = f"{inner_schema}.{inner_name}"
+                if inner_key not in collected_objects:
+                    tables_to_collect.append(
+                        {"name": inner_name, "schema": inner_schema, "alias": None}
+                    )
 
         # Views: só coleta detalhes se --expand-views foi passado
         if tctx.object_type == "VIEW" and not expand_views:
