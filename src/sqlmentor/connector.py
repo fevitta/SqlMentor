@@ -129,7 +129,7 @@ def add_connection(
         "port": port,
         "user": user,
         "password": password,
-        "schema": schema or ((user or "").upper() if validated_type != "mariadb" else (user or "")),
+        "schema": schema or ((user or "").upper() if validated_type != "mariadb" else ""),
         "timeout": timeout if timeout is not None else 180,
     }
     if validated_type == "mariadb":

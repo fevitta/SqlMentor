@@ -93,6 +93,43 @@ class TestConnectionCRUD:
         cfg = get_connection_config("dev")
         assert cfg["type"] == "oracle"
 
+    def test_add_mariadb_schema_defaults_to_empty(self, tmp_connections_file):
+        """T7: MariaDB sem schema explicito deve usar string vazia, nao username."""
+        add_connection(
+            "mdb",
+            "localhost",
+            3306,
+            user="appuser",
+            password="secret",
+            database="mydb",
+            db_type="mariadb",
+        )
+        cfg = get_connection_config("mdb")
+        assert cfg["schema"] == ""
+        assert cfg["database"] == "mydb"
+        assert cfg["type"] == "mariadb"
+
+    def test_add_mariadb_explicit_schema_preserved(self, tmp_connections_file):
+        """T7: MariaDB com schema explicito preserva o valor."""
+        add_connection(
+            "mdb",
+            "localhost",
+            3306,
+            user="appuser",
+            password="secret",
+            database="mydb",
+            schema="custom_schema",
+            db_type="mariadb",
+        )
+        cfg = get_connection_config("mdb")
+        assert cfg["schema"] == "custom_schema"
+
+    def test_add_oracle_schema_defaults_to_user_upper(self, tmp_connections_file):
+        """Oracle sem schema explicito continua usando user.upper()."""
+        add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
+        cfg = get_connection_config("dev")
+        assert cfg["schema"] == "SCOTT"
+
 
 # ─── db_type validation ──────────────────────────────────────────────────────
 
