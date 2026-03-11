@@ -24,10 +24,11 @@ class QueryBuilder(ABC):
     # ── Plano de execução ───────────────────────────────────────────
 
     @abstractmethod
-    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict | None]]:
         """Gera EXPLAIN PLAN e recupera o resultado.
 
         Retorna lista de steps (Oracle=3, PG=1, etc.).
+        params pode ser None para evitar substituicao de % pelo driver (MariaDB).
         """
 
     @abstractmethod

@@ -112,7 +112,7 @@ class OracleQueryBuilder(QueryBuilder):
 
     # ── Plano de execução ────────────────────────────────────────────
 
-    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict | None]]:
         """Gera EXPLAIN PLAN e recupera o resultado."""
         # EXPLAIN PLAN não aceita bind variables no STATEMENT_ID — usa literal.
         stmt_id = "SQLMENTOR_PLAN"

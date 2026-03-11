@@ -61,9 +61,12 @@ class MariaDBQueryBuilder(QueryBuilder):
 
     # ── Plano de execução ────────────────────────────────────────────
 
-    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
-        """EXPLAIN FORMAT=JSON — 1 step (MariaDB não usa PLAN_TABLE)."""
-        return [("EXPLAIN FORMAT=JSON " + sql_text, {})]
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict | None]]:
+        """EXPLAIN FORMAT=JSON — 1 step (MariaDB não usa PLAN_TABLE).
+
+        params=None evita que PyMySQL tente mogrify de % no SQL (ex: DATE_FORMAT('%Y')).
+        """
+        return [("EXPLAIN FORMAT=JSON " + sql_text, None)]
 
     def runtime_plan(self, sql_id: str, child_number: int = 0) -> tuple[str, dict]:
         """Best-effort: busca plano via performance_schema por DIGEST."""

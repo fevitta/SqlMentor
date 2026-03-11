@@ -566,7 +566,7 @@ def _collect_explain_plan(
         if len(steps) == 1:
             # MariaDB: EXPLAIN FORMAT=JSON em 1 step — retorna JSON em single row
             explain_stmt, params = steps[0]
-            cursor.execute(explain_stmt, params)
+            cursor.execute(explain_stmt, params or None)
             row = cursor.fetchone()
             if row and row[0]:
                 return str(row[0]).splitlines()

@@ -318,7 +318,7 @@ class TestMariaDBQueryBuilder:
         sql, params = result[0]
         assert sql.startswith("EXPLAIN FORMAT=JSON ")
         assert "SELECT * FROM orders WHERE id = 1" in sql
-        assert params == {}
+        assert params is None
 
     def test_runtime_plan_queries_perf_schema(self):
         qb = MariaDBQueryBuilder()
@@ -947,6 +947,64 @@ class TestPlanBlockNoneGuards:
         ]
         _apply_thresholds(blocks)
         assert blocks[0].immune is True
+
+
+# ─── Registration ───────────────────────────────────────────────────
+
+
+class TestExplainWithPercentInSQL:
+    """T10: EXPLAIN com % no SQL (ex: DATE_FORMAT('%Y-%m-%d')) nao deve crashar."""
+
+    def test_explain_plan_returns_none_params(self):
+        """explain_plan() retorna params=None para evitar mogrify de %."""
+        qb = MariaDBQueryBuilder()
+        result = qb.explain_plan("SELECT DATE_FORMAT(created_at, '%Y-%m-%d') FROM orders")
+        sql, params = result[0]
+        assert "DATE_FORMAT" in sql
+        assert params is None
+
+    def test_cursor_execute_receives_none_params(self):
+        """cursor.execute recebe None como params — PyMySQL nao tenta mogrify."""
+        qb = MariaDBQueryBuilder()
+        result = qb.explain_plan("SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t")
+        sql, params = result[0]
+
+        cursor = MagicMock()
+        cursor.fetchone.return_value = ('{"query_block":{}}',)
+        # Nao deve levantar erro de formatacao
+        cursor.execute(sql, params)
+        cursor.execute.assert_called_once_with(sql, None)
+
+    def test_collector_explain_defense_in_depth(self):
+        """collector._collect_explain_plan passa params or None ao cursor."""
+        from sqlmentor.collector import CollectedContext, _collect_explain_plan
+        from sqlmentor.parser import ParsedSQL
+
+        mock_adapter = MagicMock()
+        mock_adapter.db_type = "mariadb"
+        mock_adapter.query_builder.explain_plan.return_value = [
+            ("EXPLAIN FORMAT=JSON SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t", {})
+        ]
+
+        cursor = MagicMock()
+        cursor.fetchone.return_value = ('{"query_block": {"select_id": 1}}',)
+
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT", tables=[]),
+        )
+
+        _collect_explain_plan(
+            cursor,
+            "SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t",
+            ctx,
+            mock_adapter,
+        )
+
+        # Mesmo se adapter retorna {} (vazio), collector passa None via `params or None`
+        cursor.execute.assert_called_once_with(
+            "EXPLAIN FORMAT=JSON SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t",
+            None,
+        )
 
 
 # ─── Registration ───────────────────────────────────────────────────
