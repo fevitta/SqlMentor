@@ -882,6 +882,79 @@ class TestMariaDBPlanParserSubquery:
             assert b.reads is None
 
 
+class TestMariaDBPlanParserMaterialized:
+    """T2: Plano com 'materialized' key (subquery materializada) deve encontrar tabelas."""
+
+    def test_materialized_table_found(self):
+        """Tabela dentro de 'materialized' -> query_block -> nested_loop e encontrada."""
+        import json
+
+        plan = json.dumps(
+            {
+                "query_block": {
+                    "select_id": 1,
+                    "nested_loop": [
+                        {
+                            "table": {
+                                "table_name": "orders",
+                                "access_type": "ALL",
+                                "rows_examined_per_scan": 100,
+                            }
+                        },
+                        {
+                            "table": {
+                                "table_name": "<subquery2>",
+                                "access_type": "eq_ref",
+                                "rows_examined_per_scan": 1,
+                                "materialized_from_subquery": {
+                                    "query_block": {
+                                        "select_id": 2,
+                                        "table": {
+                                            "table_name": "items",
+                                            "access_type": "ALL",
+                                            "rows_examined_per_scan": 50,
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    ],
+                }
+            }
+        )
+        parser = MariaDBPlanParser()
+        blocks = parser.parse_plan(plan.splitlines())
+        table_names = [b.name for b in blocks]
+        assert "orders" in table_names
+        assert "items" in table_names
+
+    def test_materialized_key_at_node_level(self):
+        """'materialized' key diretamente no no (nao dentro de table) e encontrada."""
+        import json
+
+        plan = json.dumps(
+            {
+                "query_block": {
+                    "select_id": 1,
+                    "materialized": {
+                        "query_block": {
+                            "select_id": 2,
+                            "table": {
+                                "table_name": "categories",
+                                "access_type": "ALL",
+                                "rows_examined_per_scan": 20,
+                            },
+                        }
+                    },
+                }
+            }
+        )
+        parser = MariaDBPlanParser()
+        blocks = parser.parse_plan(plan.splitlines())
+        table_names = [b.name for b in blocks]
+        assert "categories" in table_names
+
+
 class TestMariaDBPlanParserIsRuntime:
     def test_empty_is_false(self):
         parser = MariaDBPlanParser()

@@ -719,6 +719,13 @@ class MariaDBPlanParser(PlanParser):
                 blocks.extend(self._walk_node(qs, depth + 1, counter))
             return blocks
 
+        # materialized — wraps a subquery materialized into a temp table
+        if "materialized" in node:
+            mat = node["materialized"]
+            qb = mat.get("query_block", mat)
+            blocks.extend(self._walk_node(qb, depth + 1, counter))
+            return blocks
+
         # query_block — container, recurse children
         if "select_id" in node:
             blocks.extend(self._walk_children(node, depth, counter))
@@ -774,6 +781,8 @@ class MariaDBPlanParser(PlanParser):
             )
         if "union_result" in node:
             blocks.extend(self._walk_node({"union_result": node["union_result"]}, depth, counter))
+        if "materialized" in node:
+            blocks.extend(self._walk_node({"materialized": node["materialized"]}, depth, counter))
         if "materialized_from_subquery" in node:
             mat = node["materialized_from_subquery"]
             qb = mat.get("query_block", mat)
