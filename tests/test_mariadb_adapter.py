@@ -929,7 +929,7 @@ class TestMariaDBPlanParserMaterialized:
         assert "items" in table_names
 
     def test_materialized_key_at_node_level(self):
-        """'materialized' key diretamente no no (nao dentro de table) e encontrada."""
+        """'materialized' key diretamente no no (_walk_node path) e encontrada."""
         import json
 
         plan = json.dumps(
@@ -953,6 +953,45 @@ class TestMariaDBPlanParserMaterialized:
         blocks = parser.parse_plan(plan.splitlines())
         table_names = [b.name for b in blocks]
         assert "categories" in table_names
+
+    def test_materialized_inside_structural_node(self):
+        """'materialized' como filho de ordering_operation (_walk_children path)."""
+        import json
+
+        plan = json.dumps(
+            {
+                "query_block": {
+                    "select_id": 1,
+                    "ordering_operation": {
+                        "using_filesort": True,
+                        "nested_loop": [
+                            {
+                                "table": {
+                                    "table_name": "orders",
+                                    "access_type": "ALL",
+                                    "rows_examined_per_scan": 100,
+                                }
+                            }
+                        ],
+                        "materialized": {
+                            "query_block": {
+                                "select_id": 3,
+                                "table": {
+                                    "table_name": "suppliers",
+                                    "access_type": "ref",
+                                    "rows_examined_per_scan": 5,
+                                },
+                            }
+                        },
+                    },
+                }
+            }
+        )
+        parser = MariaDBPlanParser()
+        blocks = parser.parse_plan(plan.splitlines())
+        table_names = [b.name for b in blocks]
+        assert "orders" in table_names
+        assert "suppliers" in table_names
 
 
 class TestMariaDBPlanParserIsRuntime:
@@ -1036,20 +1075,56 @@ class TestExplainWithPercentInSQL:
         assert "DATE_FORMAT" in sql
         assert params is None
 
-    def test_cursor_execute_receives_none_params(self):
-        """cursor.execute recebe None como params — PyMySQL nao tenta mogrify."""
-        qb = MariaDBQueryBuilder()
-        result = qb.explain_plan("SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t")
-        sql, params = result[0]
+    def test_mogrify_crashes_with_empty_dict_params(self):
+        """Demonstra o bug: PyMySQL mogrify com params={} interpreta % como format spec."""
+
+        def fake_execute(sql: str, params: object = None) -> None:
+            """Simula comportamento real do PyMySQL cursor.execute."""
+            if params is not None:
+                # PyMySQL internamente faz: sql % params (via mogrify)
+                sql % params  # type: ignore[operator]
+
+        sql = "EXPLAIN FORMAT=JSON SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t"
+
+        # Com params={} (comportamento antigo) — crash
+        with pytest.raises((KeyError, TypeError, ValueError)):
+            fake_execute(sql, {})
+
+        # Com params=None (fix) — ok
+        fake_execute(sql, None)  # nao levanta excecao
+
+    def test_collector_explain_normal_path_none_params(self):
+        """Caminho normal pos-fix: adapter retorna None, collector repassa None."""
+        from sqlmentor.collector import CollectedContext, _collect_explain_plan
+        from sqlmentor.parser import ParsedSQL
+
+        mock_adapter = MagicMock()
+        mock_adapter.db_type = "mariadb"
+        mock_adapter.query_builder.explain_plan.return_value = [
+            ("EXPLAIN FORMAT=JSON SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t", None)
+        ]
 
         cursor = MagicMock()
-        cursor.fetchone.return_value = ('{"query_block":{}}',)
-        # Nao deve levantar erro de formatacao
-        cursor.execute(sql, params)
-        cursor.execute.assert_called_once_with(sql, None)
+        cursor.fetchone.return_value = ('{"query_block": {"select_id": 1}}',)
+
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(raw_sql="SELECT 1", sql_type="SELECT", tables=[]),
+        )
+
+        _collect_explain_plan(
+            cursor,
+            "SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t",
+            ctx,
+            mock_adapter,
+        )
+
+        cursor.execute.assert_called_once_with(
+            "EXPLAIN FORMAT=JSON SELECT DATE_FORMAT(d, '%Y-%m-%d') FROM t",
+            None,
+        )
 
     def test_collector_explain_defense_in_depth(self):
-        """collector._collect_explain_plan passa params or None ao cursor."""
+        """Defense in depth: se adapter retornar {} (regressao), collector converte p/ None."""
         from sqlmentor.collector import CollectedContext, _collect_explain_plan
         from sqlmentor.parser import ParsedSQL
 

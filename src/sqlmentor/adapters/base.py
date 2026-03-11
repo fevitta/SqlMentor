@@ -18,7 +18,8 @@ class QueryBuilder(ABC):
     """Gera queries parametrizadas para um banco específico.
 
     Cada método retorna tuple[str, dict] (sql, params) pronta para cursor.execute(),
-    exceto explain_plan que retorna list[tuple[str, dict]] (múltiplos steps).
+    exceto explain_plan que retorna list[tuple[str, dict | None]] (múltiplos steps;
+    params pode ser None para evitar substituicao de % pelo driver, ex: MariaDB).
     """
 
     # ── Plano de execução ───────────────────────────────────────────

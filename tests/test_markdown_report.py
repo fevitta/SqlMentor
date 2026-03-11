@@ -364,4 +364,4 @@ class TestMariaDBRuntimePlanLabels:
         )
         result = to_markdown(ctx, verbosity="full")
         assert "shared pool" not in result
-        assert "SQL_ID" not in result or "ANALYZE" in result
+        assert "SQL_ID" not in result
