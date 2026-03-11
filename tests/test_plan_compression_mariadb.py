@@ -187,13 +187,25 @@ class TestMariaDBCollapseInactive:
         result = _collapse_view_zero_rows(blocks)
         assert result == []
 
-    def test_r7_no_union_all(self):
-        """R7: _collapse_union_all_branches retorna vazio — MariaDB usa UNION RESULT, não UNION-ALL."""
+    def test_r7_union_result_collapses_identical_branches(self):
+        """R7: UNION RESULT (MariaDB) colapsa ≥3 branches idênticos, como UNION-ALL Oracle."""
         blocks = [
             _mariadb_block(id="1", operation="UNION RESULT", indent=0),
             _mariadb_block(id="2", operation="ALL", name="t1", indent=1),
             _mariadb_block(id="3", operation="ALL", name="t1", indent=1),
             _mariadb_block(id="4", operation="ALL", name="t1", indent=1),
+        ]
+        result = _collapse_union_all_branches(blocks)
+        assert len(result) == 1
+        assert result[0].collapsed_ids == {"2", "3", "4"}
+        assert "[COLAPSADO:" in result[0].replacement_lines[0]
+
+    def test_r7_union_result_fewer_than_three_no_collapse(self):
+        """R7: UNION RESULT com <3 branches não colapsa."""
+        blocks = [
+            _mariadb_block(id="1", operation="UNION RESULT", indent=0),
+            _mariadb_block(id="2", operation="ALL", name="t1", indent=1),
+            _mariadb_block(id="3", operation="ALL", name="t1", indent=1),
         ]
         result = _collapse_union_all_branches(blocks)
         assert result == []

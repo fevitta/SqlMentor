@@ -187,3 +187,106 @@ class TestErrorsSection:
     def test_no_errors(self, minimal_collected_context):
         result = to_markdown(minimal_collected_context)
         assert "Erros na Coleta" not in result
+
+
+# ─── MariaDB-specific sections (T4, T1) ────────────────────────────────────
+
+
+def _mariadb_context(**overrides) -> CollectedContext:
+    """Cria CollectedContext MariaDB mínimo para testes de markdown."""
+    import json
+
+    parsed = ParsedSQL(
+        raw_sql="SELECT * FROM orders",
+        sql_type="SELECT",
+        tables=[{"name": "orders", "schema": "gso", "alias": None}],
+    )
+    plan_json = json.dumps(
+        {
+            "query_block": {
+                "select_id": 1,
+                "table": {
+                    "table_name": "orders",
+                    "access_type": "ALL",
+                    "rows": 100,
+                    "r_rows": 95,
+                    "r_loops": 1,
+                    "r_total_time_ms": 1.2,
+                },
+            }
+        }
+    )
+    defaults = dict(
+        parsed_sql=parsed,
+        db_type="mariadb",
+        db_version="10.6.18-MariaDB",
+        runtime_plan=plan_json.splitlines(),
+        runtime_stats={"executions": 1, "avg_elapsed_ms": 1.2},
+        tables=[
+            TableContext(
+                name="orders",
+                schema="gso",
+                stats={"num_rows": 100, "blocks": 5},
+            )
+        ],
+        optimizer_params={
+            "optimizer_search_depth": "62",
+            "join_buffer_size": "262144",
+        },
+    )
+    defaults.update(overrides)
+    return CollectedContext(**defaults)
+
+
+class TestMariaDBRuntimePlanHeader:
+    """T4: Runtime plan header mostra ANALYZE FORMAT=JSON para MariaDB."""
+
+    def test_mariadb_runtime_header(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "ANALYZE FORMAT=JSON" in result
+        assert "ALLSTATS LAST" not in result
+
+    def test_mariadb_no_shared_pool_warning(self):
+        ctx = _mariadb_context(
+            runtime_stats={"executions": 5, "avg_elapsed_ms": 10},
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "shared pool" not in result
+
+    def test_oracle_runtime_header(self, rich_collected_context):
+        result = to_markdown(rich_collected_context, verbosity="full")
+        assert "ALLSTATS LAST" in result
+
+
+class TestMariaDBOptimizerSection:
+    """T1: Seção Optimizer Params usa defaults MariaDB."""
+
+    def test_mariadb_optimizer_params_shown(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx)
+        assert "optimizer_search_depth" in result
+        assert "join_buffer_size" in result
+
+    def test_mariadb_optimizer_no_oracle_params(self):
+        ctx = _mariadb_context(
+            optimizer_params={"optimizer_mode": "ALL_ROWS"},
+        )
+        result = to_markdown(ctx)
+        # optimizer_mode é Oracle-only, não aparece com db_type=mariadb
+        assert "optimizer_mode" not in result
+
+
+class TestMariaDBRuntimeStatsLabel:
+    """T4: Stats label mostra 'Runtime Stats' para MariaDB, 'V$SQL' para Oracle."""
+
+    def test_mariadb_stats_label(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx)
+        assert "Runtime Stats" in result
+        assert "V$SQL" not in result
+
+    def test_mariadb_minimal_stats_label(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="minimal")
+        assert "Runtime Stats" in result

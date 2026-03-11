@@ -380,6 +380,38 @@ class TestFormatOptimizerParams:
         assert "literais estão sendo substituídos" in result
 
 
+class TestFormatOptimizerParamsMariaDB:
+    """T1: _format_optimizer_params com db_type='mariadb' usa defaults MariaDB."""
+
+    def test_mariadb_default_no_warning(self):
+        params = {"optimizer_search_depth": "62"}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "62" in result
+        assert "⚠️" not in result
+
+    def test_mariadb_non_default_warning(self):
+        params = {"optimizer_search_depth": "0"}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "⚠️" in result
+        assert "default: 62" in result
+
+    def test_mariadb_ignores_oracle_params(self):
+        params = {"optimizer_mode": "ALL_ROWS"}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "optimizer_mode" not in result
+
+    def test_oracle_ignores_mariadb_params(self):
+        params = {"optimizer_search_depth": "62"}
+        result = _format_optimizer_params(params, db_type="oracle")
+        assert "optimizer_search_depth" not in result
+
+    def test_mariadb_optimizer_switch_shown(self):
+        params = {"optimizer_switch": "index_merge=on,mrr=on"}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "optimizer_switch" in result
+        assert "index_merge=on,mrr=on" in result
+
+
 # ─── _format_small_table ────────────────────────────────────────────────────
 
 
