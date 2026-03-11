@@ -320,3 +320,48 @@ class TestMariaDBRuntimeStatsLabel:
         ctx = _mariadb_context()
         result = to_markdown(ctx, verbosity="minimal")
         assert "Runtime Stats" in result
+
+
+class TestMariaDBRuntimePlanLabels:
+    """T4: Comprehensive coverage for MariaDB runtime plan labels vs Oracle."""
+
+    def test_mariadb_no_statistics_level_mention(self):
+        """MariaDB report deve NOT mencionar STATISTICS_LEVEL = ALL."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "STATISTICS_LEVEL" not in result
+
+    def test_mariadb_runtime_section_heading_format(self):
+        """Section heading inclui 'ANALYZE FORMAT=JSON' entre parenteses."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "Runtime Execution Plan (ANALYZE FORMAT=JSON)" in result
+
+    def test_mariadb_runtime_description_mentions_analyze(self):
+        """Descricao abaixo do heading menciona ANALYZE FORMAT=JSON."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "Coletado via `ANALYZE FORMAT=JSON`" in result
+
+    def test_mariadb_compact_verbosity_same_labels(self):
+        """Labels sao identicos em compact e full verbosity."""
+        ctx = _mariadb_context()
+        compact = to_markdown(ctx, verbosity="compact")
+        assert "ANALYZE FORMAT=JSON" in compact
+        assert "ALLSTATS LAST" not in compact
+        assert "STATISTICS_LEVEL" not in compact
+
+    def test_oracle_runtime_section_has_allstats(self, rich_collected_context):
+        """Oracle report usa ALLSTATS LAST e menciona STATISTICS_LEVEL."""
+        result = to_markdown(rich_collected_context, verbosity="full")
+        assert "Runtime Execution Plan (ALLSTATS LAST)" in result
+        assert "STATISTICS_LEVEL" in result
+
+    def test_mariadb_no_executions_shared_pool_warning(self):
+        """MariaDB com multiple executions NAO mostra shared pool warning."""
+        ctx = _mariadb_context(
+            runtime_stats={"executions": 10, "avg_elapsed_ms": 5.0},
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "shared pool" not in result
+        assert "SQL_ID" not in result or "ANALYZE" in result
