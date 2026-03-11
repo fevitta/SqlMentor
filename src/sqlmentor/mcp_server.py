@@ -86,7 +86,11 @@ def test_connection(conn: str) -> str:
 
 @mcp.tool()
 def parse_sql(
-    sql_text: str, schema: str = "", normalized: bool = False, denorm_mode: str = "literal"
+    sql_text: str,
+    schema: str = "",
+    normalized: bool = False,
+    denorm_mode: str = "literal",
+    dialect: str = "oracle",
 ) -> str:
     """Parse offline de SQL — extrai tabelas, colunas, joins, subqueries sem conectar no banco.
 
@@ -98,6 +102,7 @@ def parse_sql(
         schema: Schema padrão para tabelas não qualificadas (opcional).
         normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido.
         denorm_mode: Estratégia de desnormalização se SQL normalizado: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...).
+        dialect: Dialeto SQL para parse: "oracle" (default), "mariadb" ou "postgresql".
     """
     from sqlmentor.parser import denormalize_sql, is_normalized_sql
     from sqlmentor.parser import parse_sql as _parse
@@ -106,7 +111,7 @@ def parse_sql(
     if normalized or is_normalized_sql(sql_text):
         sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
-    parsed = _parse(sql_text, default_schema=schema or None)
+    parsed = _parse(sql_text, default_schema=schema or None, dialect=dialect)
     return json.dumps(
         {
             "sql_type": parsed.sql_type,

@@ -56,6 +56,25 @@ class TestMCPParseSql:
         data = json.loads(parse_sql(""))
         assert isinstance(data, dict)
 
+    def test_dialect_mariadb_backticks(self):
+        data = json.loads(
+            parse_sql("SELECT `id`, `name` FROM `users` WHERE `status` = 1", dialect="mariadb")
+        )
+        assert data["sql_type"] == "SELECT"
+        assert data["is_parseable"]
+        assert any("users" in t.lower() for t in data["tables"])
+
+    def test_dialect_oracle_default(self):
+        data = json.loads(parse_sql("SELECT id FROM dual"))
+        assert data["sql_type"] == "SELECT"
+        assert data["is_parseable"]
+
+    def test_dialect_invalid(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="nao suportado"):
+            parse_sql("SELECT 1", dialect="sqlite")
+
 
 # ─── list_connections ─────────────────────────────────────────────────────────
 

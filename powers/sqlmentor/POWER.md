@@ -27,7 +27,7 @@ Lista os profiles de conexão configurados (Oracle/MariaDB) e qual é a padrão.
 Testa se um profile de conexão funciona. Retorna versão do banco e schema.
 
 ### parse_sql
-Parse offline — extrai tabelas, colunas, joins, subqueries sem conectar no banco. Auto-detecta e desnormaliza SQL normalizado (Datadog, OEM).
+Parse offline — extrai tabelas, colunas, joins, subqueries sem conectar no banco. Auto-detecta e desnormaliza SQL normalizado (Datadog, OEM). Aceita `dialect` ("oracle", "mariadb", "postgresql") para parse correto de sintaxe específica (ex: backtick identifiers).
 
 ### analyze_sql
 A tool principal. Conecta no Oracle, coleta contexto completo e retorna relatório estruturado. Veja os parâmetros na descrição da tool.

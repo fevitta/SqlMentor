@@ -112,7 +112,8 @@ Integração com IDEs (Kiro, Claude Desktop, etc.) via Model Context Protocol:
 
 ```python
 list_connections()                                          # ver profiles
-parse_sql(sql_text="SELECT ...", schema="HR")               # parse offline
+parse_sql(sql_text="SELECT ...", schema="HR")               # parse offline (Oracle)
+parse_sql(sql_text="SELECT ...", dialect="mariadb")          # parse offline (MariaDB)
 analyze_sql(sql_text="SELECT ...", conn="prod")             # plano estimado
 analyze_sql(sql_text="SELECT ...", conn="prod", execute=True, binds="id=123")  # plano real
 inspect_sql(statement_id="abc123xyz", conn="prod")           # via statement_id
@@ -136,7 +137,8 @@ CI (GitHub Actions): Python 3.12, ruff check, ruff format --check, mypy, pytest 
 
 ## Roadmap
 
-- [ ] Suporte a versões mais novas do Oracle
+- [ ] MariaDB `inspect`: desnormalizar SQL do `DIGEST_TEXT` (`?` → literais) para parse e EXPLAIN
+- [ ] MariaDB report: adaptar labels Oracle-centric (Blocks, Sample Size, Parallel Degree, BLevel)
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
 
 ## Licença
