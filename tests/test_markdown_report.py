@@ -276,6 +276,36 @@ class TestMariaDBOptimizerSection:
         # optimizer_mode é Oracle-only, não aparece com db_type=mariadb
         assert "optimizer_mode" not in result
 
+    def test_mariadb_optimizer_uppercase_keys_normalized(self):
+        """T1: MariaDB retorna UPPERCASE de GLOBAL_VARIABLES — deve normalizar."""
+        ctx = _mariadb_context(
+            optimizer_params={
+                "OPTIMIZER_SWITCH": "index_merge=on",
+                "JOIN_BUFFER_SIZE": "262144",
+                "OPTIMIZER_SEARCH_DEPTH": "62",
+            },
+        )
+        result = to_markdown(ctx)
+        # Params devem aparecer mesmo com keys em UPPERCASE
+        assert "optimizer_switch" in result
+        assert "join_buffer_size" in result
+        assert "optimizer_search_depth" in result
+
+    def test_format_optimizer_params_uppercase_keys_direct(self):
+        """T1: _format_optimizer_params com uppercase keys retorna conteudo."""
+        from sqlmentor.report import _format_optimizer_params
+
+        result = _format_optimizer_params(
+            {
+                "OPTIMIZER_SWITCH": "index_merge=on",
+                "JOIN_BUFFER_SIZE": "262144",
+            },
+            db_type="mariadb",
+        )
+        assert result != ""
+        assert "optimizer_switch" in result
+        assert "join_buffer_size" in result
+
 
 class TestMariaDBRuntimeStatsLabel:
     """T4: Stats label mostra 'Runtime Stats' para MariaDB, 'V$SQL' para Oracle."""

@@ -1900,6 +1900,10 @@ def _format_optimizer_params(params: dict[str, str], db_type: str = "oracle") ->
 
     defaults = _MARIADB_OPTIMIZER_DEFAULTS if db_type == "mariadb" else _OPTIMIZER_DEFAULTS
 
+    # MariaDB retorna UPPERCASE de information_schema.GLOBAL_VARIABLES;
+    # defaults usam lowercase → normaliza para garantir match.
+    params = {k.lower(): v for k, v in params.items()}
+
     lines = []
 
     warnings = []
