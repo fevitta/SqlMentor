@@ -229,7 +229,7 @@ def collect_context(
 
     # 1. Execution Plan
     collectible_types = ("SELECT", "INSERT", "UPDATE", "DELETE", "MERGE")
-    if parsed.sql_type in collectible_types or (parsed.sql_type == "UNKNOWN" and execute):
+    if parsed.sql_type in collectible_types or parsed.sql_type == "UNKNOWN":
         if execute and parsed.sql_type in ("SELECT", "UNKNOWN"):
             # Executa a query real com GATHER_PLAN_STATISTICS e coleta plano + stats
             _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx, adapter, bind_params)
@@ -652,16 +652,18 @@ def _collect_runtime_execution(
             if row and row[0]:
                 ctx.runtime_plan = str(row[0]).splitlines()
 
-            # Coleta sql_id e stats via performance_schema
-            sql, params = qb.prev_sql_id()
-            cursor.execute(sql, params)
-            row = cursor.fetchone()
-            sql_id = row[0] if row else None
-
-            if sql_id:
-                sql, params = qb.sql_runtime_stats(sql_id)
-                rows = adapter.execute_query(cursor, sql, params)
-                ctx.runtime_stats = rows[0] if rows else None
+            # Busca stats da query original (ignora ANALYZE wrapper e queries internas)
+            sql, params = qb.last_analyze_stats()
+            rows = adapter.execute_query(cursor, sql, params)
+            if rows:
+                ctx.runtime_stats = rows[0]
+                sql_id = rows[0].get("sql_id")
+                # Complementa com stats históricas do summary_by_digest
+                if sql_id:
+                    sql2, params2 = qb.sql_runtime_stats(sql_id)
+                    hist_rows = adapter.execute_query(cursor, sql2, params2)
+                    if hist_rows:
+                        ctx.runtime_stats = hist_rows[0]
 
             if sid:
                 sql, params = qb.session_wait_events(sid)

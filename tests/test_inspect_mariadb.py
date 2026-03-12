@@ -281,6 +281,60 @@ class TestDoctorMariaDB:
 # ─── TestDiagnoseConnectionSchema ─────────────────────────────────────
 
 
+# ─── T11: MariaDBQueryBuilder new methods ─────────────────────────────
+
+
+class TestMariaDBInspectQueryBuilder:
+    """T11: sql_text_original e setup_consumers existem no query builder."""
+
+    def test_sql_text_original(self):
+        from sqlmentor.adapters.mariadb import MariaDBQueryBuilder
+
+        qb = MariaDBQueryBuilder()
+        sql, params = qb.sql_text_original("abc123")
+        assert "events_statements_history_long" in sql
+        assert params == {"digest": "abc123"}
+
+    def test_setup_consumers(self):
+        from sqlmentor.adapters.mariadb import MariaDBQueryBuilder
+
+        qb = MariaDBQueryBuilder()
+        sql, params = qb.setup_consumers()
+        assert "setup_consumers" in sql
+        assert "statements_digest" in sql
+        assert params == {}
+
+
+# ─── T11: CLI inspect with sql_text_original fallback ──────────────────
+
+
+class TestInspectMariaDBOriginalText:
+    """T11: inspect tenta sql_text_original antes de sql_text_by_id."""
+
+    def test_uses_sql_text_original_first(self, monkeypatch, tmp_path):
+        out_file, mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="mariadb")
+
+        # Override fetchone to simulate sql_text_original returning result
+        call_count = [0]
+
+        def mock_fetchone():
+            call_count[0] += 1
+            if call_count[0] == 1:  # sql_text_original
+                return ("SELECT 1 FROM orders",)
+            if call_count[0] == 2:  # explain_plan
+                return ('{"query_block": {}}',)
+            return None
+
+        mocks["cursor"].fetchone = mock_fetchone
+
+        result = runner.invoke(
+            app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)]
+        )
+        assert result.exit_code == 0
+        # sql_text_original should have been called
+        mocks["qb"].sql_text_original.assert_called_once_with("abc123")
+
+
 class TestDiagnoseConnectionSchema:
     """MariaDBAdapter.diagnose_connection retorna schema."""
 

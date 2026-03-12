@@ -1747,8 +1747,8 @@ class TestUnknownSqlTypeWithExecute:
         # Com execute=True e UNKNOWN, deve tentar coletar runtime plan
         assert ctx.runtime_plan is not None or ctx.execution_plan is not None
 
-    def test_unknown_without_execute_skips_plan(self):
-        """UNKNOWN sem execute=True não deve coletar plano."""
+    def test_unknown_without_execute_collects_estimated_plan(self):
+        """UNKNOWN sem execute=True deve coletar plano estimado (T8)."""
         parsed = ParsedSQL(
             raw_sql="SOME WEIRD STATEMENT",
             sql_type="UNKNOWN",
@@ -1760,5 +1760,6 @@ class TestUnknownSqlTypeWithExecute:
         adapter = _make_adapter_mock()
         adapter.fold_case = True
         ctx = collect_context(parsed, conn, "HR", execute=False, adapter=adapter)
-        assert ctx.execution_plan is None
+        # T8: UNKNOWN agora coleta plano estimado mesmo sem execute
+        assert ctx.execution_plan is not None
         assert ctx.runtime_plan is None

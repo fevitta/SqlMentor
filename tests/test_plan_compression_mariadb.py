@@ -357,3 +357,24 @@ class TestMariaDBExtractIndexNames:
         )
         names = _extract_plan_index_names(plan_json.splitlines(), db_type="mariadb")
         assert names == set()
+
+
+# ─── T5: _compress_plan early return for MariaDB ──────────────────────
+
+
+class TestMariaDBCompressPlanEarlyReturn:
+    """T5: _compress_plan com db_type='mariadb' retorna plan_lines inalterado."""
+
+    def test_compact_returns_plan_unchanged(self):
+        """Compress com compact + mariadb retorna plan_lines sem modificação."""
+        plan_lines = ESTIMATED_PLAN_JSON.splitlines()
+        new_plan, new_preds = _compress_plan(plan_lines, ["pred1"], "compact", db_type="mariadb")
+        assert new_plan == plan_lines
+        assert new_preds == ["pred1"]
+
+    def test_compact_returns_non_empty(self):
+        """Garante que _compress_plan não retorna plano vazio para MariaDB."""
+        plan_lines = ANALYZE_PLAN_JSON.splitlines()
+        new_plan, _new_preds = _compress_plan(plan_lines, [], "compact", db_type="mariadb")
+        assert len(new_plan) > 0
+        assert new_plan == plan_lines

@@ -504,20 +504,55 @@ def inspect(
     qb = adapter.query_builder
     cursor = db_conn.cursor()
 
-    # Recupera SQL original do shared pool
+    # Recupera SQL original
     console.print(f"[cyan]Buscando statement:[/cyan] {statement_id}")
     try:
-        sql_query, params = qb.sql_text_by_id(statement_id)
-        cursor.execute(sql_query, params)
-        row = cursor.fetchone()
-        if not row or not row[0]:
+        # MariaDB: tenta sql_text_original (events_statements_history_long) primeiro
+        sql_text = None
+        if adapter.db_type == "mariadb" and hasattr(qb, "sql_text_original"):
+            try:
+                sql_query, params = qb.sql_text_original(statement_id)
+                cursor.execute(sql_query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    sql_text = str(row[0])
+            except Exception:  # noqa: S110
+                pass  # fallback para sql_text_by_id (DIGEST_TEXT)
+
+        if not sql_text:
+            sql_query, params = qb.sql_text_by_id(statement_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
+
+        if not sql_text:
+            # MariaDB: diagnóstico de consumers
+            if adapter.db_type == "mariadb" and hasattr(qb, "setup_consumers"):
+                try:
+                    sql_query, params = qb.setup_consumers()
+                    cursor.execute(sql_query, params)
+                    consumers = {r[0]: r[1] for r in cursor}
+                    hist_long = consumers.get("events_statements_history_long", "NO")
+                    if hist_long != "YES":
+                        console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
+                        console.print("  [yellow]events_statements_history_long está OFF.[/yellow]")
+                        console.print(
+                            "  Ative com: UPDATE performance_schema.setup_consumers "
+                            "SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long';"
+                        )
+                        db_conn.close()
+                        raise typer.Exit(1)
+                except typer.Exit:
+                    raise
+                except Exception:  # noqa: S110
+                    pass
             console.print(
                 f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool."
             )
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
             db_conn.close()
             raise typer.Exit(1)
-        sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         if "não encontrado" in str(e) or "Exit" in type(e).__name__:
             raise
@@ -666,15 +701,15 @@ def _print_summary(ctx) -> None:
     )
 
     if ctx.runtime_plan:
-        table.add_row(
-            "Runtime Plan (ALLSTATS LAST)",
-            "[green]✓[/green]",
+        plan_label = (
+            "Runtime Plan (ANALYZE FORMAT=JSON)"
+            if ctx.db_type == "mariadb"
+            else "Runtime Plan (ALLSTATS LAST)"
         )
+        table.add_row(plan_label, "[green]✓[/green]")
     if ctx.runtime_stats:
-        table.add_row(
-            "Runtime Stats (V$SQL)",
-            "[green]✓[/green]",
-        )
+        stats_label = "Runtime Stats" if ctx.db_type == "mariadb" else "Runtime Stats (V$SQL)"
+        table.add_row(stats_label, "[green]✓[/green]")
     if ctx.wait_events:
         table.add_row(
             "Wait Events",
@@ -1040,6 +1075,34 @@ def doctor() -> None:
                 )
                 if perf_schema:
                     console.print("    [green]✓ performance_schema: ON[/green]")
+                    # Verifica consumers para inspect
+                    try:
+                        from sqlmentor.connector import connect_with_adapter
+
+                        _adapter, _conn = connect_with_adapter(name)
+                        _cursor = _conn.cursor()
+                        _qb = _adapter.query_builder
+                        if hasattr(_qb, "setup_consumers"):
+                            sql, params = _qb.setup_consumers()
+                            _cursor.execute(sql, params)
+                            consumers = {r[0]: r[1] for r in _cursor}
+                            for cname, needed in [
+                                ("statements_digest", True),
+                                ("events_statements_history_long", False),
+                            ]:
+                                enabled = consumers.get(cname, "NO") == "YES"
+                                if enabled:
+                                    console.print(f"    [green]✓ {cname}: YES[/green]")
+                                elif needed:
+                                    console.print(f"    [red]✗ {cname}: NO — inspect requer[/red]")
+                                else:
+                                    console.print(
+                                        f"    [yellow]⚠ {cname}: NO — inspect sem SQL original[/yellow]"
+                                    )
+                        _cursor.close()
+                        _conn.close()
+                    except Exception:  # noqa: S110
+                        pass
                 else:
                     console.print(
                         "    [red]✗ performance_schema: OFF — inspect não funcionará[/red]"

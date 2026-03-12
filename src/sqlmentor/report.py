@@ -668,6 +668,11 @@ def _compress_plan(
 
     _apply_thresholds(blocks)
 
+    # MariaDB: plano é JSON — regras de colapso Oracle (pipe-format) não se aplicam.
+    # R5 thresholds já foram aplicados para uso downstream (R9-R11).
+    if db_type == "mariadb":
+        return plan_lines, predicate_lines
+
     pred_map = _build_predicate_map(plan_lines)
 
     is_estimated = _is_estimated_plan(plan_lines, db_type=db_type)
@@ -1016,7 +1021,7 @@ def to_markdown(
             stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
             lines.append(f"## Runtime Stats ({stats_label})")
 
-            lines.append(_format_runtime_stats(ctx.runtime_stats))
+            lines.append(_format_runtime_stats(ctx.runtime_stats, db_type=ctx.db_type))
             lines.append("")
 
         if ctx.optimizer_params:
@@ -1190,7 +1195,7 @@ def to_markdown(
         stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
         lines.append(f"## {section}. Runtime Stats ({stats_label})")
 
-        lines.append(_format_runtime_stats(ctx.runtime_stats))
+        lines.append(_format_runtime_stats(ctx.runtime_stats, db_type=ctx.db_type))
         lines.append("")
 
         section += 1
@@ -1223,9 +1228,11 @@ def to_markdown(
                     clean = b.name.strip('"').upper()
                     if not clean.startswith("<"):
                         plan_tables.add(clean)
-                    # Index → table mapping
-                    if b.name in ctx.index_table_map:
-                        plan_tables.add(ctx.index_table_map[b.name].upper())
+                    # Index → table mapping (case-insensitive para MariaDB)
+                    if clean in ctx.index_table_map or b.name in ctx.index_table_map:
+                        mapped = ctx.index_table_map.get(clean) or ctx.index_table_map.get(b.name)
+                        if mapped:
+                            plan_tables.add(mapped.upper())
 
         # Tabelas do SQL original (sem views)
 
@@ -1381,7 +1388,7 @@ def to_markdown(
         if table.stats:
             lines.append("### Estatísticas Gerais")
 
-            lines.append(_format_table_stats(table.stats))
+            lines.append(_format_table_stats(table.stats, db_type=ctx.db_type))
             lines.append("")
 
         # Columns — filtra pra mostrar só colunas referenciadas no SQL
@@ -1457,7 +1464,7 @@ def to_markdown(
 
             lines.append("### Índices")
 
-            lines.append(_format_indexes(display_indexes))
+            lines.append(_format_indexes(display_indexes, db_type=ctx.db_type))
             if idx_omitted > 0:
                 lines.append(
                     f"\n*({idx_omitted} índices não relacionados às cláusulas do SQL omitidos)*"
@@ -1862,7 +1869,7 @@ def _filter_columns_by_sql(
 
 # Parâmetros do otimizador relevantes pra tuning com seus defaults Oracle
 
-_OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
+_OPTIMIZER_DEFAULTS: dict[str, tuple[str | None, str]] = {
     "optimizer_mode": ("ALL_ROWS", "Modo do otimizador"),
     "optimizer_index_cost_adj": (
         "100",
@@ -1878,8 +1885,8 @@ _OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
     "result_cache_mode": ("MANUAL", "Cache de resultados"),
 }
 
-_MARIADB_OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
-    "optimizer_switch": ("", "Flags do otimizador MariaDB"),
+_MARIADB_OPTIMIZER_DEFAULTS: dict[str, tuple[str | None, str]] = {
+    "optimizer_switch": (None, "Flags do otimizador MariaDB"),
     "optimizer_use_condition_selectivity": ("4", "Nível de seletividade (1-5)"),
     "optimizer_search_depth": ("62", "Profundidade de busca do otimizador"),
     "join_buffer_size": ("262144", "Buffer de join (bytes)"),
@@ -2005,7 +2012,7 @@ def _table_to_dict(table: TableContext) -> dict[str, Any]:
     }
 
 
-def _format_table_stats(stats: dict[str, Any]) -> str:
+def _format_table_stats(stats: dict[str, Any], db_type: str = "oracle") -> str:
     """Formata stats de tabela como texto compacto."""
 
     parts = []
@@ -2018,10 +2025,11 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
         )
 
     if stats.get("blocks"):
+        block_label = "Pages" if db_type == "mariadb" else "Blocks"
         parts.append(
-            f"**Blocks:** {stats['blocks']:,}"
+            f"**{block_label}:** {stats['blocks']:,}"
             if isinstance(stats["blocks"], int | float)
-            else f"**Blocks:** {stats['blocks']}"
+            else f"**{block_label}:** {stats['blocks']}"
         )
 
     if stats.get("avg_row_len"):
@@ -2030,24 +2038,25 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     if stats.get("last_analyzed"):
         parts.append(f"**Last Analyzed:** {stats['last_analyzed']}")
 
-    # Sample size com warning se amostra é pequena
+    # Sample size com warning se amostra é pequena (skip para MariaDB — sempre 100%)
 
-    num_rows = stats.get("num_rows", 0) or 0
+    if db_type != "mariadb":
+        num_rows = stats.get("num_rows", 0) or 0
 
-    sample = stats.get("sample_size")
+        sample = stats.get("sample_size")
 
-    if sample is not None and num_rows > 0:
-        pct = (sample / num_rows) * 100 if num_rows else 0
+        if sample is not None and num_rows > 0:
+            pct = (sample / num_rows) * 100 if num_rows else 0
 
-        sample_str = (
-            f"**Sample Size:** {sample:,} ({pct:.0f}%)"
-            if isinstance(sample, int | float)
-            else f"**Sample Size:** {sample}"
-        )
+            sample_str = (
+                f"**Sample Size:** {sample:,} ({pct:.0f}%)"
+                if isinstance(sample, int | float)
+                else f"**Sample Size:** {sample}"
+            )
 
-        if pct < 10:
-            sample_str += " ⚠️"
-        parts.append(sample_str)
+            if pct < 10:
+                sample_str += " ⚠️"
+            parts.append(sample_str)
 
     if stats.get("partitioned"):
         parts.append(f"**Partitioned:** {stats['partitioned']}")
@@ -2055,7 +2064,8 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     if stats.get("compression"):
         parts.append(f"**Compression:** {stats['compression']}")
 
-    if stats.get("degree"):
+    # Parallel Degree (skip para MariaDB — sempre 1)
+    if db_type != "mariadb" and stats.get("degree"):
         parts.append(f"**Parallel Degree:** {stats['degree']}")
 
     return " | ".join(parts)
@@ -2130,13 +2140,19 @@ def _format_column_structure(columns: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_indexes(idxs: list[dict[str, Any]]) -> str:
+def _format_indexes(idxs: list[dict[str, Any]], db_type: str = "oracle") -> str:
     """Formata índices como tabela markdown."""
 
-    lines = [
-        "| Nome | Tipo | Unique | Colunas | Distinct Keys | Clustering Factor | BLevel | Last Analyzed | Status |",
-        "|------|------|--------|---------|---------------|-------------------|--------|---------------|--------|",
-    ]
+    if db_type == "mariadb":
+        lines = [
+            "| Nome | Tipo | Unique | Colunas | Distinct Keys | Last Analyzed | Status |",
+            "|------|------|--------|---------|---------------|---------------|--------|",
+        ]
+    else:
+        lines = [
+            "| Nome | Tipo | Unique | Colunas | Distinct Keys | Clustering Factor | BLevel | Last Analyzed | Status |",
+            "|------|------|--------|---------|---------------|-------------------|--------|---------------|--------|",
+        ]
 
     for idx in idxs:
         name = idx.get("index_name", "?")
@@ -2149,20 +2165,25 @@ def _format_indexes(idxs: list[dict[str, Any]]) -> str:
 
         dk = idx.get("distinct_keys", "?")
 
-        cf = idx.get("clustering_factor", "?")
-
-        blevel = idx.get("blevel", "?")
-
         analyzed = idx.get("last_analyzed", "?")
 
         status = idx.get("status", "?")
 
-        # blevel > 3 é red flag
+        if db_type == "mariadb":
+            lines.append(f"| {name} | {itype} | {uniq} | {cols} | {dk} | {analyzed} | {status} |")
+        else:
+            cf = idx.get("clustering_factor", "?")
 
-        bl_str = f"{blevel} ⚠️" if isinstance(blevel, int | float) and blevel > 3 else str(blevel)
-        lines.append(
-            f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
-        )
+            blevel = idx.get("blevel", "?")
+
+            # blevel > 3 é red flag
+
+            bl_str = (
+                f"{blevel} ⚠️" if isinstance(blevel, int | float) and blevel > 3 else str(blevel)
+            )
+            lines.append(
+                f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
+            )
 
     return "\n".join(lines)
 
@@ -2263,28 +2284,42 @@ def _format_partitions(parts: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_runtime_stats(stats: dict[str, Any]) -> str:
-    """Formata métricas de execução de V$SQL com warnings de saúde."""
+def _format_runtime_stats(stats: dict[str, Any], db_type: str = "oracle") -> str:
+    """Formata métricas de execução com warnings de saúde.
+
+    Oracle: V$SQL mapping. MariaDB: performance_schema mapping.
+    """
 
     lines = []
 
-    mapping = [
-        ("sql_id", "SQL ID"),
-        ("child_number", "Child Number"),
-        ("plan_hash_value", "Plan Hash Value"),
-        ("executions", "Executions"),
-        ("avg_elapsed_ms", "Avg Elapsed (ms)"),
-        ("avg_cpu_ms", "Avg CPU (ms)"),
-        ("avg_buffer_gets", "Avg Buffer Gets"),
-        ("avg_rows_per_exec", "Avg Rows/Exec"),
-        ("disk_reads", "Disk Reads"),
-        ("rows_processed", "Rows Processed"),
-        ("sorts", "Sorts"),
-        ("parse_calls", "Parse Calls"),
-        ("loads", "Loads (hard parses)"),
-        ("invalidations", "Invalidations"),
-        ("version_count", "Version Count (children)"),
-    ]
+    if db_type == "mariadb":
+        mapping = [
+            ("sql_id", "Digest"),
+            ("executions", "Executions"),
+            ("avg_elapsed_ms", "Avg Elapsed (ms)"),
+            ("avg_rows_per_exec", "Avg Rows/Exec"),
+            ("rows_processed", "Rows Sent"),
+            ("disk_reads", "Sort Merge Passes"),
+            ("sorts", "Sort Rows"),
+        ]
+    else:
+        mapping = [
+            ("sql_id", "SQL ID"),
+            ("child_number", "Child Number"),
+            ("plan_hash_value", "Plan Hash Value"),
+            ("executions", "Executions"),
+            ("avg_elapsed_ms", "Avg Elapsed (ms)"),
+            ("avg_cpu_ms", "Avg CPU (ms)"),
+            ("avg_buffer_gets", "Avg Buffer Gets"),
+            ("avg_rows_per_exec", "Avg Rows/Exec"),
+            ("disk_reads", "Disk Reads"),
+            ("rows_processed", "Rows Processed"),
+            ("sorts", "Sorts"),
+            ("parse_calls", "Parse Calls"),
+            ("loads", "Loads (hard parses)"),
+            ("invalidations", "Invalidations"),
+            ("version_count", "Version Count (children)"),
+        ]
 
     for key, label in mapping:
         val = stats.get(key)
@@ -2296,40 +2331,43 @@ def _format_runtime_stats(stats: dict[str, Any]) -> str:
 
     warnings = []
 
-    loads = stats.get("loads", 0) or 0
+    # Oracle-specific warnings (hard parses, invalidations, version count, cursor reuse)
+    if db_type != "mariadb":
+        loads = stats.get("loads", 0) or 0
 
-    if loads > 1:
-        warnings.append(
-            f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente"
-        )
-
-    invalidations = stats.get("invalidations", 0) or 0
-
-    if invalidations > 0:
-        warnings.append(
-            f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas"
-        )
-
-    version_count = stats.get("version_count", 0) or 0
-
-    if version_count > 5:
-        warnings.append(
-            f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch"
-        )
-
-    parse_calls = stats.get("parse_calls", 0) or 0
-
-    executions = stats.get("executions", 0) or 0
-
-    if executions > 0 and parse_calls >= executions:
-        ratio = parse_calls / executions
-
-        if ratio >= 1.0:
+        if loads > 1:
             warnings.append(
-                f"⚠️ Parse calls ({parse_calls}) ≈ executions ({executions}) — "
-                "cursor não está sendo reutilizado entre execuções (soft parse a cada call)"
+                f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente"
             )
 
+        invalidations = stats.get("invalidations", 0) or 0
+
+        if invalidations > 0:
+            warnings.append(
+                f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas"
+            )
+
+        version_count = stats.get("version_count", 0) or 0
+
+        if version_count > 5:
+            warnings.append(
+                f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch"
+            )
+
+        parse_calls = stats.get("parse_calls", 0) or 0
+
+        executions = stats.get("executions", 0) or 0
+
+        if executions > 0 and parse_calls >= executions:
+            ratio = parse_calls / executions
+
+            if ratio >= 1.0:
+                warnings.append(
+                    f"⚠️ Parse calls ({parse_calls}) ≈ executions ({executions}) — "
+                    "cursor não está sendo reutilizado entre execuções (soft parse a cada call)"
+                )
+
+    # CPU-bound / IO-bound analysis (funciona para ambos)
     avg_elapsed = stats.get("avg_elapsed_ms", 0) or 0
 
     avg_cpu = stats.get("avg_cpu_ms", 0) or 0

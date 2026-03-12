@@ -620,3 +620,33 @@ class TestConfigDictsIntegrity:
     def test_bind_style_has_all_dialects(self):
         for d in SUPPORTED_DIALECTS:
             assert d in _BIND_STYLE
+
+
+# ─── T9: WHERE columns literal filtering ─────────────────────────────────────
+
+
+class TestWhereColumnsLiteralFiltering:
+    """T9: Literais com espaço e nomes vazios não devem aparecer em where_columns."""
+
+    def test_in_clause_literals_not_in_where_columns(self):
+        sql = "SELECT * FROM chamados WHERE estado IN ('Cancelada', 'Fechado em WFM')"
+        result = parse_sql(sql, dialect="mariadb")
+        # Literais com espaço não devem ser tratados como colunas
+        for col in result.where_columns:
+            assert "Fechado em WFM" not in col
+            assert "Cancelada" not in col
+
+    def test_normal_where_column_still_extracted(self):
+        sql = "SELECT * FROM chamados WHERE estado IN ('Cancelada', 'Fechado em WFM') AND prioridade = 1"
+        result = parse_sql(sql, dialect="mariadb")
+        col_names = [c.split(".")[-1].upper() for c in result.where_columns]
+        assert "ESTADO" in col_names
+        assert "PRIORIDADE" in col_names
+
+    def test_empty_column_name_not_extracted(self):
+        """Column com nome vazio não gera artifact."""
+        sql = "SELECT * FROM orders WHERE status = 'active'"
+        result = parse_sql(sql, dialect="mariadb")
+        for col in result.where_columns:
+            # Nenhuma coluna deve ser só "alias." (nome vazio)
+            assert not col.endswith(".")

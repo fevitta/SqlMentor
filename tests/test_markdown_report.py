@@ -365,3 +365,48 @@ class TestMariaDBRuntimePlanLabels:
         result = to_markdown(ctx, verbosity="full")
         assert "shared pool" not in result
         assert "SQL_ID" not in result
+
+
+# ─── T12: View Expansion case-insensitive lookup ───────────────────────────
+
+
+class TestViewExpansionCaseInsensitive:
+    """T12: index_table_map lookup usa both raw and uppercased keys."""
+
+    def test_lowercase_index_mapped_to_table(self):
+        """MariaDB retorna nomes lowercase; index_table_map deve funcionar."""
+        import json
+
+        plan_json = json.dumps(
+            {
+                "query_block": {
+                    "select_id": 1,
+                    "table": {
+                        "table_name": "idx_orders_status",
+                        "access_type": "ref",
+                        "rows_examined_per_scan": 5,
+                    },
+                }
+            }
+        )
+
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT * FROM v_orders",
+                sql_type="SELECT",
+                tables=[{"schema": "mydb", "name": "v_orders"}],
+            ),
+            db_type="mariadb",
+            execution_plan=plan_json.splitlines(),
+            view_expansions={"v_orders": ["mydb.orders"]},
+            index_table_map={"IDX_ORDERS_STATUS": "orders"},
+            tables=[
+                TableContext(
+                    name="v_orders",
+                    schema="mydb",
+                    object_type="VIEW",
+                ),
+            ],
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "Acessadas no plano" in result

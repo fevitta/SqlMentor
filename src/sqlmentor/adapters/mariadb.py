@@ -135,6 +135,34 @@ class MariaDBQueryBuilder(QueryBuilder):
             {},
         )
 
+    def last_analyze_stats(self) -> tuple[str, dict]:
+        """Stats da última query executada (ignora ANALYZE wrapper e queries internas)."""
+        return (
+            """
+            SELECT DIGEST AS sql_id,
+                   1 AS executions,
+                   TIMER_WAIT / 1000000000 AS avg_elapsed_ms,
+                   0 AS avg_cpu_ms,
+                   0 AS avg_buffer_gets,
+                   ROWS_SENT AS avg_rows_per_exec,
+                   ROWS_SENT AS rows_processed,
+                   SUM_SORT_ROWS AS sorts,
+                   ROWS_EXAMINED AS disk_reads
+            FROM performance_schema.events_statements_history
+            WHERE THREAD_ID = (
+                SELECT THREAD_ID FROM performance_schema.threads
+                WHERE PROCESSLIST_ID = CONNECTION_ID()
+            )
+            AND DIGEST IS NOT NULL
+            AND SQL_TEXT NOT LIKE 'ANALYZE%%'
+            AND SQL_TEXT NOT LIKE 'SELECT%%THREAD_ID%%'
+            AND SQL_TEXT NOT LIKE 'SELECT%%CONNECTION_ID%%'
+            ORDER BY EVENT_ID DESC
+            LIMIT 1
+            """,
+            {},
+        )
+
     def session_wait_events(self, session_id: int) -> tuple[str, dict]:
         """Wait events da sessão (top 10 por tempo) via performance_schema."""
         return (
@@ -405,6 +433,34 @@ class MariaDBQueryBuilder(QueryBuilder):
             WHERE DIGEST = %(sql_id)s
             """,
             {"sql_id": sql_id},
+        )
+
+    def sql_text_original(self, digest: str) -> tuple[str, dict]:
+        """Texto SQL original de events_statements_history_long."""
+        return (
+            """
+            SELECT SQL_TEXT
+            FROM performance_schema.events_statements_history_long
+            WHERE DIGEST = %(digest)s
+            ORDER BY EVENT_ID DESC
+            LIMIT 1
+            """,
+            {"digest": digest},
+        )
+
+    def setup_consumers(self) -> tuple[str, dict]:
+        """Estado dos consumers relevantes do performance_schema."""
+        return (
+            """
+            SELECT NAME, ENABLED
+            FROM performance_schema.setup_consumers
+            WHERE NAME IN (
+                'statements_digest',
+                'events_statements_history',
+                'events_statements_history_long'
+            )
+            """,
+            {},
         )
 
     # ── Segurança ────────────────────────────────────────────────────

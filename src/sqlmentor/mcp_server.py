@@ -361,12 +361,28 @@ def inspect_sql(
     qb = adapter.query_builder
     cursor = db_conn.cursor()
 
-    # Recupera SQL original do shared pool
+    # Recupera SQL original
     try:
-        sql_query, params = qb.sql_text_by_id(statement_id)
-        cursor.execute(sql_query, params)
-        row = cursor.fetchone()
-        if not row or not row[0]:
+        sql_text = None
+        # MariaDB: tenta sql_text_original (events_statements_history_long) primeiro
+        if adapter.db_type == "mariadb" and hasattr(qb, "sql_text_original"):
+            try:
+                sql_query, params = qb.sql_text_original(statement_id)
+                cursor.execute(sql_query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    sql_text = str(row[0])
+            except Exception:  # noqa: S110
+                pass  # fallback para sql_text_by_id (DIGEST_TEXT)
+
+        if not sql_text:
+            sql_query, params = qb.sql_text_by_id(statement_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
+
+        if not sql_text:
             db_conn.close()
             return json.dumps(
                 {
@@ -374,7 +390,6 @@ def inspect_sql(
                     "hint": "O cursor pode ter sido expurgado. Tente re-executar a query.",
                 }
             )
-        sql_text = str(row[0]).read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
     except Exception as e:
         db_conn.close()
         return json.dumps({"error": f"Erro ao buscar SQL: {e}"})

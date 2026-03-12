@@ -1009,3 +1009,155 @@ class TestStripColumnProjection:
         )
         md = to_markdown(ctx, verbosity="full")
         assert "Column Projection" in md
+
+
+# ─── T17: optimizer_switch warning ─────────────────────────────────────────
+
+
+class TestOptimizerSwitchNoWarning:
+    """T17: optimizer_switch com default None não gera warning espúrio."""
+
+    def test_optimizer_switch_set_no_warning(self):
+        """optimizer_switch definido não deve gerar warning (default é None)."""
+        params = {"optimizer_switch": "index_merge=on,mrr=on"}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "optimizer_switch" in result
+        assert "index_merge=on,mrr=on" in result
+        assert "⚠️" not in result
+
+    def test_optimizer_switch_empty_not_shown(self):
+        """optimizer_switch vazio não deve ser mostrado (value is None → skip)."""
+        params = {"optimizer_switch": None}
+        result = _format_optimizer_params(params, db_type="mariadb")
+        assert "optimizer_switch" not in result
+
+
+# ─── T14: _format_runtime_stats MariaDB ────────────────────────────────────
+
+
+class TestFormatRuntimeStatsMariaDB:
+    """T14: MariaDB mapping usa labels diferentes e omite warnings Oracle."""
+
+    def test_mariadb_shows_digest_not_sql_id(self):
+        stats = {"sql_id": "abc123", "executions": 10}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "**Digest:** abc123" in result
+        assert "**SQL ID:**" not in result
+
+    def test_mariadb_shows_rows_sent(self):
+        stats = {"rows_processed": 500}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "**Rows Sent:** 500" in result
+
+    def test_mariadb_shows_sort_merge_passes(self):
+        stats = {"disk_reads": 3}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "**Sort Merge Passes:** 3" in result
+
+    def test_mariadb_no_hard_parse_warning(self):
+        stats = {"loads": 5}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "hard parses" not in result
+
+    def test_mariadb_no_invalidations_warning(self):
+        stats = {"invalidations": 3}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "invalidações" not in result
+
+    def test_mariadb_no_version_count_warning(self):
+        stats = {"version_count": 10}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "child cursors" not in result
+
+    def test_mariadb_no_cursor_reuse_warning(self):
+        stats = {"parse_calls": 100, "executions": 100}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "cursor não está sendo reutilizado" not in result
+
+    def test_mariadb_cpu_bound_still_works(self):
+        stats = {"avg_elapsed_ms": 100, "avg_cpu_ms": 98}
+        result = _format_runtime_stats(stats, db_type="mariadb")
+        assert "CPU-bound" in result
+
+    def test_oracle_default_keeps_all_warnings(self):
+        """Oracle (default) mantém todos os warnings."""
+        stats = {"loads": 5, "invalidations": 3, "version_count": 10}
+        result = _format_runtime_stats(stats)
+        assert "hard parses" in result
+        assert "invalidações" in result
+        assert "child cursors" in result
+
+
+# ─── T16: _format_table_stats MariaDB ──────────────────────────────────────
+
+
+class TestFormatTableStatsMariaDB:
+    """T16: MariaDB usa 'Pages' em vez de 'Blocks', omite Sample Size e Parallel Degree."""
+
+    def test_mariadb_shows_pages_not_blocks(self):
+        result = _format_table_stats({"num_rows": 1000, "blocks": 50}, db_type="mariadb")
+        assert "**Pages:** 50" in result
+        assert "**Blocks:**" not in result
+
+    def test_oracle_shows_blocks(self):
+        result = _format_table_stats({"num_rows": 1000, "blocks": 50}, db_type="oracle")
+        assert "**Blocks:** 50" in result
+        assert "**Pages:**" not in result
+
+    def test_mariadb_no_sample_size(self):
+        result = _format_table_stats(
+            {"num_rows": 100_000, "sample_size": 100_000}, db_type="mariadb"
+        )
+        assert "**Sample Size:**" not in result
+
+    def test_mariadb_no_parallel_degree(self):
+        result = _format_table_stats({"num_rows": 1000, "degree": "1"}, db_type="mariadb")
+        assert "**Parallel Degree:**" not in result
+
+    def test_oracle_shows_parallel_degree(self):
+        result = _format_table_stats({"num_rows": 1000, "degree": "4"}, db_type="oracle")
+        assert "**Parallel Degree:** 4" in result
+
+
+# ─── T16: _format_indexes MariaDB ──────────────────────────────────────────
+
+
+class TestFormatIndexesMariaDB:
+    """T16: MariaDB omite Clustering Factor e BLevel."""
+
+    def test_mariadb_no_clustering_factor_blevel(self):
+        idxs = [
+            {
+                "index_name": "idx_orders_pk",
+                "index_type": "BTREE",
+                "uniqueness": "UNIQUE",
+                "columns": "id",
+                "distinct_keys": 1000,
+                "clustering_factor": None,
+                "blevel": None,
+                "last_analyzed": None,
+                "status": "VALID",
+            }
+        ]
+        result = _format_indexes(idxs, db_type="mariadb")
+        assert "Clustering Factor" not in result
+        assert "BLevel" not in result
+        assert "idx_orders_pk" in result
+
+    def test_oracle_has_clustering_factor_blevel(self):
+        idxs = [
+            {
+                "index_name": "PK_USERS",
+                "index_type": "NORMAL",
+                "uniqueness": "UNIQUE",
+                "columns": "ID",
+                "distinct_keys": 1000,
+                "clustering_factor": 50,
+                "blevel": 1,
+                "last_analyzed": "2025-01-01",
+                "status": "VALID",
+            }
+        ]
+        result = _format_indexes(idxs, db_type="oracle")
+        assert "Clustering Factor" in result
+        assert "BLevel" in result

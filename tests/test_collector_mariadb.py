@@ -116,9 +116,6 @@ class TestMariaDBRuntimeExecution:
 
         # session_sid → SID
         # ANALYZE → JSON result
-        # prev_sql_id → digest
-        # sql_runtime_stats → stats
-        # session_wait_events → events
         call_count = [0]
 
         def mock_execute(sql, params=None):
@@ -130,17 +127,18 @@ class TestMariaDBRuntimeExecution:
                 return (42,)
             if n == 2:  # ANALYZE FORMAT=JSON
                 return (json_result,)
-            if n == 3:  # prev_sql_id
-                return ("abc123",)
             return None
 
         cursor.execute = mock_execute
         cursor.fetchone = mock_fetchone
 
-        # Mock execute_query para sql_runtime_stats e wait_events
-        stats_result = [{"sql_id": "abc123", "executions": 1}]
+        # Mock execute_query para last_analyze_stats, sql_runtime_stats e wait_events
+        last_analyze_result = [{"sql_id": "abc123", "executions": 1, "avg_elapsed_ms": 0.5}]
+        stats_result = [{"sql_id": "abc123", "executions": 5}]
         wait_result = [{"event": "wait/io", "total_waits": 5}]
-        adapter.execute_query = MagicMock(side_effect=[stats_result, wait_result])
+        adapter.execute_query = MagicMock(
+            side_effect=[last_analyze_result, stats_result, wait_result]
+        )
 
         ctx = CollectedContext(parsed_sql=_make_parsed_sql(), db_type="mariadb")
         _collect_runtime_execution(cursor, conn, "SELECT * FROM t1", ctx, adapter)
@@ -273,6 +271,75 @@ class TestParseViewTablesDialect:
 
 
 # ─── TestCollectedContextDbType ─────────────────────────────────────
+
+
+# ─── T8: UNKNOWN sql_type collects estimated plan ─────────────────────
+
+
+class TestUnknownSqlTypeMariaDB:
+    """T8: sql_type='UNKNOWN' coleta plano estimado mesmo sem execute."""
+
+    def test_unknown_without_execute_collects_plan(self):
+        from sqlmentor.collector import collect_context
+
+        parsed = ParsedSQL(
+            raw_sql="SOME WEIRD STATEMENT",
+            sql_type="UNKNOWN",
+            tables=[],
+        )
+        adapter = MariaDBAdapter()
+        cursor = MagicMock()
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        json_plan = '{"query_block": {"table": {"table_name": "t1", "access_type": "ALL"}}}'
+
+        call_count = [0]
+
+        def mock_execute(sql, params=None):
+            call_count[0] += 1
+
+        def mock_fetchone():
+            n = call_count[0]
+            if n == 1:  # db_version
+                return ("10.6.12-MariaDB",)
+            if n == 2:  # EXPLAIN FORMAT=JSON
+                return (json_plan,)
+            return None
+
+        cursor.execute = mock_execute
+        cursor.fetchone = mock_fetchone
+        cursor.description = [("plan_table_output",)]
+        cursor.__iter__ = MagicMock(return_value=iter([]))
+        adapter.execute_query = MagicMock(return_value=[])
+
+        ctx = collect_context(parsed, conn, "mydb", execute=False, adapter=adapter)
+        assert ctx.execution_plan is not None
+
+
+# ─── T15: last_analyze_stats query builder ─────────────────────────────
+
+
+class TestLastAnalyzeStats:
+    """T15: MariaDBQueryBuilder.last_analyze_stats filtra ANALYZE wrapper."""
+
+    def test_method_exists(self):
+        from sqlmentor.adapters.mariadb import MariaDBQueryBuilder
+
+        qb = MariaDBQueryBuilder()
+        sql, params = qb.last_analyze_stats()
+        assert "ANALYZE" in sql
+        assert "THREAD_ID" in sql
+        assert "CONNECTION_ID" in sql
+        assert params == {}
+
+    def test_filters_analyze_wrapper(self):
+        from sqlmentor.adapters.mariadb import MariaDBQueryBuilder
+
+        qb = MariaDBQueryBuilder()
+        sql, _params = qb.last_analyze_stats()
+        assert "NOT LIKE 'ANALYZE%%'" in sql
+        assert "NOT LIKE 'SELECT%%THREAD_ID%%'" in sql
 
 
 class TestCollectedContextDbType:
