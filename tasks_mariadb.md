@@ -2,7 +2,7 @@
 
 ## T1. Optimizer Params vazio no relatório
 **Severidade:** Bug
-**Status:** ABERTO (fix parcial em `2ecf8fe` criou `_MARIADB_OPTIMIZER_DEFAULTS` e branching por `db_type`, mas seção continua vazia)
+**Status:** CONCLUÍDO (`9bfd19f` — normaliza keys para lowercase)
 **Arquivos:** `src/sqlmentor/report.py:1898-1952`
 
 `_format_optimizer_params()` agora recebe `db_type` e seleciona defaults corretos, mas os 13 params coletados não batem com as keys em `_MARIADB_OPTIMIZER_DEFAULTS` — possível mismatch de case ou naming entre o que `INFORMATION_SCHEMA.GLOBAL_VARIABLES` retorna e o que o dict espera.
@@ -15,7 +15,7 @@
 
 ## T2. View Expansion Summary classifica tabelas como "não acessadas"
 **Severidade:** Bug
-**Status:** ABERTO (fix parcial em `2ecf8fe` trocou para `_detect_plan_blocks()`, mas ainda classifica tudo como "não acessado")
+**Status:** PARCIAL (`a6b3106` — DFS agora extrai tabelas de `materialized`, mas comparação com case mismatch persiste → ver T12)
 **Arquivos:** `src/sqlmentor/report.py`, `src/sqlmentor/adapters/mariadb.py`
 
 `_detect_plan_blocks()` agora é chamado corretamente, mas o `MariaDBPlanParser` não desce na estrutura `"materialized"` do JSON — não extrai os table_names das subqueries materializadas. Resultado: PlanBlocks retornados não contêm as tabelas reais da view, comparação falha → tudo "não acessado".
@@ -38,11 +38,9 @@
 
 ## T4. Nota Oracle no contexto MariaDB
 **Severidade:** Bug (cosmético)
-**Arquivos:** `src/sqlmentor/report.py:1115-1119, 1125-1126`
+**Status:** CONCLUÍDO (código corrigido em `2ecf8fe`, testes em `10e5526`)
 
-Header "ALLSTATS LAST" e nota "STATISTICS_LEVEL = ALL" são Oracle-specific. Sem branching por `ctx.db_type`. Menção a `shared pool` e `V$SQL` também.
-
-**Fix:** Condicional por `db_type` — MariaDB deve usar "ANALYZE FORMAT=JSON".
+Header e notas no relatório Markdown já fazem branching por `db_type`. Labels CLI permanecem Oracle-centric → ver T13.
 
 ---
 
@@ -69,6 +67,7 @@ O `MariaDBPlanParser` converte JSON → `PlanBlock` corretamente, mas as regras 
 
 ## T6. Parser não passa dialect para sqlglot em conexões MariaDB
 **Severidade:** Bug (crítico)
+**Status:** CONCLUÍDO (`96b6a1e` — dialect param no MCP parse_sql)
 **Arquivos:** `src/sqlmentor/cli.py:285,524`, `src/sqlmentor/mcp_server.py:109,213`, `src/sqlmentor/parser.py:358`
 
 `parse_sql()` tem `dialect="oracle"` como default. CLI e MCP **nunca passam o dialect** ao chamar `parse_sql()`, mesmo quando `cfg["type"] == "mariadb"`. Resultado: SQL com backticks (sintaxe padrão MySQL/MariaDB) falha no sqlglot com "Invalid expression / Unexpected token".
@@ -83,6 +82,7 @@ O mapeamento `_SQLGLOT_DIALECT = {"mariadb": "mysql"}` (parser.py:24-28) já exi
 
 ## T7. Schema default usa username em vez de database para MariaDB
 **Severidade:** Bug
+**Status:** CONCLUÍDO (`bbacbe0` — schema default vazio para MariaDB)
 **Arquivos:** `src/sqlmentor/cli.py:276-281,480-485`, `src/sqlmentor/connector.py:132`
 
 Quando `--schema` não é passado, `effective_schema` resolve para `cfg.get("schema", user_fallback)`. Para MariaDB, `connector.py:132` salva `schema` como o username, e o campo `database` (que tem o valor correto, ex: `gso`) é ignorado.
@@ -125,7 +125,7 @@ Colunas em WHERE: , Cancelada, Fechado em WFM, VTAL.data, VTAL.estado, ...
 
 ## T10. EXPLAIN estimado falha com `%Y` em SQLs MariaDB
 **Severidade:** Bug (alto — afeta todo SQL com DATE_FORMAT)
-**Status:** ABERTO
+**Status:** CONCLUÍDO (`57d9c9f` — params=None evita mogrify)
 **Arquivos:** `src/sqlmentor/adapters/mariadb.py` (método `explain_plan`)
 
 PyMySQL interpreta `%Y`, `%m`, `%d` etc. como format specifiers Python quando `cursor.execute(sql, {})` é chamado — mesmo com dict vazio, o operador `%` é aplicado internamente por `mogrify()`.
@@ -228,3 +228,77 @@ Adicionar checagem MariaDB no `doctor`:
 - `statements_digest = YES` → OK/FAIL
 - `events_statements_history_long = YES` → OK/WARN ("inspect MariaDB requer este consumer ativo")
 - Se WARN: mostrar comando de ativação + sugestão do Event Scheduler
+
+---
+
+## T12. View Expansion compara tabelas com case mismatch
+**Severidade:** Bug
+**Status:** ABERTO
+**Arquivos:** `src/sqlmentor/report.py` (View Expansion Summary)
+
+T2 corrigiu o DFS do `MariaDBPlanParser` para extrair tabelas de nós `materialized`, mas a comparação no View Expansion Summary usa `.upper()` em `plan_tables` enquanto `view_tables` (de `ctx.view_expansions`) preserva case original. Resultado: todas as tabelas da view aparecem como "Não acessadas" mesmo estando no plano.
+
+**Evidência:** Zeus report — "Não acessadas: tb_dw_zeus_d0, tb_dw_zeus_historico" mas ambas têm `access_type: ALL/range` e `r_rows > 0` no plano JSON.
+
+**Fix:** Normalizar case na comparação: `plan_tables = {b.name.upper() for b in blocks}` e comparar com `view_table.upper()`.
+
+---
+
+## T13. CLI summary labels Oracle-centric para MariaDB
+**Severidade:** Bug (cosmético)
+**Arquivos:** `src/sqlmentor/cli.py` (resumo da coleta)
+
+O resumo exibido no terminal após `analyze --execute` mostra "Runtime Plan (ALLSTATS LAST)" e "Runtime Stats (V$SQL)" para conexões MariaDB. Deveria usar "Runtime Plan (ANALYZE FORMAT=JSON)" e "Runtime Stats".
+
+**Evidência:** Todas as 3 execuções MariaDB mostram labels Oracle no summary.
+
+**Fix:** Condicional por `db_type` no bloco de resumo da CLI.
+
+---
+
+## T14. Runtime Stats seção usa termos Oracle (V$SQL) para MariaDB
+**Severidade:** Bug
+**Arquivos:** `src/sqlmentor/report.py` (seção Runtime Stats)
+
+A seção "Runtime Stats" no relatório Markdown usa labels Oracle para MariaDB: "SQL ID" (→ Digest), "Child Number", "Plan Hash Value", "Version Count (children)", "Loads (hard parses)", "Parse Calls" — nenhum desses campos existe no `performance_schema` do MariaDB.
+
+**Evidência:** Todos os 3 reports MariaDB mostram esses labels com valores zerados ou genéricos.
+
+**Fix:** Branching por `db_type` na formatação de runtime stats. MariaDB deve mostrar: Digest, Executions, Avg Elapsed, Rows Examined, Rows Sent, Tmp Tables, Full Joins.
+
+---
+
+## T15. Runtime Stats retorna mesma sessão para todos os SQLs
+**Severidade:** Bug
+**Arquivos:** `src/sqlmentor/collector.py` ou `src/sqlmentor/adapters/mariadb.py` (coleta de runtime stats)
+
+Os 3 SQLs (faturamento, vtal, zeus) retornam o mesmo `SQL ID: 8010d1ddb07dc9949b5ad1e52878c807` e contagens incrementais (`Executions: 18→20→22`). O collector parece retornar stats da sessão inteira, não da query específica.
+
+**Evidência:** Comparar `SQL ID` e `Executions` entre os 3 reports gerados na mesma sessão.
+
+**Fix:** Investigar a query que coleta runtime stats do MariaDB — provavelmente está buscando por `THREAD_ID` da sessão em vez de filtrar pelo `DIGEST` da query analisada.
+
+---
+
+## T16. Table stats labels Oracle-centric para MariaDB
+**Severidade:** Cosmético
+**Arquivos:** `src/sqlmentor/report.py` (seção Estatísticas Gerais da tabela)
+
+Labels da seção "Estatísticas Gerais" usam termos Oracle que não se aplicam a MariaDB:
+- "Blocks" → deveria ser "Pages" (InnoDB)
+- "BLevel: None" → não existe no MariaDB (remover)
+- "Sample Size: N (100%)" → MariaDB sempre analisa 100% (remover ou simplificar)
+- "Parallel Degree: 1" → não aplicável a MariaDB (remover)
+- "Clustering Factor: None" → não disponível em MariaDB (remover da tabela de índices)
+
+**Fix:** Condicional por `db_type` na formatação de stats e índices.
+
+---
+
+## T17. optimizer_switch sempre mostra warning ⚠️
+**Severidade:** Cosmético
+**Arquivos:** `src/sqlmentor/report.py` (`_MARIADB_OPTIMIZER_DEFAULTS`)
+
+O default de `optimizer_switch` em `_MARIADB_OPTIMIZER_DEFAULTS` é `""` (string vazia). Como o valor real é sempre uma string longa de flags, o warning ⚠️ dispara em 100% dos reports. Isso reduz o signal-to-noise ratio.
+
+**Fix:** Remover `optimizer_switch` dos defaults (exibir sempre sem comparação) ou tratá-lo como caso especial que não mostra warning.

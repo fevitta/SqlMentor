@@ -2,8 +2,24 @@
   "permissions": {
     "allow": [
       "Bash(sqlmentor *)",
+      "Bash(.venv/bin/sqlmentor *)",
+      "Bash(.venv/bin/pytest *)",
       "Bash(cat reports/*)",
-      "Bash(docker exec sqlmentor *)"
+      "Bash(docker exec sqlmentor *)",
+      "Bash(rm -f *index.lock)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git branch *)",
+      "Bash(git remote *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(gh run *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr create *)",
+      "Bash(gh repo view *)",
+      "Bash(rm -rf *worktrees*)"
     ]
   },
   "mcpServers": {
