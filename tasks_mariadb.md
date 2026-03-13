@@ -20,7 +20,7 @@
 
 `_detect_plan_blocks()` agora é chamado corretamente, mas o `MariaDBPlanParser` não desce na estrutura `"materialized"` do JSON — não extrai os table_names das subqueries materializadas. Resultado: PlanBlocks retornados não contêm as tabelas reais da view, comparação falha → tudo "não acessado".
 
-**Evidência:** Zeus execute mostra "Não acessadas: tb_dw_zeus_d0, tb_dw_zeus_historico", mas o plano JSON mostra ambas com `access_type: ref/range` e `r_rows > 0`.
+**Evidência:** Query sobre view com UNION ALL mostra "Não acessadas: table_a, table_b", mas o plano JSON mostra ambas com `access_type: ref/range` e `r_rows > 0`.
 
 **Fix:** No `MariaDBPlanParser`, tratar a key `"materialized"` (além de `"materialized_from_subquery"`) ao percorrer o JSON DFS.
 
@@ -74,12 +74,12 @@ O mapeamento `_SQLGLOT_DIALECT = {"mariadb": "mysql"}` (parser.py:24-28) já exi
 **Status:** CONCLUÍDO (`bbacbe0` — schema default vazio para MariaDB)
 **Arquivos:** `src/sqlmentor/cli.py:276-281,480-485`, `src/sqlmentor/connector.py:132`
 
-Quando `--schema` não é passado, `effective_schema` resolve para `cfg.get("schema", user_fallback)`. Para MariaDB, `connector.py:132` salva `schema` como o username, e o campo `database` (que tem o valor correto, ex: `gso`) é ignorado.
+Quando `--schema` não é passado, `effective_schema` resolve para `cfg.get("schema", user_fallback)`. Para MariaDB, `connector.py:132` salva `schema` como o username, e o campo `database` (que tem o valor correto, ex: `mydb`) é ignorado.
 
 **Cadeia atual:** `CLI flag > cfg.schema > username`
 **Cadeia correta p/ MariaDB:** `CLI flag > cfg.database > cfg.schema > username`
 
-**Evidência:** SQL 2 sem `--schema` → tabelas resolvem como `SQLMENTOR.tb_dw_vtal_base_unica` → DDL falha com "Table doesn't exist".
+**Evidência:** SQL sem `--schema` → tabelas resolvem como `SQLMENTOR.some_table` → DDL falha com "Table doesn't exist".
 
 **Fix:** Na resolução de `effective_schema`, para MariaDB usar `cfg.get("database")` antes de `cfg.get("schema")`.
 
@@ -110,7 +110,7 @@ Adicionados filtros para: literais com espaço misparsed como coluna (ex: "Fecha
 
 PyMySQL interpreta `%Y`, `%m`, `%d` etc. como format specifiers Python quando `cursor.execute(sql, {})` é chamado — mesmo com dict vazio, o operador `%` é aplicado internamente por `mogrify()`.
 
-**Evidência:** Zeus estimado falha com `unsupported format character 'Y' (0x59) at index 908`. Fat estimado idem no index 2608. VTAL estimado funciona (sem `%Y` no SQL).
+**Evidência:** SQL com DATE_FORMAT estimado falha com `unsupported format character 'Y' (0x59)`. Outro SQL idem. SQL sem `%Y` funciona normalmente.
 
 **Afeta:** Qualquer SQL MariaDB que use `DATE_FORMAT()`, `STR_TO_DATE()` ou qualquer função com `%` seguido de letra.
 

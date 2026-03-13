@@ -199,7 +199,7 @@ def _mariadb_context(**overrides) -> CollectedContext:
     parsed = ParsedSQL(
         raw_sql="SELECT * FROM orders",
         sql_type="SELECT",
-        tables=[{"name": "orders", "schema": "gso", "alias": None}],
+        tables=[{"name": "orders", "schema": "sample_db", "alias": None}],
     )
     plan_json = json.dumps(
         {
@@ -225,7 +225,7 @@ def _mariadb_context(**overrides) -> CollectedContext:
         tables=[
             TableContext(
                 name="orders",
-                schema="gso",
+                schema="sample_db",
                 stats={"num_rows": 100, "blocks": 5},
             )
         ],
