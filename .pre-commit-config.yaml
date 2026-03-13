@@ -13,7 +13,7 @@ repos:
         entry: .venv/bin/python -m mypy src/sqlmentor/
         language: system
         pass_filenames: false
-        always_run: true
+        types_or: [python]
         stages: [pre-commit]
 
       - id: pytest
@@ -21,5 +21,5 @@ repos:
         entry: .venv/bin/python -m pytest tests/ -q --tb=short
         language: system
         pass_filenames: false
-        always_run: true
+        types_or: [python]
         stages: [pre-commit]
