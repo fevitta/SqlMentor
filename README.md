@@ -43,8 +43,11 @@ sqlmentor analyze minha_query.sql --execute
 # Com bind variables
 sqlmentor analyze minha_query.sql --execute -b id=123 -b status=A
 
-# Inspecionar query já executada (sem re-executar)
+# Inspecionar query já executada — Oracle only (sem re-executar)
 sqlmentor inspect <statement_id>
+
+# Recuperar texto SQL de um statement já executado
+sqlmentor get-sql <statement_id>
 
 # Parse offline (sem conexão)
 sqlmentor parse minha_query.sql --schema SCHEMA
@@ -106,7 +109,8 @@ Integração com IDEs (Kiro, Claude Desktop, etc.) via Model Context Protocol:
 | `test_connection` | Testa um profile (retorna versão e schema) |
 | `parse_sql` | Parse offline — tabelas, colunas, joins |
 | `analyze_sql` | Análise completa: conecta, coleta contexto, retorna relatório |
-| `inspect_sql` | Contexto de SQL já executado via statement_id |
+| `inspect_sql` | Contexto de SQL já executado via statement_id (Oracle only) |
+| `get_sql_text` | Recupera texto SQL de um statement já executado |
 
 ### Workflow típico
 
@@ -116,7 +120,8 @@ parse_sql(sql_text="SELECT ...", schema="HR")               # parse offline (Ora
 parse_sql(sql_text="SELECT ...", dialect="mariadb")          # parse offline (MariaDB)
 analyze_sql(sql_text="SELECT ...", conn="prod")             # plano estimado
 analyze_sql(sql_text="SELECT ...", conn="prod", execute=True, binds="id=123")  # plano real
-inspect_sql(statement_id="abc123xyz", conn="prod")           # via statement_id
+inspect_sql(statement_id="abc123xyz", conn="prod")           # via statement_id (Oracle only)
+get_sql_text(statement_id="abc123xyz", conn="prod")          # recuperar texto SQL
 ```
 
 ### Kiro Power
@@ -137,7 +142,6 @@ CI (GitHub Actions): Python 3.12, ruff check, ruff format --check, mypy, pytest 
 
 ## Roadmap
 
-- [ ] MariaDB `inspect`: desnormalizar SQL do `DIGEST_TEXT` (`?` → literais) para parse e EXPLAIN
 - [ ] MariaDB report: adaptar labels Oracle-centric (Blocks, Sample Size, Parallel Degree, BLevel)
 - [ ] Análise de procedures (EXPLAIN de cada SQL interno)
 

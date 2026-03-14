@@ -307,13 +307,14 @@ def inspect_sql(
     show_sql: bool = False,
     show_all_indexes: bool = False,
 ) -> str:
-    """Coleta contexto de um SQL já executado via statement_id, sem re-executar a query.
+    """Coleta contexto de um SQL já executado via statement_id — Oracle only, sem re-executar.
 
     Útil para queries longas que já rodaram (pelo dev, pelo sistema, etc.).
-    Puxa o plano real e métricas do banco (ex: V$SQL e DBMS_XPLAN no Oracle).
+    Puxa o plano real e métricas do banco via V$SQL e DBMS_XPLAN.
+    MariaDB: não suportado — use analyze_sql ou get_sql_text.
 
     Args:
-        statement_id: Identificador do statement no banco (ex: sql_id Oracle "abc123def", queryid PostgreSQL).
+        statement_id: Identificador do statement no banco (ex: sql_id Oracle "abc123def").
         conn: Nome do profile de conexão. Se omitido, usa a conexão padrão.
         schema: Schema padrão (sobrescreve o do profile). Opcional.
         deep: Se True, coleta histogramas e partições.
@@ -345,13 +346,18 @@ def inspect_sql(
 
     cfg = get_connection_config(conn)
     dialect = cfg.get("type", "oracle")
-    _user_fallback = cfg.get("user", "")
-    if dialect != "mariadb":
-        _user_fallback = _user_fallback.upper()
+
+    # MariaDB: inspect não suportado (sem planos reais históricos)
     if dialect == "mariadb":
-        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
-    else:
-        effective_schema = schema or cfg.get("schema", _user_fallback)
+        return json.dumps(
+            {
+                "error": "inspect não suportado para MariaDB. MariaDB não armazena planos reais históricos.",
+                "hint": "Use analyze_sql para gerar plano estimado, ou analyze_sql com execute=True para plano real. Use get_sql_text para recuperar o SQL.",
+            }
+        )
+
+    _user_fallback = cfg.get("user", "").upper()
+    effective_schema = schema or cfg.get("schema", _user_fallback)
 
     try:
         adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
@@ -361,26 +367,14 @@ def inspect_sql(
     qb = adapter.query_builder
     cursor = db_conn.cursor()
 
-    # Recupera SQL original
+    # Recupera SQL original via V$SQL
     try:
         sql_text = None
-        # MariaDB: tenta sql_text_original (events_statements_history_long) primeiro
-        if adapter.db_type == "mariadb" and hasattr(qb, "sql_text_original"):
-            try:
-                sql_query, params = qb.sql_text_original(statement_id)
-                cursor.execute(sql_query, params)
-                row = cursor.fetchone()
-                if row and row[0]:
-                    sql_text = str(row[0])
-            except Exception:  # noqa: S110
-                pass  # fallback para sql_text_by_id (DIGEST_TEXT)
-
-        if not sql_text:
-            sql_query, params = qb.sql_text_by_id(statement_id)
-            cursor.execute(sql_query, params)
-            row = cursor.fetchone()
-            if row and row[0]:
-                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
+        sql_query, params = qb.sql_text_by_id(statement_id)
+        cursor.execute(sql_query, params)
+        row = cursor.fetchone()
+        if row and row[0]:
+            sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])  # type: ignore[attr-defined]
 
         if not sql_text:
             db_conn.close()
@@ -397,56 +391,25 @@ def inspect_sql(
     # Parse
     parsed = _parse(sql_text, default_schema=effective_schema, dialect=dialect)
 
-    # Plano e métricas — fluxo difere entre MariaDB e Oracle
+    # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
     runtime_plan_lines = None
-    execution_plan_lines = None
     runtime_stats_data = None
 
-    if adapter.db_type == "mariadb":
-        # MariaDB: sem planos históricos — usa EXPLAIN FORMAT=JSON no SQL recuperado
-        try:
-            steps = qb.explain_plan(sql_text)
-            explain_sql, explain_params = steps[0]
-            cursor.execute(explain_sql, explain_params)
-            row = cursor.fetchone()
-            if row and row[0]:
-                execution_plan_lines = str(row[0]).splitlines()
-        except Exception as e:
-            logger.warning(
-                "Falha ao gerar plano estimado para statement_id '%s': %s", statement_id, e
-            )
+    try:
+        sql_query, params = qb.runtime_plan(statement_id)
+        cursor.execute(sql_query, params)
+        runtime_plan_lines = [r[0] for r in cursor]
+    except Exception as e:
+        logger.warning("Falha ao recuperar plano real para statement_id '%s': %s", statement_id, e)
 
-        try:
-            sql_query, params = qb.sql_runtime_stats(statement_id)
-            cursor.execute(sql_query, params)
-            columns = [col[0].lower() for col in cursor.description or []]
-            row = cursor.fetchone()
-            runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
-        except Exception as e:
-            logger.warning(
-                "Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e
-            )
-    else:
-        # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
-        try:
-            sql_query, params = qb.runtime_plan(statement_id)
-            cursor.execute(sql_query, params)
-            runtime_plan_lines = [r[0] for r in cursor]
-        except Exception as e:
-            logger.warning(
-                "Falha ao recuperar plano real para statement_id '%s': %s", statement_id, e
-            )
-
-        try:
-            sql_query, params = qb.sql_runtime_stats(statement_id)
-            cursor.execute(sql_query, params)
-            columns = [col[0].lower() for col in cursor.description or []]
-            row = cursor.fetchone()
-            runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
-        except Exception as e:
-            logger.warning(
-                "Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e
-            )
+    try:
+        sql_query, params = qb.sql_runtime_stats(statement_id)
+        cursor.execute(sql_query, params)
+        columns = [col[0].lower() for col in cursor.description or []]
+        row = cursor.fetchone()
+        runtime_stats_data = dict(zip(columns, row, strict=False)) if row else None
+    except Exception as e:
+        logger.warning("Falha ao recuperar métricas para statement_id '%s': %s", statement_id, e)
 
     cursor.close()
 
@@ -471,12 +434,8 @@ def inspect_sql(
             db_conn.close()
 
     # Injeta plano e métricas
-    if adapter.db_type == "mariadb":
-        if execution_plan_lines:
-            ctx.execution_plan = execution_plan_lines
-    else:
-        if runtime_plan_lines:
-            ctx.runtime_plan = runtime_plan_lines
+    if runtime_plan_lines:
+        ctx.runtime_plan = runtime_plan_lines
     if runtime_stats_data:
         ctx.runtime_stats = runtime_stats_data
 
@@ -489,6 +448,99 @@ def inspect_sql(
         return to_json(ctx)
     return to_markdown(
         ctx, verbosity=verbosity, show_sql=show_sql, show_all_indexes=show_all_indexes
+    )
+
+
+@mcp.tool()
+def get_sql_text(statement_id: str, conn: str = "", timeout: int = 0) -> str:
+    """Recupera o texto SQL de um statement já executado, sem coletar contexto.
+
+    Útil para obter o SQL original antes de decidir se faz analyze ou apenas parse.
+    MariaDB: tenta SQL original (history_long) primeiro, fallback para DIGEST_TEXT (normalizado).
+    Oracle: recupera via V$SQL.
+
+    Args:
+        statement_id: Identificador do statement (sql_id Oracle, DIGEST MariaDB).
+        conn: Nome do profile de conexão. Se omitido, usa a conexão padrão.
+        timeout: Timeout em segundos. 0 = usa default do profile (180s).
+    """
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
+
+    if err := _validate_timeout_mcp(timeout):
+        return err
+
+    try:
+        conn = resolve_connection(conn or None)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
+
+    try:
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout if timeout > 0 else None)
+    except Exception as e:
+        return json.dumps({"error": f"Falha na conexão '{conn}': {e}"})
+
+    qb = adapter.query_builder
+    cursor = db_conn.cursor()
+    sql_text = None
+    source = None
+
+    try:
+        if dialect == "mariadb":
+            # Tenta SQL original (history_long) primeiro
+            if hasattr(qb, "sql_text_original"):
+                try:
+                    sql_query, params = qb.sql_text_original(statement_id)
+                    cursor.execute(sql_query, params)
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        sql_text = str(row[0])
+                        source = "original"
+                except Exception:  # noqa: S110
+                    pass  # fallback para sql_text_by_id
+
+            if not sql_text:
+                sql_query, params = qb.sql_text_by_id(statement_id)
+                cursor.execute(sql_query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    sql_text = str(row[0])
+                    source = "normalized"
+        else:
+            # Oracle: V$SQL
+            sql_query, params = qb.sql_text_by_id(statement_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
+                source = "v$sql"
+    except Exception as e:
+        cursor.close()
+        db_conn.close()
+        return json.dumps({"error": f"Erro ao buscar SQL: {e}"})
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
+        with contextlib.suppress(Exception):
+            db_conn.close()
+
+    if not sql_text:
+        return json.dumps(
+            {
+                "error": f"Statement '{statement_id}' não encontrado.",
+                "hint": "O cursor/digest pode ter sido expurgado. Tente re-executar a query.",
+            }
+        )
+
+    return json.dumps(
+        {
+            "sql_text": sql_text,
+            "source": source,
+            "statement_id": statement_id,
+            "char_count": len(sql_text),
+        }
     )
 
 

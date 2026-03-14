@@ -1,4 +1,4 @@
-"""Testes de integração MariaDB: inspect flow (performance_schema → digest)."""
+"""Testes de integração MariaDB: digest lookup e collect_context flow."""
 
 import pytest
 
@@ -36,15 +36,14 @@ class TestDigestLookup:
         assert stats["sql_id"] == seed_query_digest
 
 
-class TestInspectFlow:
-    """Testa o fluxo de inspect para MariaDB (estimado, não runtime)."""
+class TestCollectContextMariaDB:
+    """Testa coleta de plano via collect_context para MariaDB (equivalente a analyze)."""
 
-    def test_inspect_produces_execution_plan(self, mariadb_conn, mariadb_adapter):
-        """Inspect MariaDB produz execution_plan via collect_context."""
+    def test_collect_context_produces_execution_plan(self, mariadb_conn, mariadb_adapter):
+        """collect_context produz execution_plan via EXPLAIN FORMAT=JSON."""
         from sqlmentor.collector import collect_context
         from sqlmentor.parser import ParsedSQL
 
-        # Usa SQL direto (DIGEST_TEXT é normalizado e pode ser inválido pra re-explain)
         parsed = ParsedSQL(
             raw_sql=(
                 "SELECT e.EMP_ID, e.FIRST_NAME, o.ORDER_ID, o.TOTAL "
@@ -69,7 +68,6 @@ class TestInspectFlow:
             use_cache=False,
             adapter=mariadb_adapter,
         )
-        # MariaDB inspect produz execution_plan (estimado via EXPLAIN FORMAT=JSON)
         assert ctx.execution_plan is not None
         assert len(ctx.execution_plan) > 0
 

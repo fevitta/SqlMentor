@@ -1,5 +1,5 @@
 """
-Batch inspect de SQL candidates — gera relatórios em 3 verbosidades.
+Batch inspect de SQL candidates (Oracle-only) — gera relatórios em 3 verbosidades.
 
 Lê sql/candidates.csv, extrai sql_ids únicos e roda
 `sqlmentor inspect` para cada um nos modos full, compact e minimal.
@@ -44,10 +44,15 @@ def run_inspect(
     output_file = output_dir / f"{sql_id}_{verbosity}.md"
 
     cmd = [
-        "sqlmentor", "inspect", sql_id,
-        "--conn", conn,
-        "--verbosity", verbosity,
-        "--output", str(output_file),
+        "sqlmentor",
+        "inspect",
+        sql_id,
+        "--conn",
+        conn,
+        "--verbosity",
+        verbosity,
+        "--output",
+        str(output_file),
     ]
 
     try:
@@ -92,15 +97,19 @@ def main():
         for sql_id in sql_ids:
             for v in verbosities:
                 out = output_dir / f"{sql_id}_{v}.md"
-                print(f"  sqlmentor inspect {sql_id} --conn {args.conn} --verbosity {v} --output {out}")
-        print(f"\nTotal: {total} execuções ({len(sql_ids)} sql_ids x {len(verbosities)} verbosities)")
+                print(
+                    f"  sqlmentor inspect {sql_id} --conn {args.conn} --verbosity {v} --output {out}"
+                )
+        print(
+            f"\nTotal: {total} execuções ({len(sql_ids)} sql_ids x {len(verbosities)} verbosities)"
+        )
         return
 
     ok = 0
     fail = 0
     start = time.perf_counter()
 
-    for i, sql_id in enumerate(sql_ids, 1):
+    for _i, sql_id in enumerate(sql_ids, 1):
         for v in verbosities:
             label = f"[{ok + fail + 1}/{total}] {sql_id} ({v})"
             print(f"{label} ...", end=" ", flush=True)

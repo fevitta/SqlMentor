@@ -69,7 +69,7 @@ class MariaDBQueryBuilder(QueryBuilder):
         return [("EXPLAIN FORMAT=JSON " + sql_text, None)]
 
     def runtime_plan(self, sql_id: str, child_number: int = 0) -> tuple[str, dict]:
-        """Best-effort: busca plano via performance_schema por DIGEST."""
+        """Stub — inspect é bloqueado para MariaDB. Mantido para satisfazer a interface abstrata."""
         return (
             """
             SELECT DIGEST_TEXT AS plan_table_output

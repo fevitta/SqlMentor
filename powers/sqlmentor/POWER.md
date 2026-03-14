@@ -32,8 +32,11 @@ Parse offline — extrai tabelas, colunas, joins, subqueries sem conectar no ban
 ### analyze_sql
 A tool principal. Conecta no Oracle, coleta contexto completo e retorna relatório estruturado. Veja os parâmetros na descrição da tool.
 
-### inspect_sql
-Coleta contexto de um SQL já executado via `statement_id` (ex: sql_id Oracle), sem re-executar. Puxa plano real e métricas do banco. Veja os parâmetros na descrição da tool.
+### inspect_sql (Oracle only)
+Coleta contexto de um SQL já executado via `statement_id` (ex: sql_id Oracle), sem re-executar. Puxa plano real e métricas do banco via V$SQL e DBMS_XPLAN. Não disponível para MariaDB — use `analyze_sql` com `execute=True` ou `get_sql_text`.
+
+### get_sql_text
+Recupera o texto SQL de um statement já executado, sem coletar contexto. MariaDB: tenta SQL original primeiro, fallback para DIGEST_TEXT (normalizado). Oracle: recupera via V$SQL. Retorna JSON com `sql_text`, `source`, `statement_id`, `char_count`.
 
 ## Conexão Padrão
 
@@ -47,10 +50,14 @@ Depois disso, as tools usam essa conexão automaticamente quando `conn` é omiti
 
 ## Workflow Recomendado
 
-### Com sql_id (caminho rápido)
+### Com sql_id (caminho rápido — Oracle only)
 1. Chame `inspect_sql` com o `statement_id` (ex: sql_id Oracle) — já traz plano real e métricas do shared pool
 2. Carregue o steering `analysis` e analise o relatório
 3. Se precisar de mais contexto: `deep=True`, `expand_views=True`, `expand_functions=True`
+
+### Com digest (MariaDB)
+1. Chame `get_sql_text` com o `statement_id` (DIGEST) para recuperar o SQL
+2. Chame `analyze_sql` com o SQL recuperado (ou `execute=True` para plano real)
 
 ### Sem sql_id
 1. Chame `analyze_sql` (sem `execute` — rápido, plano estimado)

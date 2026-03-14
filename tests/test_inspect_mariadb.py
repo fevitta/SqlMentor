@@ -1,12 +1,15 @@
-"""Testes para inspect MariaDB (T23).
+"""Testes para inspect MariaDB (T19 — bloqueado) e funcionalidades relacionadas.
 
 Verifica:
-- CLI inspect usa EXPLAIN FORMAT=JSON (não runtime_plan) para MariaDB
-- MCP inspect_sql idem
+- CLI inspect bloqueia MariaDB com exit 1 (sem conectar)
+- MCP inspect_sql retorna JSON error para MariaDB
+- Oracle inspect path inalterado
 - doctor lida com diagnose MariaDB (sem mode key)
 - diagnose_connection retorna schema
+- QueryBuilder: sql_text_original e setup_consumers existem
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -49,10 +52,10 @@ def _make_ctx(**overrides):
     return CollectedContext(**defaults)
 
 
-def _inspect_mariadb_patches(monkeypatch, tmp_path, *, db_type="mariadb"):
-    """Configura patches para inspect com adapter MariaDB ou Oracle."""
+def _inspect_oracle_patches(monkeypatch, tmp_path):
+    """Configura patches para inspect com adapter Oracle."""
     out_file = tmp_path / "output.md"
-    ctx = _make_ctx()
+    ctx = _make_ctx(db_type="oracle")
     mocks = {}
 
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
@@ -65,26 +68,22 @@ def _inspect_mariadb_patches(monkeypatch, tmp_path, *, db_type="mariadb"):
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
-    # sql_text_by_id returns SQL text
     mock_cursor.fetchone.side_effect = [
         ("SELECT 1 FROM orders",),  # sql_text_by_id
-        ('{"query_block": {}}',),  # explain_plan (MariaDB) or runtime_stats (Oracle)
-        # runtime_stats
-        (5, 100),
+        (5, 100),  # runtime_stats
     ]
     mock_cursor.__iter__ = MagicMock(return_value=iter([("| 1 | SELECT STATEMENT |",)]))
     mock_cursor.description = [("sql_id",), ("executions",)]
 
     mock_adapter = MagicMock()
-    mock_adapter.db_type = db_type
+    mock_adapter.db_type = "oracle"
 
     mock_qb = MagicMock()
     mock_adapter.query_builder = mock_qb
 
     mock_qb.sql_text_by_id.return_value = ("SELECT ...", {"sql_id": "abc123"})
-    mock_qb.explain_plan.return_value = [("EXPLAIN FORMAT=JSON SELECT 1 FROM orders", {})]
     mock_qb.runtime_plan.return_value = ("SELECT * FROM TABLE(DBMS_XPLAN...)", {"sql_id": "abc123"})
-    mock_qb.sql_runtime_stats.return_value = ("SELECT ... FROM perf_schema", {"sql_id": "abc123"})
+    mock_qb.sql_runtime_stats.return_value = ("SELECT ... FROM v$sql", {"sql_id": "abc123"})
 
     monkeypatch.setattr(
         "sqlmentor.connector.connect_with_adapter",
@@ -108,45 +107,77 @@ def _inspect_mariadb_patches(monkeypatch, tmp_path, *, db_type="mariadb"):
     return out_file, mocks
 
 
-# ─── TestInspectMariaDBCLI ────────────────────────────────────────────
+# ─── TestInspectMariaDBBlocked ────────────────────────────────────────
 
 
-class TestInspectMariaDBCLI:
-    """CLI inspect usa EXPLAIN FORMAT=JSON para MariaDB."""
+class TestInspectMariaDBBlocked:
+    """T19: inspect é bloqueado para MariaDB com exit 1."""
 
-    def test_mariadb_uses_explain_not_runtime(self, monkeypatch, tmp_path):
-        out_file, mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="mariadb")
-        result = runner.invoke(
-            app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)]
+    def test_cli_exits_with_error(self, monkeypatch):
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
         )
 
-        assert result.exit_code == 0
-        qb = mocks["qb"]
-        qb.explain_plan.assert_called_once()
-        qb.runtime_plan.assert_not_called()
+        result = runner.invoke(app, ["inspect", "abc123", "--conn", "test"])
 
-    def test_mariadb_sets_execution_plan_not_runtime(self, monkeypatch, tmp_path):
-        out_file, mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="mariadb")
-        runner.invoke(app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)])
+        assert result.exit_code == 1
+        assert "não é suportado para MariaDB" in result.output
 
-        ctx = mocks["ctx"]
-        # Execution plan was set (estimated plan for MariaDB)
-        assert ctx.execution_plan is not None
-
-    def test_mariadb_prints_estimated_message(self, monkeypatch, tmp_path):
-        out_file, _mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="mariadb")
-        result = runner.invoke(
-            app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)]
+    def test_cli_suggests_get_sql(self, monkeypatch):
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
         )
 
-        assert "plano estimado" in result.output.lower() or "MariaDB" in result.output
+        result = runner.invoke(app, ["inspect", "abc123", "--conn", "test"])
+
+        assert "get-sql" in result.output
+        assert "analyze" in result.output
+
+    def test_cli_does_not_connect(self, monkeypatch):
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+        )
+        mock_connect = MagicMock()
+        monkeypatch.setattr("sqlmentor.connector.connect_with_adapter", mock_connect)
+
+        runner.invoke(app, ["inspect", "abc123", "--conn", "test"])
+
+        mock_connect.assert_not_called()
+
+    def test_mcp_returns_error_json(self, monkeypatch):
+        from sqlmentor.mcp_server import inspect_sql
+
+        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
+        monkeypatch.setattr(
+            "sqlmentor.connector.get_connection_config",
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+        )
+        mock_connect = MagicMock()
+        monkeypatch.setattr("sqlmentor.connector.connect_with_adapter", mock_connect)
+
+        result = json.loads(inspect_sql("abc123", conn="test"))
+
+        assert "error" in result
+        assert "MariaDB" in result["error"]
+        assert "hint" in result
+        assert "get_sql_text" in result["hint"]
+        mock_connect.assert_not_called()
+
+
+# ─── TestInspectOracleCLIUnchanged ────────────────────────────────────
 
 
 class TestInspectOracleCLIUnchanged:
     """Oracle inspect path unchanged — still uses runtime_plan."""
 
     def test_oracle_uses_runtime_plan(self, monkeypatch, tmp_path):
-        out_file, mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="oracle")
+        out_file, mocks = _inspect_oracle_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)]
         )
@@ -154,56 +185,6 @@ class TestInspectOracleCLIUnchanged:
         assert result.exit_code == 0
         qb = mocks["qb"]
         qb.runtime_plan.assert_called_once()
-        qb.explain_plan.assert_not_called()
-
-
-# ─── TestInspectMariaDBMCP ────────────────────────────────────────────
-
-
-class TestInspectMariaDBMCP:
-    """MCP inspect_sql usa EXPLAIN FORMAT=JSON para MariaDB."""
-
-    def test_mariadb_uses_explain(self, monkeypatch):
-        from sqlmentor.mcp_server import inspect_sql
-
-        monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
-        monkeypatch.setattr(
-            "sqlmentor.connector.get_connection_config",
-            lambda name: {"schema": "MYDB", "user": "root", "timeout": 180},
-        )
-
-        mock_cursor = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-
-        mock_cursor.fetchone.side_effect = [
-            ("SELECT 1 FROM orders",),  # sql_text_by_id
-            ('{"query_block": {}}',),  # explain_plan
-            (5, 100),  # runtime_stats
-        ]
-        mock_cursor.description = [("sql_id",), ("executions",)]
-
-        mock_adapter = MagicMock()
-        mock_adapter.db_type = "mariadb"
-        mock_qb = MagicMock()
-        mock_adapter.query_builder = mock_qb
-        mock_qb.sql_text_by_id.return_value = ("SELECT ...", {"sql_id": "abc"})
-        mock_qb.explain_plan.return_value = [("EXPLAIN FORMAT=JSON ...", {})]
-        mock_qb.sql_runtime_stats.return_value = ("SELECT ...", {"sql_id": "abc"})
-
-        monkeypatch.setattr(
-            "sqlmentor.connector.connect_with_adapter",
-            MagicMock(return_value=(mock_adapter, mock_conn)),
-        )
-
-        ctx = _make_ctx()
-        monkeypatch.setattr("sqlmentor.collector.collect_context", MagicMock(return_value=ctx))
-        monkeypatch.setattr("sqlmentor.report.to_markdown", MagicMock(return_value="# Report"))
-
-        inspect_sql("abc123", conn="test")
-
-        mock_qb.explain_plan.assert_called_once()
-        mock_qb.runtime_plan.assert_not_called()
 
 
 # ─── TestDoctorMariaDB ────────────────────────────────────────────────
@@ -275,17 +256,14 @@ class TestDoctorMariaDB:
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
         assert "performance_schema: OFF" in result.output
-        assert "inspect" in result.output
+        assert "analyze --execute" in result.output
 
 
-# ─── TestDiagnoseConnectionSchema ─────────────────────────────────────
-
-
-# ─── T11: MariaDBQueryBuilder new methods ─────────────────────────────
+# ─── TestMariaDBQueryBuilder ─────────────────────────────────────────
 
 
 class TestMariaDBInspectQueryBuilder:
-    """T11: sql_text_original e setup_consumers existem no query builder."""
+    """sql_text_original e setup_consumers existem no query builder."""
 
     def test_sql_text_original(self):
         from sqlmentor.adapters.mariadb import MariaDBQueryBuilder
@@ -305,34 +283,7 @@ class TestMariaDBInspectQueryBuilder:
         assert params == {}
 
 
-# ─── T11: CLI inspect with sql_text_original fallback ──────────────────
-
-
-class TestInspectMariaDBOriginalText:
-    """T11: inspect tenta sql_text_original antes de sql_text_by_id."""
-
-    def test_uses_sql_text_original_first(self, monkeypatch, tmp_path):
-        out_file, mocks = _inspect_mariadb_patches(monkeypatch, tmp_path, db_type="mariadb")
-
-        # Override fetchone to simulate sql_text_original returning result
-        call_count = [0]
-
-        def mock_fetchone():
-            call_count[0] += 1
-            if call_count[0] == 1:  # sql_text_original
-                return ("SELECT 1 FROM orders",)
-            if call_count[0] == 2:  # explain_plan
-                return ('{"query_block": {}}',)
-            return None
-
-        mocks["cursor"].fetchone = mock_fetchone
-
-        result = runner.invoke(
-            app, ["inspect", "abc123", "--conn", "test", "--output", str(out_file)]
-        )
-        assert result.exit_code == 0
-        # sql_text_original should have been called
-        mocks["qb"].sql_text_original.assert_called_once_with("abc123")
+# ─── TestDiagnoseConnectionSchema ─────────────────────────────────────
 
 
 class TestDiagnoseConnectionSchema:

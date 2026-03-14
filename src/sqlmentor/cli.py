@@ -410,7 +410,7 @@ def analyze(
 @app.command()
 def inspect(
     statement_id: str = typer.Argument(
-        ..., help="Identificador do statement no banco (ex: sql_id Oracle, queryid PostgreSQL)."
+        ..., help="Identificador do statement no banco (ex: sql_id Oracle)."
     ),
     conn: str = typer.Option(
         None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
@@ -461,7 +461,7 @@ def inspect(
         help="Mostra todos os índices, não só os relevantes ao SQL.",
     ),
 ) -> None:
-    """Coleta contexto de um SQL já executado via statement_id (sem re-executar)."""
+    """Coleta contexto de um SQL já executado via statement_id — Oracle only (sem re-executar)."""
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
@@ -492,6 +492,14 @@ def inspect(
     else:
         effective_schema = schema or cfg.get("schema", _user_fallback)
 
+    # MariaDB: inspect não é suportado (sem planos reais históricos)
+    if dialect == "mariadb":
+        console.print("[red]Erro:[/red] inspect não é suportado para MariaDB.")
+        console.print("  MariaDB não armazena planos reais históricos.")
+        console.print("  Use: [cyan]sqlmentor get-sql <digest>[/cyan] para recuperar o SQL")
+        console.print("  Use: [cyan]sqlmentor analyze <arquivo.sql>[/cyan] para gerar o plano")
+        raise typer.Exit(1)
+
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
     try:
@@ -504,49 +512,17 @@ def inspect(
     qb = adapter.query_builder
     cursor = db_conn.cursor()
 
-    # Recupera SQL original
+    # Recupera SQL original via V$SQL
     console.print(f"[cyan]Buscando statement:[/cyan] {statement_id}")
     try:
-        # MariaDB: tenta sql_text_original (events_statements_history_long) primeiro
         sql_text = None
-        if adapter.db_type == "mariadb" and hasattr(qb, "sql_text_original"):
-            try:
-                sql_query, params = qb.sql_text_original(statement_id)
-                cursor.execute(sql_query, params)
-                row = cursor.fetchone()
-                if row and row[0]:
-                    sql_text = str(row[0])
-            except Exception:  # noqa: S110
-                pass  # fallback para sql_text_by_id (DIGEST_TEXT)
+        sql_query, params = qb.sql_text_by_id(statement_id)
+        cursor.execute(sql_query, params)
+        row = cursor.fetchone()
+        if row and row[0]:
+            sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
 
         if not sql_text:
-            sql_query, params = qb.sql_text_by_id(statement_id)
-            cursor.execute(sql_query, params)
-            row = cursor.fetchone()
-            if row and row[0]:
-                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
-
-        if not sql_text:
-            # MariaDB: diagnóstico de consumers
-            if adapter.db_type == "mariadb" and hasattr(qb, "setup_consumers"):
-                try:
-                    sql_query, params = qb.setup_consumers()
-                    cursor.execute(sql_query, params)
-                    consumers = {r[0]: r[1] for r in cursor}
-                    hist_long = consumers.get("events_statements_history_long", "NO")
-                    if hist_long != "YES":
-                        console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
-                        console.print("  [yellow]events_statements_history_long está OFF.[/yellow]")
-                        console.print(
-                            "  Ative com: UPDATE performance_schema.setup_consumers "
-                            "SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long';"
-                        )
-                        db_conn.close()
-                        raise typer.Exit(1)
-                except typer.Exit:
-                    raise
-                except Exception:  # noqa: S110
-                    pass
             console.print(
                 f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool."
             )
@@ -569,57 +545,27 @@ def inspect(
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
     timer.mark("Parse")
 
-    # Coleta plano e métricas — fluxo difere entre MariaDB e Oracle
-    if adapter.db_type == "mariadb":
-        # MariaDB: sem planos históricos — usa EXPLAIN FORMAT=JSON no SQL recuperado
-        console.print(
-            "[cyan]Coletando plano estimado (MariaDB não armazena planos históricos)...[/cyan]"
-        )
-        runtime_plan_lines = None
-        try:
-            steps = qb.explain_plan(sql_text)
-            explain_sql, explain_params = steps[0]
-            cursor.execute(explain_sql, explain_params)
-            row = cursor.fetchone()
-            execution_plan_lines = str(row[0]).splitlines() if row and row[0] else None
-        except Exception as e:
-            console.print(f"[yellow]⚠ Plano não disponível:[/yellow] {e}")
-            execution_plan_lines = None
+    # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
+    console.print("[cyan]Coletando plano real...[/cyan]")
+    runtime_plan_lines = None
+    try:
+        sql_query, params = qb.runtime_plan(statement_id)
+        cursor.execute(sql_query, params)
+        runtime_plan_lines = [r[0] for r in cursor]
+    except Exception as e:
+        console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
 
-        # Métricas via performance_schema
-        console.print("[cyan]Coletando métricas performance_schema...[/cyan]")
-        try:
-            sql_query, params = qb.sql_runtime_stats(statement_id)
-            cursor.execute(sql_query, params)
-            columns = [col[0].lower() for col in cursor.description or []]
-            row = cursor.fetchone()
-            runtime_stats = dict(zip(columns, row, strict=False)) if row else None
-        except Exception as e:
-            console.print(f"[yellow]⚠ Métricas não disponíveis:[/yellow] {e}")
-            runtime_stats = None
-    else:
-        # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
-        execution_plan_lines = None
-        console.print("[cyan]Coletando plano real...[/cyan]")
-        try:
-            sql_query, params = qb.runtime_plan(statement_id)
-            cursor.execute(sql_query, params)
-            runtime_plan_lines = [r[0] for r in cursor]
-        except Exception as e:
-            console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
-            runtime_plan_lines = None
-
-        # Coleta métricas de V$SQL
-        console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
-        try:
-            sql_query, params = qb.sql_runtime_stats(statement_id)
-            cursor.execute(sql_query, params)
-            columns = [col[0].lower() for col in cursor.description or []]
-            row = cursor.fetchone()
-            runtime_stats = dict(zip(columns, row, strict=False)) if row else None
-        except Exception as e:
-            console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
-            runtime_stats = None
+    # Coleta métricas de V$SQL
+    console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
+    runtime_stats = None
+    try:
+        sql_query, params = qb.sql_runtime_stats(statement_id)
+        cursor.execute(sql_query, params)
+        columns = [col[0].lower() for col in cursor.description or []]
+        row = cursor.fetchone()
+        runtime_stats = dict(zip(columns, row, strict=False)) if row else None
+    except Exception as e:
+        console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
     timer.mark("Runtime")
 
     cursor.close()
@@ -646,14 +592,8 @@ def inspect(
     timer.mark("Collect")
 
     # Injeta plano e métricas coletados via statement_id
-    if adapter.db_type == "mariadb":
-        # MariaDB: plano estimado (EXPLAIN) vai em execution_plan
-        if execution_plan_lines:
-            ctx.execution_plan = execution_plan_lines
-    else:
-        # Oracle: plano real (DBMS_XPLAN) vai em runtime_plan
-        if runtime_plan_lines:
-            ctx.runtime_plan = runtime_plan_lines
+    if runtime_plan_lines:
+        ctx.runtime_plan = runtime_plan_lines
     if runtime_stats:
         ctx.runtime_stats = runtime_stats
 
@@ -686,6 +626,146 @@ def inspect(
 
     _print_summary(ctx)
     timer.print_summary()
+
+
+@app.command(name="get-sql")
+def get_sql(
+    statement_id: str = typer.Argument(
+        ..., help="Identificador do statement (sql_id Oracle, DIGEST MariaDB)."
+    ),
+    conn: str = typer.Option(
+        None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
+    ),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Arquivo de saída. Se omitido, imprime apenas no stdout."
+    ),
+    timeout: int = typer.Option(
+        None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile)."
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Ativa logging DEBUG.",
+    ),
+) -> None:
+    """Recupera o texto SQL de um statement já executado (sem coletar contexto)."""
+    _configure_debug(debug)
+    _validate_timeout(timeout)
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
+
+    try:
+        conn = resolve_connection(conn)
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
+
+    cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
+
+    try:
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout)
+    except Exception as e:
+        console.print(f"[red]Erro de conexão:[/red] {e}")
+        raise typer.Exit(1)
+
+    qb = adapter.query_builder
+    cursor = db_conn.cursor()
+    sql_text = None
+    source = None
+
+    try:
+        if dialect == "mariadb":
+            # Tenta SQL original (history_long) primeiro
+            if hasattr(qb, "sql_text_original"):
+                try:
+                    sql_query, params = qb.sql_text_original(statement_id)
+                    cursor.execute(sql_query, params)
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        sql_text = str(row[0])
+                        source = "original"
+                except Exception:  # noqa: S110
+                    pass  # fallback para sql_text_by_id
+
+            # Fallback: DIGEST_TEXT (normalizado)
+            if not sql_text:
+                sql_query, params = qb.sql_text_by_id(statement_id)
+                cursor.execute(sql_query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    sql_text = str(row[0])
+                    source = "normalized"
+        else:
+            # Oracle: V$SQL
+            sql_query, params = qb.sql_text_by_id(statement_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
+                source = "v$sql"
+
+        if not sql_text:
+            _get_sql_not_found_diagnostic(cursor, qb, statement_id, dialect)
+            raise typer.Exit(1)
+    except Exception as e:
+        if isinstance(e, SystemExit):
+            raise
+        console.print(f"[red]Erro ao buscar SQL:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        cursor.close()
+        db_conn.close()
+
+    # Warning se SQL normalizado
+    if source == "normalized":
+        typer.echo(
+            "⚠ SQL normalizado (DIGEST_TEXT) — literais substituídos por '?'.",
+            err=True,
+        )
+
+    typer.echo(sql_text)
+
+    if output:
+        output.write_text(sql_text, encoding="utf-8")
+        typer.echo(f"✓ SQL salvo em {output}", err=True)
+
+
+def _get_sql_not_found_diagnostic(cursor, qb, statement_id: str, dialect: str) -> None:
+    """Imprime diagnóstico quando statement_id não é encontrado no get-sql."""
+    if dialect == "mariadb" and hasattr(qb, "setup_consumers"):
+        try:
+            sql_query, params = qb.setup_consumers()
+            cursor.execute(sql_query, params)
+            consumers = {r[0]: r[1] for r in cursor}
+            digest = consumers.get("statements_digest", "NO")
+            hist_long = consumers.get("events_statements_history_long", "NO")
+            if digest != "YES":
+                console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
+                console.print("  [yellow]statements_digest está OFF.[/yellow]")
+                console.print(
+                    "  Ative com: UPDATE performance_schema.setup_consumers "
+                    "SET ENABLED = 'YES' WHERE NAME = 'statements_digest';"
+                )
+                return
+            if hist_long != "YES":
+                console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
+                console.print(
+                    "  [yellow]events_statements_history_long está OFF — SQL original indisponível.[/yellow]"
+                )
+                console.print(
+                    "  Ative com: UPDATE performance_schema.setup_consumers "
+                    "SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long';"
+                )
+                return
+        except Exception:  # noqa: S110
+            pass
+        console.print(
+            f"[red]Erro:[/red] Digest '{statement_id}' não encontrado no performance_schema."
+        )
+        console.print("  O digest pode ter sido expurgado. Tente re-executar a query.")
+    else:
+        console.print(f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool.")
+        console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
 
 
 def _print_summary(ctx) -> None:
@@ -816,7 +896,7 @@ def _post_add_validate(name: str) -> None:
                 console.print("  [green]✓ performance_schema: ON[/green]")
             else:
                 console.print(
-                    "  [yellow]⚠ performance_schema: OFF — inspect não funcionará[/yellow]"
+                    "  [yellow]⚠ performance_schema: OFF — analyze --execute não terá métricas históricas[/yellow]"
                 )
     except RuntimeError as e:
         # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
@@ -1094,10 +1174,12 @@ def doctor() -> None:
                                 if enabled:
                                     console.print(f"    [green]✓ {cname}: YES[/green]")
                                 elif needed:
-                                    console.print(f"    [red]✗ {cname}: NO — inspect requer[/red]")
+                                    console.print(
+                                        f"    [red]✗ {cname}: NO — analyze --execute requer[/red]"
+                                    )
                                 else:
                                     console.print(
-                                        f"    [yellow]⚠ {cname}: NO — inspect sem SQL original[/yellow]"
+                                        f"    [yellow]⚠ {cname}: NO — get-sql sem SQL original[/yellow]"
                                     )
                         _cursor.close()
                         _conn.close()
@@ -1105,7 +1187,7 @@ def doctor() -> None:
                         pass
                 else:
                     console.print(
-                        "    [red]✗ performance_schema: OFF — inspect não funcionará[/red]"
+                        "    [red]✗ performance_schema: OFF — analyze --execute não terá métricas históricas[/red]"
                     )
         except RuntimeError as e:
             console.print(f"    [red]✗ {e}[/red]")

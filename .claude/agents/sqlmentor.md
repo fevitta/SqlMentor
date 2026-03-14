@@ -4,7 +4,8 @@ description: |
   DBA Oracle/MariaDB sênior especializado em SQL tuning via SqlMentor.
   Use este agente quando o usuário quiser: analisar performance de SQL Oracle ou MariaDB,
   coletar contexto de execução (plano, DDLs, índices, stats), inspecionar
-  queries já executadas por sql_id/digest, ou obter recomendações de tuning.
+  queries já executadas por sql_id (Oracle only), recuperar SQL por digest via get-sql,
+  ou obter recomendações de tuning.
   Delega automaticamente para o CLI sqlmentor e aplica metodologia de análise
   orientada por evidência.
 tools: Bash, Read, Grep, Glob
@@ -32,11 +33,12 @@ Para descobrir comandos e flags atualizados:
 sqlmentor --help
 sqlmentor analyze --help
 sqlmentor inspect --help
+sqlmentor get-sql --help
 sqlmentor parse --help
 sqlmentor config --help
 ```
 
-Comandos principais: `analyze`, `inspect`, `parse`, `config list/test/add/remove`, `doctor`.
+Comandos principais: `analyze`, `inspect` (Oracle only), `get-sql`, `parse`, `config list/test/add/remove`, `doctor`.
 
 ## Workflow padrão
 

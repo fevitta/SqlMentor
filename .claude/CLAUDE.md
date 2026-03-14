@@ -6,8 +6,8 @@ Público-alvo: DBAs e desenvolvedores que querem contexto estruturado para tunin
 
 ## Interfaces
 
-- **CLI** (`sqlmentor`): uso direto no terminal, relatórios salvos em `reports/`
-- **MCP Server** (`sqlmentor-mcp`): integração com IDEs via Model Context Protocol (stdio)
+- **CLI** (`sqlmentor`): uso direto no terminal, relatórios salvos em `reports/`. Comandos: `analyze`, `inspect` (Oracle only), `get-sql`, `parse`, `config`, `doctor`
+- **MCP Server** (`sqlmentor-mcp`): integração com IDEs via Model Context Protocol (stdio). Tools: `analyze_sql`, `inspect_sql` (Oracle only), `get_sql_text`, `parse_sql`, `list_connections`, `test_connection`, `get_status`
 - **Kiro Power** (`powers/sqlmentor/`): MCP + metodologia de análise para times que usam Kiro
 - **Claude Code Agent** (`.claude/agents/sqlmentor.md`): agente DBA Oracle sênior que opera o CLI e produz análises de tuning
 
@@ -32,8 +32,8 @@ sqlmentor/
 │   └── fixtures/sample_plan.txt  # Fixture de plano Oracle para testes de compressão
 ├── powers/sqlmentor/             # Kiro Power (POWER.md + mcp.json + steering)
 └── src/sqlmentor/
-    ├── cli.py                    # CLI Typer (analyze, inspect, parse, config, doctor)
-    ├── mcp_server.py             # MCP Server (analyze_sql, inspect_sql, parse_sql, list/test_connections)
+    ├── cli.py                    # CLI Typer (analyze, inspect, get-sql, parse, config, doctor)
+    ├── mcp_server.py             # MCP Server (analyze_sql, inspect_sql, get_sql_text, parse_sql, list/test_connections)
     ├── parser.py                 # Parse SQL via sqlglot + regex fallback
     ├── connector.py              # CRUD conexões (~/.sqlmentor/connections.yaml)
     ├── collector.py              # Coleta metadata Oracle (TableContext, CollectedContext)
@@ -53,7 +53,8 @@ Python 3.12+ · setuptools · Typer + Rich · FastMCP (stdio) · sqlglot (Oracle
 pip install -e .                                         # install dev (Oracle + MariaDB)
 sqlmentor analyze <file.sql> --conn <profile>            # plano estimado
 sqlmentor analyze <file.sql> --conn <profile> --execute  # plano real
-sqlmentor inspect <sql_id> --conn <profile>              # plano real via V$SQL
+sqlmentor inspect <sql_id> --conn <profile>              # plano real via V$SQL (Oracle only)
+sqlmentor get-sql <statement_id> --conn <profile>       # recupera texto SQL
 sqlmentor parse <file.sql> --schema <SCHEMA>             # parse offline
 sqlmentor config add oracle  -n prod -h host -s ORCL -u user   # conexão Oracle
 sqlmentor config add mariadb -n dev  -h host -d mydb -u user   # conexão MariaDB
@@ -90,7 +91,7 @@ O agente Claude Code descobre flags via `--help` — não requer atualização d
 ## Cache e Timeout
 
 - **Cache LRU**: TTL de 1 hora, máximo 500 entradas. `--no-cache` limpa tudo.
-- **Timeout de execução**: quando `--execute` excede o `call_timeout`, o collector detecta `DPY-4011` e orienta a usar `sqlmentor inspect <sql_id>`. Fallback automático para plano estimado.
+- **Timeout de execução**: quando `--execute` excede o `call_timeout`, o collector detecta `DPY-4011` e orienta a usar `sqlmentor inspect <sql_id>` (Oracle) ou `sqlmentor get-sql <digest>` (MariaDB). Fallback automático para plano estimado.
 
 ## Detalhes Técnicos
 

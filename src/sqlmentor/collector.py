@@ -727,7 +727,8 @@ def _collect_runtime_execution(
             ctx.errors.append(
                 "Query cancelada por timeout. "
                 "Execute o SQL diretamente no banco e use "
-                "'sqlmentor inspect <sql_id>' para coletar o plano sem re-executar."
+                "'sqlmentor inspect <sql_id>' (Oracle) ou 'sqlmentor get-sql <digest>' (MariaDB) "
+                "para coletar o plano sem re-executar."
             )
         else:
             ctx.errors.append(f"Erro na execução runtime: {e}")
