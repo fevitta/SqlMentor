@@ -146,7 +146,7 @@ class MariaDBQueryBuilder(QueryBuilder):
                    0 AS avg_buffer_gets,
                    ROWS_SENT AS avg_rows_per_exec,
                    ROWS_SENT AS rows_processed,
-                   SUM_SORT_ROWS AS sorts,
+                   SORT_ROWS AS sorts,
                    ROWS_EXAMINED AS disk_reads
             FROM performance_schema.events_statements_history
             WHERE THREAD_ID = (
