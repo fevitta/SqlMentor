@@ -112,7 +112,7 @@ class OracleQueryBuilder(QueryBuilder):
 
     # ── Plano de execução ────────────────────────────────────────────
 
-    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict | None]]:
         """Gera EXPLAIN PLAN e recupera o resultado."""
         # EXPLAIN PLAN não aceita bind variables no STATEMENT_ID — usa literal.
         stmt_id = "SQLMENTOR_PLAN"
@@ -751,7 +751,7 @@ class OracleAdapter(DatabaseAdapter):
         """
         dsn = oracledb.makedsn(config["host"], config["port"], service_name=config["service"])
 
-        effective_timeout = timeout if timeout is not None else config.get("timeout", 180)
+        effective_timeout = timeout if timeout is not None else config.get("timeout", 600)
 
         try:
             conn = oracledb.connect(

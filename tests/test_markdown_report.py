@@ -187,3 +187,226 @@ class TestErrorsSection:
     def test_no_errors(self, minimal_collected_context):
         result = to_markdown(minimal_collected_context)
         assert "Erros na Coleta" not in result
+
+
+# ─── MariaDB-specific sections (T4, T1) ────────────────────────────────────
+
+
+def _mariadb_context(**overrides) -> CollectedContext:
+    """Cria CollectedContext MariaDB mínimo para testes de markdown."""
+    import json
+
+    parsed = ParsedSQL(
+        raw_sql="SELECT * FROM orders",
+        sql_type="SELECT",
+        tables=[{"name": "orders", "schema": "sample_db", "alias": None}],
+    )
+    plan_json = json.dumps(
+        {
+            "query_block": {
+                "select_id": 1,
+                "table": {
+                    "table_name": "orders",
+                    "access_type": "ALL",
+                    "rows": 100,
+                    "r_rows": 95,
+                    "r_loops": 1,
+                    "r_total_time_ms": 1.2,
+                },
+            }
+        }
+    )
+    defaults = dict(
+        parsed_sql=parsed,
+        db_type="mariadb",
+        db_version="10.6.18-MariaDB",
+        runtime_plan=plan_json.splitlines(),
+        runtime_stats={"executions": 1, "avg_elapsed_ms": 1.2},
+        tables=[
+            TableContext(
+                name="orders",
+                schema="sample_db",
+                stats={"num_rows": 100, "blocks": 5},
+            )
+        ],
+        optimizer_params={
+            "optimizer_search_depth": "62",
+            "join_buffer_size": "262144",
+        },
+    )
+    defaults.update(overrides)
+    return CollectedContext(**defaults)
+
+
+class TestMariaDBRuntimePlanHeader:
+    """T4: Runtime plan header mostra ANALYZE FORMAT=JSON para MariaDB."""
+
+    def test_mariadb_runtime_header(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "ANALYZE FORMAT=JSON" in result
+        assert "ALLSTATS LAST" not in result
+
+    def test_mariadb_no_shared_pool_warning(self):
+        ctx = _mariadb_context(
+            runtime_stats={"executions": 5, "avg_elapsed_ms": 10},
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "shared pool" not in result
+
+    def test_oracle_runtime_header(self, rich_collected_context):
+        result = to_markdown(rich_collected_context, verbosity="full")
+        assert "ALLSTATS LAST" in result
+
+
+class TestMariaDBOptimizerSection:
+    """T1: Seção Optimizer Params usa defaults MariaDB."""
+
+    def test_mariadb_optimizer_params_shown(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx)
+        assert "optimizer_search_depth" in result
+        assert "join_buffer_size" in result
+
+    def test_mariadb_optimizer_no_oracle_params(self):
+        ctx = _mariadb_context(
+            optimizer_params={"optimizer_mode": "ALL_ROWS"},
+        )
+        result = to_markdown(ctx)
+        # optimizer_mode é Oracle-only, não aparece com db_type=mariadb
+        assert "optimizer_mode" not in result
+
+    def test_mariadb_optimizer_uppercase_keys_normalized(self):
+        """T1: MariaDB retorna UPPERCASE de GLOBAL_VARIABLES — deve normalizar."""
+        ctx = _mariadb_context(
+            optimizer_params={
+                "OPTIMIZER_SWITCH": "index_merge=on",
+                "JOIN_BUFFER_SIZE": "262144",
+                "OPTIMIZER_SEARCH_DEPTH": "62",
+            },
+        )
+        result = to_markdown(ctx)
+        # Params devem aparecer mesmo com keys em UPPERCASE
+        assert "optimizer_switch" in result
+        assert "join_buffer_size" in result
+        assert "optimizer_search_depth" in result
+
+    def test_format_optimizer_params_uppercase_keys_direct(self):
+        """T1: _format_optimizer_params com uppercase keys retorna conteudo."""
+        from sqlmentor.report import _format_optimizer_params
+
+        result = _format_optimizer_params(
+            {
+                "OPTIMIZER_SWITCH": "index_merge=on",
+                "JOIN_BUFFER_SIZE": "262144",
+            },
+            db_type="mariadb",
+        )
+        assert result != ""
+        assert "optimizer_switch" in result
+        assert "join_buffer_size" in result
+
+
+class TestMariaDBRuntimeStatsLabel:
+    """T4: Stats label mostra 'Runtime Stats' para MariaDB, 'V$SQL' para Oracle."""
+
+    def test_mariadb_stats_label(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx)
+        assert "Runtime Stats" in result
+        assert "V$SQL" not in result
+
+    def test_mariadb_minimal_stats_label(self):
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="minimal")
+        assert "Runtime Stats" in result
+
+
+class TestMariaDBRuntimePlanLabels:
+    """T4: Comprehensive coverage for MariaDB runtime plan labels vs Oracle."""
+
+    def test_mariadb_no_statistics_level_mention(self):
+        """MariaDB report deve NOT mencionar STATISTICS_LEVEL = ALL."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "STATISTICS_LEVEL" not in result
+
+    def test_mariadb_runtime_section_heading_format(self):
+        """Section heading inclui 'ANALYZE FORMAT=JSON' entre parenteses."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "Runtime Execution Plan (ANALYZE FORMAT=JSON)" in result
+
+    def test_mariadb_runtime_description_mentions_analyze(self):
+        """Descricao abaixo do heading menciona ANALYZE FORMAT=JSON."""
+        ctx = _mariadb_context()
+        result = to_markdown(ctx, verbosity="full")
+        assert "Coletado via `ANALYZE FORMAT=JSON`" in result
+
+    def test_mariadb_compact_verbosity_same_labels(self):
+        """Labels sao identicos em compact e full verbosity."""
+        ctx = _mariadb_context()
+        compact = to_markdown(ctx, verbosity="compact")
+        assert "ANALYZE FORMAT=JSON" in compact
+        assert "ALLSTATS LAST" not in compact
+        assert "STATISTICS_LEVEL" not in compact
+
+    def test_oracle_runtime_section_has_allstats(self, rich_collected_context):
+        """Oracle report usa ALLSTATS LAST e menciona STATISTICS_LEVEL."""
+        result = to_markdown(rich_collected_context, verbosity="full")
+        assert "Runtime Execution Plan (ALLSTATS LAST)" in result
+        assert "STATISTICS_LEVEL" in result
+
+    def test_mariadb_no_executions_shared_pool_warning(self):
+        """MariaDB com multiple executions NAO mostra shared pool warning."""
+        ctx = _mariadb_context(
+            runtime_stats={"executions": 10, "avg_elapsed_ms": 5.0},
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "shared pool" not in result
+        assert "SQL_ID" not in result
+
+
+# ─── T12: View Expansion case-insensitive lookup ───────────────────────────
+
+
+class TestViewExpansionCaseInsensitive:
+    """T12: index_table_map lookup usa both raw and uppercased keys."""
+
+    def test_lowercase_index_mapped_to_table(self):
+        """MariaDB retorna nomes lowercase; index_table_map deve funcionar."""
+        import json
+
+        plan_json = json.dumps(
+            {
+                "query_block": {
+                    "select_id": 1,
+                    "table": {
+                        "table_name": "idx_orders_status",
+                        "access_type": "ref",
+                        "rows_examined_per_scan": 5,
+                    },
+                }
+            }
+        )
+
+        ctx = CollectedContext(
+            parsed_sql=ParsedSQL(
+                raw_sql="SELECT * FROM v_orders",
+                sql_type="SELECT",
+                tables=[{"schema": "mydb", "name": "v_orders"}],
+            ),
+            db_type="mariadb",
+            execution_plan=plan_json.splitlines(),
+            view_expansions={"v_orders": ["mydb.orders"]},
+            index_table_map={"IDX_ORDERS_STATUS": "orders"},
+            tables=[
+                TableContext(
+                    name="v_orders",
+                    schema="mydb",
+                    object_type="VIEW",
+                ),
+            ],
+        )
+        result = to_markdown(ctx, verbosity="full")
+        assert "Acessadas no plano" in result

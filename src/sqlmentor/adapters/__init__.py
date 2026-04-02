@@ -26,7 +26,7 @@ _ADAPTER_REGISTRY: dict[str, type[DatabaseAdapter]] = {}
 _LAZY_IMPORTS: dict[str, str] = {
     "oracle": "sqlmentor.adapters.oracle",
     # "postgresql": "sqlmentor.adapters.postgresql",
-    # "mariadb": "sqlmentor.adapters.mariadb",
+    "mariadb": "sqlmentor.adapters.mariadb",
 }
 
 

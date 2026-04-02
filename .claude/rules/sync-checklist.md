@@ -1,6 +1,6 @@
 # Checklists de Consistência
 
-## Ao adicionar/alterar parâmetro em `analyze` ou `inspect`
+## Ao adicionar/alterar parâmetro em `analyze`, `inspect` ou `get-sql`
 
 - [ ] `src/sqlmentor/cli.py` — opção Typer
 - [ ] `src/sqlmentor/mcp_server.py` — parâmetro na tool MCP

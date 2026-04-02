@@ -107,6 +107,7 @@ def _make_adapter_mock():
     from sqlmentor.adapters.oracle import OracleQueryBuilder
 
     adapter = MagicMock()
+    adapter.db_type = "oracle"
     adapter.query_builder = OracleQueryBuilder()
 
     def _exec_query(cursor, sql, params):
@@ -1709,3 +1710,56 @@ class TestDPY4011Timeout:
 
         _collect_runtime_execution(cursor, conn, parsed.raw_sql, ctx, adapter)
         assert any("timeout" in e.lower() or "inspect" in e.lower() for e in ctx.errors)
+
+
+# ─── T8: UNKNOWN sql_type + execute=True ────────────────────────────────────
+
+
+class TestUnknownSqlTypeWithExecute:
+    """T8: sql_type UNKNOWN com execute=True deve tentar coleta runtime."""
+
+    def test_unknown_with_execute_calls_runtime(self):
+        """UNKNOWN + execute=True deve chamar _collect_runtime_execution."""
+        parsed = ParsedSQL(
+            raw_sql="SELECT * FROM orders",
+            sql_type="UNKNOWN",
+            tables=[{"name": "ORDERS", "schema": "HR", "alias": None}],
+        )
+        overrides = {
+            "ALTER SESSION": None,
+            "v$mystat": (100,),
+            "v$session": ("abc123def456",),
+            "v$sql": {
+                "description": [("sql_id",), ("executions",)],
+                "rows": [("abc123def456", 1)],
+            },
+            "v$session_event": {
+                "description": [("event",)],
+                "rows": [],
+            },
+        }
+        cursor = make_cursor_dispatch({**_make_full_cursor_dispatch(), **overrides})
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        adapter = _make_adapter_mock()
+        adapter.fold_case = True
+        ctx = collect_context(parsed, conn, "HR", execute=True, adapter=adapter)
+        # Com execute=True e UNKNOWN, deve tentar coletar runtime plan
+        assert ctx.runtime_plan is not None or ctx.execution_plan is not None
+
+    def test_unknown_without_execute_collects_estimated_plan(self):
+        """UNKNOWN sem execute=True deve coletar plano estimado (T8)."""
+        parsed = ParsedSQL(
+            raw_sql="SOME WEIRD STATEMENT",
+            sql_type="UNKNOWN",
+            tables=[],
+        )
+        cursor = make_cursor_dispatch(_make_full_cursor_dispatch())
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        adapter = _make_adapter_mock()
+        adapter.fold_case = True
+        ctx = collect_context(parsed, conn, "HR", execute=False, adapter=adapter)
+        # T8: UNKNOWN agora coleta plano estimado mesmo sem execute
+        assert ctx.execution_plan is not None
+        assert ctx.runtime_plan is None

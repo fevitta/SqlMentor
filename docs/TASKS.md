@@ -3,7 +3,7 @@
 > Adicionar suporte a MariaDB ao SqlMentor usando o adapter pattern da Fase 1.
 > **Depende de:** Fase 1 completa (T1-T9) ✅
 
-## Status: TODO (0/7)
+## Status: COMPLETE (7/7)
 
 ## Ordem de Execução
 
@@ -18,29 +18,31 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ## Tarefas
 
 ### T17: MariaDBAdapter
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T1 ✅, T2 ✅
 - **Bloqueia**: T18, T19, T21, T23
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] `src/sqlmentor/adapters/mariadb.py` — `MariaDBAdapter` implementando `DatabaseAdapter`
-  - [ ] Conexão via `mysql.connector.connect()` com suporte a SSL
-  - [ ] `test_connection()` via `SELECT VERSION()`
-  - [ ] `validate_privileges()` via `SHOW GRANTS`
-  - [ ] `diagnose_connection()` verifica `performance_schema` habilitado
-  - [ ] Dependência opcional: `mysql-connector-python` ou `PyMySQL` no `pyproject.toml`
+  - [x] `src/sqlmentor/adapters/mariadb.py` — `MariaDBAdapter` implementando `DatabaseAdapter`
+  - [x] Conexão via `pymysql.connect()` (PyMySQL driver)
+  - [x] `test_connection()` via `SELECT 1`
+  - [x] `validate_privileges()` via `information_schema.USER_PRIVILEGES`
+  - [x] `diagnose_connection()` verifica `performance_schema` habilitado
+  - [x] Dependência opcional: `PyMySQL` no `pyproject.toml` (`sqlmentor[mariadb]`)
 
 ---
 
 ### T18: queries/mariadb.py
-- **Status**: [ ] TODO
-- **Depende de**: T3 ✅, T17
+- **Status**: [x] DONE
+- **Depende de**: T3 ✅, T17 ✅
 - **Bloqueia**: T19, T21
 - **Esforço**: 7 dias
 - **Entregas**:
-  - [ ] `src/sqlmentor/queries/mariadb.py` — `MariaDBQueryBuilder` implementando `QueryBuilder`
-  - [ ] 30+ queries usando `information_schema` e `performance_schema`
-  - [ ] Assinaturas mantêm `tuple[str, dict]`
+  - [x] `MariaDBQueryBuilder` em `adapters/mariadb.py` (queries inline, não arquivo separado)
+  - [x] 18 query methods + `build_tuple_in_clause()` + `_sanitize_identifier()`
+  - [x] Queries contra `information_schema` e `performance_schema`
+  - [x] Assinaturas mantêm `tuple[str, dict]` com pyformat `%(name)s`
+  - [x] 90 testes (62 novos) incluindo parametrized no-Oracle-binds check
 
 **Equivalências Oracle → MariaDB:**
 
@@ -61,28 +63,36 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ---
 
 ### T19: Coleta de metadata MariaDB
-- **Status**: [ ] TODO
-- **Depende de**: T4 ✅, T9 ✅, T18
+- **Status**: [x] DONE
+- **Depende de**: T4 ✅, T9 ✅, T18 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] Integrar `MariaDBQueryBuilder` no collector via adapter
-  - [ ] DDL via `SHOW CREATE TABLE` (mais simples que Oracle)
-  - [ ] Sem LOBs — resultados são strings diretas
-  - [ ] `EXPLAIN ANALYZE` com alerta ao usuário (pode afetar stats da tabela)
-  - [ ] Tratar diferenças de storage engine (InnoDB vs MyISAM)
+  - [x] `db_type` em `CollectedContext` — propaga tipo do adapter para report
+  - [x] `_collect_explain_plan` generalizado: 1-step (MariaDB) vs 3-step (Oracle)
+  - [x] `_collect_runtime_execution` branch MariaDB: ANALYZE FORMAT=JSON + warning
+  - [x] DDL column remap em `execute_query`: `Create Table` → `ddl`
+  - [x] `validate_privileges` adapter-aware (backward compat sem adapter)
+  - [x] `_parse_view_tables` com dialect parametrizável (mysql vs oracle)
+  - [x] `report.py`: `db_type` em `_detect_plan_blocks`, `_is_estimated_plan`, `_compress_plan`, `_extract_plan_index_names`
+  - [x] `explain_plan` → `EXPLAIN FORMAT=JSON`, `runtime_plan` → performance_schema
+  - [x] Timeout MariaDB: `"timed out"` pattern
+  - [x] Testes: `test_collector_mariadb.py` (9 testes) + adapter stubs atualizados
 
 ---
 
 ### T20: MariaDBPlanParser
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T1 ✅, T5 ✅
 - **Bloqueia**: T22
 - **Esforço**: 5 dias
 - **Entregas**:
-  - [ ] `MariaDBPlanParser` implementando `PlanParser` em `adapters/mariadb.py`
-  - [ ] Converter output JSON de `EXPLAIN FORMAT=JSON` / `ANALYZE FORMAT=JSON` em `list[PlanBlock]`
-  - [ ] `buffers` e `reads` como `None` (MariaDB não reporta I/O no plano)
+  - [x] `MariaDBPlanParser` implementando `PlanParser` em `adapters/mariadb.py`
+  - [x] Converter output JSON de `EXPLAIN FORMAT=JSON` / `ANALYZE FORMAT=JSON` em `list[PlanBlock]`
+  - [x] `buffers` e `reads` como `int | None` em `PlanBlock` (8 None-guards em `report.py`)
+  - [x] DFS traversal: table, nested_loop, ordering_operation, grouping_operation, duplicates_removal, union_result, subqueries
+  - [x] `is_runtime_plan()` — detecção recursiva de `r_rows`
+  - [x] 4 fixtures JSON + 34 novos testes (125 total no arquivo)
 
 **Mapeamento de campos:**
 
@@ -100,50 +110,62 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 ---
 
 ### T22: Validar regras R1-R12 com planos MariaDB
-- **Status**: [ ] TODO
-- **Depende de**: T5 ✅, T20
+- **Status**: [x] DONE
+- **Depende de**: T5 ✅, T20 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] Verificar regras de compressão com PlanBlocks do MariaDB
-  - [ ] Mapear `access_type` (ALL, ref, range) → operações equivalentes Oracle
-  - [ ] R5 thresholds de `buffers`/`reads` ficam inativos (campos `None`)
-  - [ ] Testar R1, R2, R7 com planos mais rasos do MariaDB
+  - [x] `tests/test_plan_compression_mariadb.py` — 22 testes validando R1-R12 com MariaDB
+  - [x] R5 thresholds: `buffers=None`/`reads=None` ignorados; `starts`, `a_time_ms`, cardinality ratio funcionam
+  - [x] R1, R2, R3, R7, R8 nunca disparam (padrões Oracle ausentes no MariaDB)
+  - [x] R6, R9-R12 funcionam normalmente
+  - [x] `_compress_plan` propaga `db_type="mariadb"` corretamente
+  - [x] `_extract_plan_index_names` extrai nomes apenas com `access_type=INDEX`
 
-**Riscos:**
-- MariaDB não reporta `buffers`/`reads` no plano — thresholds R5 baseados nesses campos ficam inativos
-- Planos MariaDB são mais rasos (menos níveis de profundidade) — R1, R2, R7 podem ter menos efeito
-- `access_type` (ALL, ref, range) é diferente das operações Oracle (TABLE ACCESS FULL, INDEX RANGE SCAN) — mapeamento necessário
+**Achados:**
+- MariaDB não reporta `buffers`/`reads` — R5 thresholds desses campos ficam inativos (None-guard)
+- Sem SORT AGGREGATE, VIEW, UNION-ALL, NESTED LOOPS → R1, R2, R3, R7, R8 são no-ops
+- R9 funciona parcialmente: só `access_type=index` contém "INDEX"; `ref`/`range`/`ALL` não extraem nomes
 
 ---
 
 ### T23: inspect MariaDB (performance_schema → digest)
-- **Status**: [ ] TODO
-- **Depende de**: T6 ✅, T17
+- **Status**: [x] DONE
+- **Depende de**: T6 ✅, T17 ✅
 - **Bloqueia**: T21
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] Implementar inspect para MariaDB usando `DIGEST` do `performance_schema`
-  - [ ] Stats: `COUNT_STAR`, `SUM_TIMER_WAIT`, `SUM_ROWS_SENT`, `SUM_ROWS_EXAMINED`
-  - [ ] Texto original em `events_statements_history` (pode ter truncamento)
-  - [ ] `doctor` verifica `performance_schema = ON`
+  - [x] CLI `inspect`: branch MariaDB usa `EXPLAIN FORMAT=JSON` no SQL recuperado (plano estimado)
+  - [x] MCP `inspect_sql`: mesma lógica MariaDB
+  - [x] CLI `doctor`: lida com diagnose MariaDB (sem `mode` key, verifica `performance_schema`)
+  - [x] `MariaDBAdapter.diagnose_connection` retorna `schema` key
+  - [x] `tests/test_inspect_mariadb.py` — 8 testes (CLI, MCP, doctor, diagnose)
+  - [x] Testes existentes atualizados para novo campo `schema` em diagnose
 
 **Diferenças do Oracle:**
 - Oracle `sql_id` → MariaDB `DIGEST` (hash hex de 64 chars)
+- MariaDB não armazena planos históricos — inspect usa EXPLAIN FORMAT=JSON (estimado)
+- Plano vai em `ctx.execution_plan` (não `ctx.runtime_plan`)
 - Requer `performance_schema = ON`
 
 ---
 
 ### T21: Testes de integração MariaDB
-- **Status**: [ ] TODO
+- **Status**: [x] DONE
 - **Depende de**: T17, T18, T19, T22, T23
 - **Bloqueia**: T24 (CI multi-database)
 - **Esforço**: 3 dias
 - **Entregas**:
-  - [ ] `docker-compose.yml` com MariaDB 10.6 + `performance_schema` habilitado
-  - [ ] Schema de teste com tabelas InnoDB, índices, constraints, partições
-  - [ ] Testes: analyze (estimado), analyze --execute (real), inspect, parse
-  - [ ] CI condicional (`if: github.event.inputs.run_mariadb_tests`)
+  - [x] `docker-compose.yml` com MariaDB 10.6 + `performance_schema` habilitado
+  - [x] Schema de teste com tabelas InnoDB, índices, constraints, partições (ORDER_ARCHIVE)
+  - [x] `tests/integration/mariadb/conftest.py` — session fixtures + seed_query_digest
+  - [x] `test_connection.py` — 5 testes (version, database, privileges, optimizer, dangerous)
+  - [x] `test_collector.py` — 15 testes (object_type, stats, columns, indexes, constraints, DDL, batch, index_map, full collect, view expansion, partitions)
+  - [x] `test_explain_plan.py` — 8 testes (EXPLAIN JSON, JOIN, ANALYZE JSON, parser, is_runtime)
+  - [x] `test_inspect.py` — 5 testes (digest lookup, sql_text, runtime_stats, inspect flow, wait events)
+  - [x] `test_report_e2e.py` — 6 testes (markdown sections, compact vs full, JSON valid, db_type, runtime)
+  - [x] CI: `check-mariadb-paths` + `integration-mariadb` job com `workflow_dispatch`
+  - [x] `pyproject.toml`: marker `mariadb` + task `test-mariadb`
 
 ---
 
@@ -151,12 +173,12 @@ T20 (MariaDBPlanParser) pode rodar em paralelo com T17-T19.
 
 | Tarefa | Status | Depende de |
 |--------|--------|------------|
-| T17 MariaDBAdapter | ⬜ TODO | T1 ✅, T2 ✅ |
-| T18 queries/mariadb.py | ⬜ TODO | T3 ✅, T17 |
-| T19 Coleta metadata | ⬜ TODO | T4 ✅, T9 ✅, T18 |
-| T20 MariaDBPlanParser | ⬜ TODO | T1 ✅, T5 ✅ |
-| T22 Validar R1-R12 | ⬜ TODO | T5 ✅, T20 |
-| T23 inspect MariaDB | ⬜ TODO | T6 ✅, T17 |
-| T21 Integração MariaDB | ⬜ TODO | T17-T23 |
+| T17 MariaDBAdapter | ✅ DONE | T1 ✅, T2 ✅ |
+| T18 queries/mariadb.py | ✅ DONE | T3 ✅, T17 ✅ |
+| T19 Coleta metadata | ✅ DONE | T4 ✅, T9 ✅, T18 ✅ |
+| T20 MariaDBPlanParser | ✅ DONE | T1 ✅, T5 ✅ |
+| T22 Validar R1-R12 | ✅ DONE | T5 ✅, T20 ✅ |
+| T23 inspect MariaDB | ✅ DONE | T6 ✅, T17 ✅ |
+| T21 Integração MariaDB | ✅ DONE | T17 ✅-T23 ✅ |
 
-**Progresso**: 0/7 tarefas concluídas
+**Progresso**: 7/7 tarefas concluídas

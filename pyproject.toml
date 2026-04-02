@@ -5,13 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sqlmentor"
 version = "1.0.2"
-description = "SqlMentor — CLI para coleta de contexto Oracle para tuning de SQL assistido por IA"
+description = "SqlMentor — CLI para coleta de contexto Oracle/MariaDB para tuning de SQL assistido por IA"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "typer[all]>=0.9.0",
     "sqlglot>=20.0.0",
     "oracledb>=2.0.0",
+    "PyMySQL>=1.0.0",
     "pyyaml>=6.0",
     "rich>=13.0.0",
     "mcp[cli]>=1.0.0",
@@ -51,15 +52,16 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["F811", "S101", "S105", "PT011", "RUF002", "RUF003", "RUF005"]
+"tests/*" = ["E402", "F811", "S101", "S105", "S106", "PT011", "RUF002", "RUF003", "RUF005"]
 "src/sqlmentor/report.py" = ["RUF001", "RUF002", "RUF003"]  # unicode intencional em relatórios (×, –, ℹ️)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--ignore=tests/integration"
+addopts = "--ignore=tests/integration --ignore=tests/integration/mariadb"
 markers = [
     "slow: requer conexão Oracle real",
     "oracle: integration test requiring a live Oracle database",
+    "mariadb: integration test requiring a live MariaDB database",
 ]
 
 [tool.coverage.run]
@@ -76,7 +78,8 @@ test-q   = "pytest tests/ -q"
 lint     = "ruff check src/ tests/"
 lint-fix = "ruff check src/ tests/ --fix"
 format       = "ruff format src/ tests/"
-test-oracle  = "pytest tests/integration/ -v --tb=short"
+test-oracle  = "pytest tests/integration/ -v --tb=short --ignore=tests/integration/mariadb"
+test-mariadb = "pytest tests/integration/mariadb/ -v --tb=short"
 test-all     = "pytest tests/ tests/integration/ -v --tb=short"
 build-dev    = "pip install -e .[dev]"
 build-deploy = "python -m build --wheel --outdir dist/"

@@ -10,10 +10,10 @@ pytestmark = pytest.mark.oracle
 class TestExplainPlanEstimado:
     """Testa geração de plano estimado via EXPLAIN PLAN FOR."""
 
-    def test_simple_select(self, oracle_cursor, oracle_schema):
+    def test_simple_select(self, oracle_cursor, oracle_schema, oracle_adapter):
         sql = f"SELECT emp_id, first_name FROM {oracle_schema}.EMPLOYEES WHERE emp_id = 1"  # noqa: S608
         ctx = CollectedContext(parsed_sql=None)
-        plan = _collect_explain_plan(oracle_cursor, sql, ctx)
+        plan = _collect_explain_plan(oracle_cursor, sql, ctx, oracle_adapter)
         assert plan is not None
         assert len(plan) > 0
         # Plano deve conter cabeçalho com colunas padrão
@@ -21,32 +21,34 @@ class TestExplainPlanEstimado:
         assert "Id" in plan_text
         assert "Operation" in plan_text
 
-    def test_join_plan(self, oracle_cursor, oracle_schema):
+    def test_join_plan(self, oracle_cursor, oracle_schema, oracle_adapter):
         sql = (
             f"SELECT e.emp_id, o.order_id FROM {oracle_schema}.EMPLOYEES e "  # noqa: S608
             f"JOIN {oracle_schema}.ORDERS o ON e.emp_id = o.emp_id "
             f"WHERE e.dept_id = 10"
         )
         ctx = CollectedContext(parsed_sql=None)
-        plan = _collect_explain_plan(oracle_cursor, sql, ctx)
+        plan = _collect_explain_plan(oracle_cursor, sql, ctx, oracle_adapter)
         assert plan is not None
         plan_text = "\n".join(plan).upper()
         # Deve conter algum tipo de join (HASH JOIN, NESTED LOOPS, MERGE JOIN)
         assert any(op in plan_text for op in ["HASH JOIN", "NESTED LOOPS", "MERGE JOIN"])
 
-    def test_plan_with_bind_params(self, oracle_cursor, oracle_schema):
+    def test_plan_with_bind_params(self, oracle_cursor, oracle_schema, oracle_adapter):
         sql = f"SELECT emp_id FROM {oracle_schema}.EMPLOYEES WHERE dept_id = :dept AND status = :st"  # noqa: S608
         ctx = CollectedContext(parsed_sql=None)
         bind_params = {"dept": 10, "st": "ACTIVE"}
-        plan = _collect_explain_plan(oracle_cursor, sql, ctx, bind_params=bind_params)
+        plan = _collect_explain_plan(
+            oracle_cursor, sql, ctx, oracle_adapter, bind_params=bind_params
+        )
         assert plan is not None
         assert len(plan) > 0
 
-    def test_plan_table_cleanup(self, oracle_cursor, oracle_schema):
+    def test_plan_table_cleanup(self, oracle_cursor, oracle_schema, oracle_adapter):
         """PLAN_TABLE deve estar limpa após coleta (statement_id removido)."""
         sql = f"SELECT 1 FROM {oracle_schema}.DEPARTMENTS WHERE dept_id = 10"  # noqa: S608
         ctx = CollectedContext(parsed_sql=None)
-        _collect_explain_plan(oracle_cursor, sql, ctx)
+        _collect_explain_plan(oracle_cursor, sql, ctx, oracle_adapter)
 
         oracle_cursor.execute(
             "SELECT COUNT(*) FROM PLAN_TABLE WHERE statement_id = 'SQLMENTOR_PLAN'"

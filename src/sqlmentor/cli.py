@@ -7,7 +7,8 @@ Uso:
     sqlmentor inspect <statement_id> --conn <profile>
     sqlmentor parse <arquivo.sql> --schema <SCHEMA>
     sqlmentor parse --sql "SELECT ..." --schema <SCHEMA>
-    sqlmentor config add --name prod --host ... --port 1521 --service ORCL --user ...
+    sqlmentor config add oracle --name prod --host ... --service ORCL --user ...
+    sqlmentor config add mariadb --name dev --host ... --database mydb --user ...
     sqlmentor config list
     sqlmentor config test --name prod
     sqlmentor config remove --name prod
@@ -81,11 +82,9 @@ def _configure_debug(debug: bool) -> None:
 
 
 def _validate_timeout(timeout: int | None) -> None:
-    """Valida timeout explícito: deve estar entre 1 e 3600 segundos."""
-    if timeout is not None and (timeout < 1 or timeout > 3600):
-        console.print(
-            f"[red]Erro:[/red] Timeout deve estar entre 1 e 3600 segundos (recebido: {timeout})."
-        )
+    """Valida timeout explícito: deve ser >= 1 segundo."""
+    if timeout is not None and timeout < 1:
+        console.print(f"[red]Erro:[/red] Timeout deve ser >= 1 segundo (recebido: {timeout}).")
         raise typer.Exit(1)
 
 
@@ -186,7 +185,7 @@ def analyze(
         None,
         "--timeout",
         "-t",
-        help="Timeout em segundos (sobrescreve o do profile, default: 180).",
+        help="Timeout em segundos (sobrescreve o do profile, default: 600).",
     ),
     normalized: bool = typer.Option(
         False,
@@ -274,11 +273,18 @@ def analyze(
 
     # Resolve schema
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    dialect = cfg.get("type", "oracle")
+    _user_fallback = cfg.get("user", "")
+    if dialect != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
 
     # Parse
     console.print(f"[cyan]Parsing:[/cyan] {source_label}")
-    parsed = parse_sql(sql_text, default_schema=effective_schema)
+    parsed = parse_sql(sql_text, default_schema=effective_schema, dialect=dialect)
     timer.mark("Parse")
 
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
@@ -402,7 +408,7 @@ def analyze(
 @app.command()
 def inspect(
     statement_id: str = typer.Argument(
-        ..., help="Identificador do statement no banco (ex: sql_id Oracle, queryid PostgreSQL)."
+        ..., help="Identificador do statement no banco (ex: sql_id Oracle)."
     ),
     conn: str = typer.Option(
         None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
@@ -453,7 +459,7 @@ def inspect(
         help="Mostra todos os índices, não só os relevantes ao SQL.",
     ),
 ) -> None:
-    """Coleta contexto de um SQL já executado via statement_id (sem re-executar)."""
+    """Coleta contexto de um SQL já executado via statement_id — Oracle only (sem re-executar)."""
     _configure_debug(debug)
     _validate_timeout(timeout)
     from sqlmentor.collector import clear_cache, collect_context
@@ -475,7 +481,22 @@ def inspect(
 
     # Resolve schema
     cfg = get_connection_config(conn)
-    effective_schema = schema or cfg.get("schema", cfg.get("user", "").upper())
+    dialect = cfg.get("type", "oracle")
+    _user_fallback = cfg.get("user", "")
+    if dialect != "mariadb":
+        _user_fallback = _user_fallback.upper()
+    if dialect == "mariadb":
+        effective_schema = schema or cfg.get("database") or cfg.get("schema", _user_fallback)
+    else:
+        effective_schema = schema or cfg.get("schema", _user_fallback)
+
+    # MariaDB: inspect não é suportado (sem planos reais históricos)
+    if dialect == "mariadb":
+        console.print("[red]Erro:[/red] inspect não é suportado para MariaDB.")
+        console.print("  MariaDB não armazena planos reais históricos.")
+        console.print("  Use: [cyan]sqlmentor get-sql <digest>[/cyan] para recuperar o SQL")
+        console.print("  Use: [cyan]sqlmentor analyze <arquivo.sql>[/cyan] para gerar o plano")
+        raise typer.Exit(1)
 
     # Conecta
     console.print(f"[cyan]Conectando:[/cyan] {conn}")
@@ -489,20 +510,23 @@ def inspect(
     qb = adapter.query_builder
     cursor = db_conn.cursor()
 
-    # Recupera SQL original do shared pool
+    # Recupera SQL original via V$SQL
     console.print(f"[cyan]Buscando statement:[/cyan] {statement_id}")
     try:
+        sql_text = None
         sql_query, params = qb.sql_text_by_id(statement_id)
         cursor.execute(sql_query, params)
         row = cursor.fetchone()
-        if not row or not row[0]:
+        if row and row[0]:
+            sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
+
+        if not sql_text:
             console.print(
                 f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool."
             )
             console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
             db_conn.close()
             raise typer.Exit(1)
-        sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
     except Exception as e:
         if "não encontrado" in str(e) or "Exit" in type(e).__name__:
             raise
@@ -514,23 +538,24 @@ def inspect(
     console.print(f"[green]✓[/green] SQL recuperado ({len(sql_text)} chars)")
 
     # Parse
-    parsed = parse_sql(sql_text, default_schema=effective_schema)
+    parsed = parse_sql(sql_text, default_schema=effective_schema, dialect=dialect)
     console.print(f"  Tipo: [bold]{parsed.sql_type}[/bold]")
     console.print(f"  Tabelas: [bold]{', '.join(parsed.table_names) or 'nenhuma'}[/bold]")
     timer.mark("Parse")
 
-    # Coleta plano real via statement_id (sem re-executar)
+    # Oracle: plano real via DBMS_XPLAN.DISPLAY_CURSOR
     console.print("[cyan]Coletando plano real...[/cyan]")
+    runtime_plan_lines = None
     try:
         sql_query, params = qb.runtime_plan(statement_id)
         cursor.execute(sql_query, params)
         runtime_plan_lines = [r[0] for r in cursor]
     except Exception as e:
         console.print(f"[yellow]⚠ Plano real não disponível:[/yellow] {e}")
-        runtime_plan_lines = None
 
     # Coleta métricas de V$SQL
     console.print("[cyan]Coletando métricas V$SQL...[/cyan]")
+    runtime_stats = None
     try:
         sql_query, params = qb.sql_runtime_stats(statement_id)
         cursor.execute(sql_query, params)
@@ -539,7 +564,6 @@ def inspect(
         runtime_stats = dict(zip(columns, row, strict=False)) if row else None
     except Exception as e:
         console.print(f"[yellow]⚠ Métricas V$SQL não disponíveis:[/yellow] {e}")
-        runtime_stats = None
     timer.mark("Runtime")
 
     cursor.close()
@@ -565,7 +589,7 @@ def inspect(
         db_conn.close()
     timer.mark("Collect")
 
-    # Injeta plano real e métricas coletados via statement_id
+    # Injeta plano e métricas coletados via statement_id
     if runtime_plan_lines:
         ctx.runtime_plan = runtime_plan_lines
     if runtime_stats:
@@ -602,6 +626,146 @@ def inspect(
     timer.print_summary()
 
 
+@app.command(name="get-sql")
+def get_sql(
+    statement_id: str = typer.Argument(
+        ..., help="Identificador do statement (sql_id Oracle, DIGEST MariaDB)."
+    ),
+    conn: str = typer.Option(
+        None, "--conn", "-c", help="Nome do profile de conexão (usa o default se omitido)."
+    ),
+    output: Path = typer.Option(
+        None, "--output", "-o", help="Arquivo de saída. Se omitido, imprime apenas no stdout."
+    ),
+    timeout: int = typer.Option(
+        None, "--timeout", "-t", help="Timeout em segundos (sobrescreve o do profile)."
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Ativa logging DEBUG.",
+    ),
+) -> None:
+    """Recupera o texto SQL de um statement já executado (sem coletar contexto)."""
+    _configure_debug(debug)
+    _validate_timeout(timeout)
+    from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
+
+    try:
+        conn = resolve_connection(conn)
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
+
+    cfg = get_connection_config(conn)
+    dialect = cfg.get("type", "oracle")
+
+    try:
+        adapter, db_conn = connect_with_adapter(conn, timeout=timeout)
+    except Exception as e:
+        console.print(f"[red]Erro de conexão:[/red] {e}")
+        raise typer.Exit(1)
+
+    qb = adapter.query_builder
+    cursor = db_conn.cursor()
+    sql_text = None
+    source = None
+
+    try:
+        if dialect == "mariadb":
+            # Tenta SQL original (history_long) primeiro
+            if hasattr(qb, "sql_text_original"):
+                try:
+                    sql_query, params = qb.sql_text_original(statement_id)
+                    cursor.execute(sql_query, params)
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        sql_text = str(row[0])
+                        source = "original"
+                except Exception:  # noqa: S110
+                    pass  # fallback para sql_text_by_id
+
+            # Fallback: DIGEST_TEXT (normalizado)
+            if not sql_text:
+                sql_query, params = qb.sql_text_by_id(statement_id)
+                cursor.execute(sql_query, params)
+                row = cursor.fetchone()
+                if row and row[0]:
+                    sql_text = str(row[0])
+                    source = "normalized"
+        else:
+            # Oracle: V$SQL
+            sql_query, params = qb.sql_text_by_id(statement_id)
+            cursor.execute(sql_query, params)
+            row = cursor.fetchone()
+            if row and row[0]:
+                sql_text = row[0].read() if hasattr(row[0], "read") else str(row[0])
+                source = "v$sql"
+
+        if not sql_text:
+            _get_sql_not_found_diagnostic(cursor, qb, statement_id, dialect)
+            raise typer.Exit(1)
+    except Exception as e:
+        if isinstance(e, SystemExit):
+            raise
+        console.print(f"[red]Erro ao buscar SQL:[/red] {e}")
+        raise typer.Exit(1)
+    finally:
+        cursor.close()
+        db_conn.close()
+
+    # Warning se SQL normalizado
+    if source == "normalized":
+        typer.echo(
+            "⚠ SQL normalizado (DIGEST_TEXT) — literais substituídos por '?'.",
+            err=True,
+        )
+
+    typer.echo(sql_text)
+
+    if output:
+        output.write_text(sql_text, encoding="utf-8")
+        typer.echo(f"✓ SQL salvo em {output}", err=True)
+
+
+def _get_sql_not_found_diagnostic(cursor, qb, statement_id: str, dialect: str) -> None:
+    """Imprime diagnóstico quando statement_id não é encontrado no get-sql."""
+    if dialect == "mariadb" and hasattr(qb, "setup_consumers"):
+        try:
+            sql_query, params = qb.setup_consumers()
+            cursor.execute(sql_query, params)
+            consumers = {r[0]: r[1] for r in cursor}
+            digest = consumers.get("statements_digest", "NO")
+            hist_long = consumers.get("events_statements_history_long", "NO")
+            if digest != "YES":
+                console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
+                console.print("  [yellow]statements_digest está OFF.[/yellow]")
+                console.print(
+                    "  Ative com: UPDATE performance_schema.setup_consumers "
+                    "SET ENABLED = 'YES' WHERE NAME = 'statements_digest';"
+                )
+                return
+            if hist_long != "YES":
+                console.print(f"[red]Erro:[/red] Digest '{statement_id}' não encontrado.")
+                console.print(
+                    "  [yellow]events_statements_history_long está OFF — SQL original indisponível.[/yellow]"
+                )
+                console.print(
+                    "  Ative com: UPDATE performance_schema.setup_consumers "
+                    "SET ENABLED = 'YES' WHERE NAME = 'events_statements_history_long';"
+                )
+                return
+        except Exception:  # noqa: S110
+            pass
+        console.print(
+            f"[red]Erro:[/red] Digest '{statement_id}' não encontrado no performance_schema."
+        )
+        console.print("  O digest pode ter sido expurgado. Tente re-executar a query.")
+    else:
+        console.print(f"[red]Erro:[/red] Statement '{statement_id}' não encontrado no shared pool.")
+        console.print("  O cursor pode ter sido expurgado. Tente re-executar a query.")
+
+
 def _print_summary(ctx) -> None:
     """Imprime resumo da coleta."""
     console.print("")
@@ -615,15 +779,15 @@ def _print_summary(ctx) -> None:
     )
 
     if ctx.runtime_plan:
-        table.add_row(
-            "Runtime Plan (ALLSTATS LAST)",
-            "[green]✓[/green]",
+        plan_label = (
+            "Runtime Plan (ANALYZE FORMAT=JSON)"
+            if ctx.db_type == "mariadb"
+            else "Runtime Plan (ALLSTATS LAST)"
         )
+        table.add_row(plan_label, "[green]✓[/green]")
     if ctx.runtime_stats:
-        table.add_row(
-            "Runtime Stats (V$SQL)",
-            "[green]✓[/green]",
-        )
+        stats_label = "Runtime Stats" if ctx.db_type == "mariadb" else "Runtime Stats (V$SQL)"
+        table.add_row(stats_label, "[green]✓[/green]")
     if ctx.wait_events:
         table.add_row(
             "Wait Events",
@@ -692,21 +856,71 @@ def _print_summary(ctx) -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 
-@config_app.command("add")
-def config_add(
+config_add_app = typer.Typer(help="Adiciona um profile de conexão.")
+config_app.add_typer(config_add_app, name="add")
+
+
+def _post_add_validate(name: str) -> None:
+    """Valida conexão recém-criada e mostra diagnóstico."""
+    console.print("[cyan]Validando conexão...[/cyan]")
+    try:
+        from sqlmentor.connector import diagnose_connection
+
+        info = diagnose_connection(name)
+        console.print("[green]✓ Conectado![/green]")
+        console.print(f"  Versão: {info['version']}")
+        console.print(f"  Schema: {info['schema']}")
+
+        if info.get("mode"):
+            # Oracle: schema + mode + thick/thin checks
+            console.print(f"  Modo: [bold]{info['mode']}[/bold]")
+            major = int(info["major_version"])
+            if major > 0 and major < 12:
+                console.print(
+                    f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
+                )
+                if info["mode"] == "thick":
+                    console.print("  [green]✓ Thick mode ativo — tudo certo.[/green]")
+                else:
+                    console.print(
+                        f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
+                        f"    https://www.oracle.com/database/technologies/instant-client.html\n"
+                        f"    Após instalar, adicione ao PATH e re-teste com: sqlmentor config test -n {name}"
+                    )
+        else:
+            # MariaDB: performance_schema check
+            perf_schema = info.get("performance_schema", "false").lower() in ("true", "1")
+            if perf_schema:
+                console.print("  [green]✓ performance_schema: ON[/green]")
+            else:
+                console.print(
+                    "  [yellow]⚠ performance_schema: OFF — analyze --execute não terá métricas históricas[/yellow]"
+                )
+    except RuntimeError as e:
+        # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
+        console.print(
+            f"  Verifique host/porta/credenciais e re-teste com: sqlmentor config test -n {name}"
+        )
+
+
+@config_add_app.command("oracle")
+def config_add_oracle(
     name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
     host: str = typer.Option(..., "--host", "-h", help="Host do banco."),
     port: int = typer.Option(1521, "--port", "-p", help="Porta."),
-    service: str = typer.Option(..., "--service", "-s", help="Service name."),
+    service: str = typer.Option(..., "--service", "-s", help="Service name Oracle."),
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
     password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
     schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
-    timeout: int = typer.Option(
-        180, "--timeout", "-t", help="Timeout em segundos para operações no banco (default: 180)."
-    ),
-    db_type: str = typer.Option("oracle", "--db-type", help="Tipo de banco (default: oracle)."),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos (default: 600)."),
 ) -> None:
-    """Adiciona um profile de conexão."""
+    """Adiciona um profile Oracle.
+
+    Exemplo: sqlmentor config add oracle -n prod -h dbhost -s ORCL -u sqlmentor
+    """
     _validate_timeout(timeout)
     from sqlmentor.connector import add_connection
 
@@ -720,45 +934,50 @@ def config_add(
             password=password,
             schema=schema_name,
             timeout=timeout,
-            db_type=db_type,
+            db_type="oracle",
         )
     except ValueError as e:
         console.print(f"[red]Erro:[/red] {e}")
         raise typer.Exit(1)
     console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
+    _post_add_validate(name)
 
-    # Valida conexão e detecta versão/modo automaticamente
-    console.print("[cyan]Validando conexão...[/cyan]")
+
+@config_add_app.command("mariadb")
+def config_add_mariadb(
+    name: str = typer.Option(..., "--name", "-n", help="Nome do profile."),
+    host: str = typer.Option(..., "--host", "-h", help="Host do banco."),
+    port: int = typer.Option(3306, "--port", "-p", help="Porta."),
+    database: str = typer.Option(..., "--database", "-d", help="Nome do database."),
+    user: str = typer.Option(..., "--user", "-u", help="Usuário."),
+    password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
+    schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos (default: 600)."),
+) -> None:
+    """Adiciona um profile MariaDB.
+
+    Exemplo: sqlmentor config add mariadb -n dev -h dbhost -d mydb -u sqlmentor
+    """
+    _validate_timeout(timeout)
+    from sqlmentor.connector import add_connection
+
     try:
-        from sqlmentor.connector import diagnose_connection
-
-        info = diagnose_connection(name)
-        console.print("[green]✓ Conectado![/green]")
-        console.print(f"  Versão: {info['version']}")
-        console.print(f"  Schema: {info['schema']}")
-        console.print(f"  Modo: [bold]{info['mode']}[/bold]")
-
-        major = int(info["major_version"])
-        if major > 0 and major < 12:
-            console.print(
-                f"  [yellow]⚠ Oracle {major} detectado — requer thick mode (Oracle Instant Client).[/yellow]"
-            )
-            if info["mode"] == "thick":
-                console.print("  [green]✓ Thick mode ativo — tudo certo.[/green]")
-            else:
-                console.print(
-                    f"  [red]✗ Thick mode não disponível. Instale o Oracle Instant Client:[/red]\n"
-                    f"    https://www.oracle.com/database/technologies/instant-client.html\n"
-                    f"    Após instalar, adicione ao PATH e re-teste com: sqlmentor config test -n {name}"
-                )
-    except RuntimeError as e:
-        # _init_thick_mode_if_available levantou RuntimeError — banco antigo sem Instant Client
-        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
-    except Exception as e:
-        console.print(f"[yellow]⚠ Conexão salva, mas validação falhou:[/yellow] {e}")
-        console.print(
-            f"  Verifique host/porta/service/credenciais e re-teste com: sqlmentor config test -n {name}"
+        add_connection(
+            name=name,
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
+            schema=schema_name,
+            timeout=timeout,
+            db_type="mariadb",
         )
+    except ValueError as e:
+        console.print(f"[red]Erro:[/red] {e}")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] Conexão [bold]{name}[/bold] salva.")
+    _post_add_validate(name)
 
 
 @config_app.command("list")
@@ -770,7 +989,8 @@ def config_list() -> None:
     if not connections:
         console.print("[yellow]Nenhuma conexão configurada.[/yellow]")
         console.print(
-            "Use: sqlmentor config add --name <nome> --host <host> --service <service> --user <user>"
+            "Use: sqlmentor config add --name <nome> --host <host> --user <user> --service <service>  (Oracle)\n"
+            "     sqlmentor config add --name <nome> --host <host> --user <user> --database <db> --db-type mariadb"
         )
         return
 
@@ -781,7 +1001,7 @@ def config_list() -> None:
     table.add_column("Tipo")
     table.add_column("Host")
     table.add_column("Porta")
-    table.add_column("Service")
+    table.add_column("Service/Database")
     table.add_column("User")
     table.add_column("Schema")
     table.add_column("Timeout")
@@ -789,15 +1009,16 @@ def config_list() -> None:
 
     for name, cfg in connections.items():
         is_default = "★" if name == default_name else ""
+        svc_or_db = cfg.get("database") or cfg.get("service") or "?"
         table.add_row(
             name,
             cfg.get("type", "oracle"),
             cfg.get("host", "?"),
             str(cfg.get("port", "?")),
-            cfg.get("service", "?"),
+            svc_or_db,
             cfg.get("user", "?"),
             cfg.get("schema", "?"),
-            f"{cfg.get('timeout', 180)}s",
+            f"{cfg.get('timeout', 600)}s",
             is_default,
         )
 
@@ -902,23 +1123,70 @@ def doctor() -> None:
         return
 
     for name, cfg in connections.items():
+        svc_or_db = cfg.get("database") or cfg.get("service") or "?"
         console.print(
-            f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{cfg.get('service', '?')})"
+            f"  [bold]{name}[/bold] ({cfg.get('host', '?')}:{cfg.get('port', '?')}/{svc_or_db})"
         )
         try:
             info = diagnose_connection(name)
-            major = int(info["major_version"])
-            mode_color = "green"
             console.print(f"    [green]✓ Conectado[/green] — {info['version']}")
-            console.print(
-                f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]"
-            )
-            if major > 0 and major < 12 and info["mode"] == "thick":
-                console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
-            elif major > 0 and major < 12 and info["mode"] == "thin":
+            if info.get("mode"):
+                # Oracle: schema + mode + thick/thin checks
+                major = int(info["major_version"])
+                mode_color = "green"
                 console.print(
-                    f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]"
+                    f"    Schema: {info['schema']}  Modo: [{mode_color}]{info['mode']}[/{mode_color}]"
                 )
+                if major > 0 and major < 12 and info["mode"] == "thick":
+                    console.print(f"    [yellow]Oracle {major} — thick mode ativo (OK)[/yellow]")
+                elif major > 0 and major < 12 and info["mode"] == "thin":
+                    console.print(
+                        f"    [red]Oracle {major} — precisa de thick mode mas Instant Client não encontrado[/red]"
+                    )
+            else:
+                # MariaDB ou outro: version + performance_schema
+                schema = info.get("schema", "?")
+                console.print(f"    Schema: {schema}")
+                perf_schema = info.get("performance_schema", "false").lower() in (
+                    "true",
+                    "1",
+                )
+                if perf_schema:
+                    console.print("    [green]✓ performance_schema: ON[/green]")
+                    # Verifica consumers para inspect
+                    try:
+                        from sqlmentor.connector import connect_with_adapter
+
+                        _adapter, _conn = connect_with_adapter(name)
+                        _cursor = _conn.cursor()
+                        _qb = _adapter.query_builder
+                        if hasattr(_qb, "setup_consumers"):
+                            sql, params = _qb.setup_consumers()
+                            _cursor.execute(sql, params)
+                            consumers = {r[0]: r[1] for r in _cursor}
+                            for cname, needed in [
+                                ("statements_digest", True),
+                                ("events_statements_history_long", False),
+                            ]:
+                                enabled = consumers.get(cname, "NO") == "YES"
+                                if enabled:
+                                    console.print(f"    [green]✓ {cname}: YES[/green]")
+                                elif needed:
+                                    console.print(
+                                        f"    [red]✗ {cname}: NO — analyze --execute requer[/red]"
+                                    )
+                                else:
+                                    console.print(
+                                        f"    [yellow]⚠ {cname}: NO — get-sql sem SQL original[/yellow]"
+                                    )
+                        _cursor.close()
+                        _conn.close()
+                    except Exception:  # noqa: S110
+                        pass
+                else:
+                    console.print(
+                        "    [red]✗ performance_schema: OFF — analyze --execute não terá métricas históricas[/red]"
+                    )
         except RuntimeError as e:
             console.print(f"    [red]✗ {e}[/red]")
         except Exception as e:
@@ -949,6 +1217,11 @@ def parse(
         "--denorm-mode",
         help="Estratégia de desnormalização: 'literal' ('?' → '1') ou 'bind' ('?' → :dn1, :dn2...).",
     ),
+    dialect: str = typer.Option(
+        "oracle",
+        "--dialect",
+        help="Dialeto SQL: oracle, mariadb, postgresql.",
+    ),
 ) -> None:
     """Parse offline — mostra tabelas e colunas sem conectar no banco."""
     from sqlmentor.parser import denormalize_sql, is_normalized_sql, parse_sql
@@ -964,7 +1237,7 @@ def parse(
     if normalized:
         sql_text, _ = denormalize_sql(sql_text, mode=denorm_mode)
 
-    parsed = parse_sql(sql_text, default_schema=schema)
+    parsed = parse_sql(sql_text, default_schema=schema, dialect=dialect)
 
     console.print(
         Panel.fit(

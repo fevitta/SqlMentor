@@ -56,6 +56,25 @@ class TestMCPParseSql:
         data = json.loads(parse_sql(""))
         assert isinstance(data, dict)
 
+    def test_dialect_mariadb_backticks(self):
+        data = json.loads(
+            parse_sql("SELECT `id`, `name` FROM `users` WHERE `status` = 1", dialect="mariadb")
+        )
+        assert data["sql_type"] == "SELECT"
+        assert data["is_parseable"]
+        assert any("users" in t.lower() for t in data["tables"])
+
+    def test_dialect_oracle_default(self):
+        data = json.loads(parse_sql("SELECT id FROM dual"))
+        assert data["sql_type"] == "SELECT"
+        assert data["is_parseable"]
+
+    def test_dialect_invalid(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="nao suportado"):
+            parse_sql("SELECT 1", dialect="sqlite")
+
 
 # ─── list_connections ─────────────────────────────────────────────────────────
 
@@ -600,12 +619,9 @@ class TestMCPValidateTimeout:
         data = json.loads(result)
         assert "error" in data
 
-    def test_too_large_timeout_returns_error(self):
-        """timeout 5000 → JSON error."""
-        result = _validate_timeout_mcp(5000)
-        assert result is not None
-        data = json.loads(result)
-        assert "error" in data
+    def test_large_timeout_passes(self):
+        """timeout 5000 → None (sem limite superior)."""
+        assert _validate_timeout_mcp(5000) is None
 
     def test_zero_timeout_passes(self):
         """timeout 0 (default) → None."""
@@ -620,9 +636,9 @@ class TestMCPValidateTimeout:
         result = json.loads(analyze_sql("SELECT 1", timeout=-1))
         assert "error" in result
 
-    def test_inspect_sql_rejects_invalid_timeout(self, tmp_connections_file):
-        """inspect_sql with timeout=5000 → JSON error."""
-        result = json.loads(inspect_sql("abc123def456", timeout=5000))
+    def test_inspect_sql_rejects_negative_timeout(self, tmp_connections_file):
+        """inspect_sql with timeout=-5 → JSON error."""
+        result = json.loads(inspect_sql("abc123def456", timeout=-5))
         assert "error" in result
 
 

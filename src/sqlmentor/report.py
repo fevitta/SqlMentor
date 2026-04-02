@@ -19,7 +19,7 @@ from sqlmentor.collector import CollectedContext, TableContext
 
 @dataclass
 class PlanBlock:
-    """Representa uma operação do plano de execução Oracle."""
+    """Representa uma operação do plano de execução."""
 
     id: str
 
@@ -35,9 +35,9 @@ class PlanBlock:
 
     a_time_ms: float
 
-    buffers: int
+    buffers: int | None = None
 
-    reads: int
+    reads: int | None = None
 
     indent: int = 0
 
@@ -73,8 +73,13 @@ _THRESHOLD_ATIME_MS = 100.0
 _CARDINALITY_RATIO = 10
 
 
-def _detect_plan_blocks(plan_lines: list[str]) -> list[PlanBlock]:
-    """Parseia o plano em lista plana de PlanBlock via OraclePlanParser."""
+def _detect_plan_blocks(plan_lines: list[str], db_type: str = "oracle") -> list[PlanBlock]:
+    """Parseia o plano em lista plana de PlanBlock via parser do banco."""
+    if db_type == "mariadb":
+        from sqlmentor.adapters.mariadb import MariaDBPlanParser
+
+        return MariaDBPlanParser().parse_plan(plan_lines)
+
     from sqlmentor.adapters.oracle import OraclePlanParser
 
     return OraclePlanParser().parse_plan(plan_lines)
@@ -84,11 +89,11 @@ def _apply_thresholds(blocks: list[PlanBlock]) -> None:
     """Marca blocks.immune=True para operações que atendem R5."""
 
     for b in blocks:
-        if b.reads > 0:
+        if b.reads is not None and b.reads > 0:
             b.immune = True
             continue
 
-        if b.buffers > _THRESHOLD_BUFFERS:
+        if b.buffers is not None and b.buffers > _THRESHOLD_BUFFERS:
             b.immune = True
             continue
 
@@ -182,9 +187,9 @@ def _collapse_config_fields(
             if not immune_any:
                 all_ids = {b.id for b in group}
 
-                total_buffers = sum(b.buffers for b in group)
+                total_buffers = sum(b.buffers for b in group if b.buffers is not None)
 
-                total_reads = sum(b.reads for b in group)
+                total_reads = sum(b.reads for b in group if b.reads is not None)
 
                 a_rows_nonzero = [
                     b for b in group if b.operation == "SORT AGGREGATE" and b.a_rows > 0
@@ -267,7 +272,7 @@ def _collapse_situation_history(
             if not immune_any:
                 all_ids = {b.id for b in all_blocks}
 
-                total_buffers = sum(b.buffers for b in all_blocks)
+                total_buffers = sum(b.buffers for b in all_blocks if b.buffers is not None)
 
                 table_rows = []
 
@@ -288,7 +293,7 @@ def _collapse_situation_history(
                         if filter_val != "?":
                             break
 
-                    table_rows.append((filter_val, root_block.a_rows, root_block.buffers))
+                    table_rows.append((filter_val, root_block.a_rows, (root_block.buffers or 0)))
 
                 if is_estimated:
                     lines = [
@@ -364,7 +369,7 @@ def _collapse_view_zero_rows(blocks: list[PlanBlock]) -> list[CollapseResult]:
             if not immune_any:
                 all_ids = {sb.id for sb in subtree}
 
-                total_buffers = sum(sb.buffers for sb in subtree)
+                total_buffers = sum(sb.buffers for sb in subtree if sb.buffers is not None)
 
                 view_label = b.name if b.name else b.operation
 
@@ -394,11 +399,12 @@ def _collapse_union_all_branches(blocks: list[PlanBlock]) -> list[CollapseResult
     i = 0
     while i < len(blocks):
         b = blocks[i]
-        if "UNION-ALL" not in b.operation.upper().replace(" ", "-"):
+        op_normalized = b.operation.upper().replace(" ", "-")
+        if "UNION-ALL" not in op_normalized and "UNION-RESULT" not in op_normalized:
             i += 1
             continue
 
-        # Encontrou UNION-ALL — coletar filhos diretos (subtrees)
+        # Encontrou UNION-ALL/UNION RESULT — coletar filhos diretos (subtrees)
         union_indent = b.indent
         j = i + 1
         branches: list[list[PlanBlock]] = []
@@ -478,7 +484,7 @@ def _collapse_low_cost_nested_loops(blocks: list[PlanBlock]) -> list[CollapseRes
             subtree.append(blocks[j])
             j += 1
 
-        total_buffers = sum(bl.buffers for bl in subtree)
+        total_buffers = sum(bl.buffers for bl in subtree if bl.buffers is not None)
         total_a_rows = sum(bl.a_rows for bl in subtree)
 
         buf_per_iter = total_buffers / b.starts if b.starts > 0 else 0
@@ -623,8 +629,13 @@ def _strip_column_projection(predicate_lines: list[str]) -> list[str]:
     return result
 
 
-def _is_estimated_plan(plan_lines: list[str]) -> bool:
-    """Detecta se o plano é EXPLAIN PLAN (estimado) via OraclePlanParser."""
+def _is_estimated_plan(plan_lines: list[str], db_type: str = "oracle") -> bool:
+    """Detecta se o plano é estimado via parser do banco."""
+    if db_type == "mariadb":
+        from sqlmentor.adapters.mariadb import MariaDBPlanParser
+
+        return not MariaDBPlanParser().is_runtime_plan(plan_lines)
+
     from sqlmentor.adapters.oracle import OraclePlanParser
 
     return not OraclePlanParser().is_runtime_plan(plan_lines)
@@ -634,6 +645,7 @@ def _compress_plan(
     plan_lines: list[str],
     predicate_lines: list[str],
     verbosity: str,
+    db_type: str = "oracle",
 ) -> tuple[list[str], list[str]]:
     """
 
@@ -652,13 +664,18 @@ def _compress_plan(
     if verbosity == "full":
         return plan_lines, predicate_lines
 
-    blocks = _detect_plan_blocks(plan_lines)
+    blocks = _detect_plan_blocks(plan_lines, db_type=db_type)
 
     _apply_thresholds(blocks)
 
+    # MariaDB: plano é JSON — regras de colapso Oracle (pipe-format) não se aplicam.
+    # R5 thresholds já foram aplicados para uso downstream (R9-R11).
+    if db_type == "mariadb":
+        return plan_lines, predicate_lines
+
     pred_map = _build_predicate_map(plan_lines)
 
-    is_estimated = _is_estimated_plan(plan_lines)
+    is_estimated = _is_estimated_plan(plan_lines, db_type=db_type)
 
     # Coleta todos os colapsos
 
@@ -805,12 +822,12 @@ def _collapse_orphan_predicates_by_ids(plan_lines: list[str], collapsed_ids: set
     return result
 
 
-def _extract_plan_index_names(plan_lines: list[str]) -> set[str]:
+def _extract_plan_index_names(plan_lines: list[str], db_type: str = "oracle") -> set[str]:
     """Extrai nomes de índices referenciados no plano de execução (R9).
 
     Parseia linhas do plano via PlanBlock e retorna o ``name`` de operações contendo "INDEX".
     """
-    blocks = _detect_plan_blocks(plan_lines)
+    blocks = _detect_plan_blocks(plan_lines, db_type=db_type)
     return {b.name for b in blocks if "INDEX" in b.operation.upper() and b.name}
 
 
@@ -946,7 +963,6 @@ def to_markdown(
     *,
     show_sql: bool = False,
     show_all_indexes: bool = False,
-    dialect: str = "oracle",
 ) -> str:
     """
 
@@ -1002,16 +1018,16 @@ def to_markdown(
             lines.append("")
 
         if ctx.runtime_stats:
-            stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+            stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
             lines.append(f"## Runtime Stats ({stats_label})")
 
-            lines.append(_format_runtime_stats(ctx.runtime_stats))
+            lines.append(_format_runtime_stats(ctx.runtime_stats, db_type=ctx.db_type))
             lines.append("")
 
         if ctx.optimizer_params:
             lines.append("## Parâmetros do Otimizador")
 
-            lines.append(_format_optimizer_params(ctx.optimizer_params))
+            lines.append(_format_optimizer_params(ctx.optimizer_params, db_type=ctx.db_type))
             lines.append("")
 
         if ctx.errors:
@@ -1086,7 +1102,9 @@ def to_markdown(
         if verbosity != "full":
             predicate_lines = _strip_column_projection(predicate_lines)
 
-        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        plan_compressed, pred_compressed = _compress_plan(
+            plan_lines, predicate_lines, verbosity, db_type=ctx.db_type
+        )
 
         for line in plan_compressed + pred_compressed:
             lines.append(line)
@@ -1099,15 +1117,19 @@ def to_markdown(
     # ─── Runtime: Plano Real ──────────────────────────────────────
 
     if ctx.runtime_plan:
-        lines.append(f"## {section}. Runtime Execution Plan (ALLSTATS LAST)")
-        lines.append(
-            "> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
-            "O plano mostra a última execução (LAST)."
-        )
+        if ctx.db_type == "mariadb":
+            lines.append(f"## {section}. Runtime Execution Plan (ANALYZE FORMAT=JSON)")
+            lines.append("> Coletado via `ANALYZE FORMAT=JSON`. O plano mostra a última execução.")
+        else:
+            lines.append(f"## {section}. Runtime Execution Plan (ALLSTATS LAST)")
+            lines.append(
+                "> Coletado com `STATISTICS_LEVEL = ALL` na sessão. "
+                "O plano mostra a última execução (LAST)."
+            )
 
         executions = ctx.runtime_stats.get("executions", 1) if ctx.runtime_stats else 1
 
-        if executions and executions > 1:
+        if ctx.db_type != "mariadb" and executions and executions > 1:
             lines.append(
                 f"> ⚠️ SQL_ID já existia no shared pool com {executions} execuções. "
                 "Stats de V$SQL são acumuladas, mas o plano ALLSTATS LAST é da última execução."
@@ -1128,7 +1150,9 @@ def to_markdown(
         if verbosity != "full":
             predicate_lines = _strip_column_projection(predicate_lines)
 
-        plan_compressed, pred_compressed = _compress_plan(plan_lines, predicate_lines, verbosity)
+        plan_compressed, pred_compressed = _compress_plan(
+            plan_lines, predicate_lines, verbosity, db_type=ctx.db_type
+        )
 
         for line in plan_compressed + pred_compressed:
             lines.append(line)
@@ -1168,10 +1192,10 @@ def to_markdown(
     # ─── Runtime: Métricas de Execução ────────────────────────────
 
     if ctx.runtime_stats:
-        stats_label = "V$SQL" if dialect == "oracle" else "Runtime Stats"
+        stats_label = "V$SQL" if ctx.db_type == "oracle" else "Runtime Stats"
         lines.append(f"## {section}. Runtime Stats ({stats_label})")
 
-        lines.append(_format_runtime_stats(ctx.runtime_stats))
+        lines.append(_format_runtime_stats(ctx.runtime_stats, db_type=ctx.db_type))
         lines.append("")
 
         section += 1
@@ -1192,13 +1216,23 @@ def to_markdown(
         lines.append(f"## {section}. View Expansion Summary")
         lines.append("")
 
-        # Extrai tabelas realmente acessadas no plano via mapa de índices
+        # Extrai tabelas realmente acessadas no plano (suporta Oracle e MariaDB)
 
         plan_source = ctx.runtime_plan or ctx.execution_plan or []
 
-        plan_ops = _parse_plan_operations(plan_source) if plan_source else []
-
-        plan_tables = _extract_plan_tables(plan_ops, ctx.index_table_map)
+        plan_tables: set[str] = set()
+        if plan_source:
+            blocks = _detect_plan_blocks(plan_source, db_type=ctx.db_type)
+            for b in blocks:
+                if b.name:
+                    clean = b.name.strip('"').upper()
+                    if not clean.startswith("<"):
+                        plan_tables.add(clean)
+                    # Index → table mapping (case-insensitive para MariaDB)
+                    if clean in ctx.index_table_map or b.name in ctx.index_table_map:
+                        mapped = ctx.index_table_map.get(clean) or ctx.index_table_map.get(b.name)
+                        if mapped:
+                            plan_tables.add(mapped.upper())
 
         # Tabelas do SQL original (sem views)
 
@@ -1296,7 +1330,7 @@ def to_markdown(
     plan_index_names: set[str] = set()
     for plan_source_r9 in (ctx.runtime_plan, ctx.execution_plan):
         if plan_source_r9:
-            plan_index_names.update(_extract_plan_index_names(plan_source_r9))
+            plan_index_names.update(_extract_plan_index_names(plan_source_r9, db_type=ctx.db_type))
 
     # Separa tabelas pequenas (< 1000 rows) pra formato compacto
 
@@ -1354,7 +1388,7 @@ def to_markdown(
         if table.stats:
             lines.append("### Estatísticas Gerais")
 
-            lines.append(_format_table_stats(table.stats))
+            lines.append(_format_table_stats(table.stats, db_type=ctx.db_type))
             lines.append("")
 
         # Columns — filtra pra mostrar só colunas referenciadas no SQL
@@ -1430,7 +1464,7 @@ def to_markdown(
 
             lines.append("### Índices")
 
-            lines.append(_format_indexes(display_indexes))
+            lines.append(_format_indexes(display_indexes, db_type=ctx.db_type))
             if idx_omitted > 0:
                 lines.append(
                     f"\n*({idx_omitted} índices não relacionados às cláusulas do SQL omitidos)*"
@@ -1471,7 +1505,7 @@ def to_markdown(
     if ctx.optimizer_params:
         lines.append("## Parâmetros do Otimizador")
 
-        lines.append(_format_optimizer_params(ctx.optimizer_params))
+        lines.append(_format_optimizer_params(ctx.optimizer_params, db_type=ctx.db_type))
         lines.append("")
 
     # ─── Erros ────────────────────────────────────────────────────
@@ -1835,7 +1869,7 @@ def _filter_columns_by_sql(
 
 # Parâmetros do otimizador relevantes pra tuning com seus defaults Oracle
 
-_OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
+_OPTIMIZER_DEFAULTS: dict[str, tuple[str | None, str]] = {
     "optimizer_mode": ("ALL_ROWS", "Modo do otimizador"),
     "optimizer_index_cost_adj": (
         "100",
@@ -1851,15 +1885,37 @@ _OPTIMIZER_DEFAULTS: dict[str, tuple[str, str]] = {
     "result_cache_mode": ("MANUAL", "Cache de resultados"),
 }
 
+_MARIADB_OPTIMIZER_DEFAULTS: dict[str, tuple[str | None, str]] = {
+    "optimizer_switch": (None, "Flags do otimizador MariaDB"),
+    "optimizer_use_condition_selectivity": ("4", "Nível de seletividade (1-5)"),
+    "optimizer_search_depth": ("62", "Profundidade de busca do otimizador"),
+    "join_buffer_size": ("262144", "Buffer de join (bytes)"),
+    "sort_buffer_size": ("2097152", "Buffer de sort (bytes)"),
+    "tmp_table_size": ("16777216", "Tamanho máximo de temp table em memória"),
+    "max_heap_table_size": ("16777216", "Tamanho máximo de MEMORY table"),
+    "read_buffer_size": ("131072", "Buffer de leitura sequencial"),
+    "read_rnd_buffer_size": ("262144", "Buffer de leitura aleatória"),
+    "eq_range_index_dive_limit": ("200", "Limite de index dives para estimativa"),
+    "histogram_size": ("254", "Tamanho dos histogramas"),
+    "histogram_type": ("DOUBLE_PREC_HB", "Tipo de histograma"),
+    "use_stat_tables": ("PREFERABLY_FOR_QUERIES", "Uso de tabelas de estatísticas"),
+}
 
-def _format_optimizer_params(params: dict[str, str]) -> str:
+
+def _format_optimizer_params(params: dict[str, str], db_type: str = "oracle") -> str:
     """Formata parâmetros do otimizador — só os relevantes, com warnings pra valores não-default."""
+
+    defaults = _MARIADB_OPTIMIZER_DEFAULTS if db_type == "mariadb" else _OPTIMIZER_DEFAULTS
+
+    # MariaDB retorna UPPERCASE de information_schema.GLOBAL_VARIABLES;
+    # defaults usam lowercase → normaliza para garantir match.
+    params = {k.lower(): v for k, v in params.items()}
 
     lines = []
 
     warnings = []
 
-    for name, (default_val, _description) in _OPTIMIZER_DEFAULTS.items():
+    for name, (default_val, _description) in defaults.items():
         value = params.get(name)
 
         if value is None:
@@ -1912,6 +1968,7 @@ def to_json(ctx: CollectedContext) -> str:
 
     data: dict[str, Any] = {
         "generated_at": datetime.now().isoformat(),
+        "db_type": ctx.db_type,
         "db_version": ctx.db_version,
         "sql": {
             "raw": ctx.parsed_sql.raw_sql,
@@ -1955,7 +2012,7 @@ def _table_to_dict(table: TableContext) -> dict[str, Any]:
     }
 
 
-def _format_table_stats(stats: dict[str, Any]) -> str:
+def _format_table_stats(stats: dict[str, Any], db_type: str = "oracle") -> str:
     """Formata stats de tabela como texto compacto."""
 
     parts = []
@@ -1968,10 +2025,11 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
         )
 
     if stats.get("blocks"):
+        block_label = "Pages" if db_type == "mariadb" else "Blocks"
         parts.append(
-            f"**Blocks:** {stats['blocks']:,}"
+            f"**{block_label}:** {stats['blocks']:,}"
             if isinstance(stats["blocks"], int | float)
-            else f"**Blocks:** {stats['blocks']}"
+            else f"**{block_label}:** {stats['blocks']}"
         )
 
     if stats.get("avg_row_len"):
@@ -1980,24 +2038,25 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     if stats.get("last_analyzed"):
         parts.append(f"**Last Analyzed:** {stats['last_analyzed']}")
 
-    # Sample size com warning se amostra é pequena
+    # Sample size com warning se amostra é pequena (skip para MariaDB — sempre 100%)
 
-    num_rows = stats.get("num_rows", 0) or 0
+    if db_type != "mariadb":
+        num_rows = stats.get("num_rows", 0) or 0
 
-    sample = stats.get("sample_size")
+        sample = stats.get("sample_size")
 
-    if sample is not None and num_rows > 0:
-        pct = (sample / num_rows) * 100 if num_rows else 0
+        if sample is not None and num_rows > 0:
+            pct = (sample / num_rows) * 100 if num_rows else 0
 
-        sample_str = (
-            f"**Sample Size:** {sample:,} ({pct:.0f}%)"
-            if isinstance(sample, int | float)
-            else f"**Sample Size:** {sample}"
-        )
+            sample_str = (
+                f"**Sample Size:** {sample:,} ({pct:.0f}%)"
+                if isinstance(sample, int | float)
+                else f"**Sample Size:** {sample}"
+            )
 
-        if pct < 10:
-            sample_str += " ⚠️"
-        parts.append(sample_str)
+            if pct < 10:
+                sample_str += " ⚠️"
+            parts.append(sample_str)
 
     if stats.get("partitioned"):
         parts.append(f"**Partitioned:** {stats['partitioned']}")
@@ -2005,7 +2064,8 @@ def _format_table_stats(stats: dict[str, Any]) -> str:
     if stats.get("compression"):
         parts.append(f"**Compression:** {stats['compression']}")
 
-    if stats.get("degree"):
+    # Parallel Degree (skip para MariaDB — sempre 1)
+    if db_type != "mariadb" and stats.get("degree"):
         parts.append(f"**Parallel Degree:** {stats['degree']}")
 
     return " | ".join(parts)
@@ -2080,13 +2140,19 @@ def _format_column_structure(columns: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_indexes(idxs: list[dict[str, Any]]) -> str:
+def _format_indexes(idxs: list[dict[str, Any]], db_type: str = "oracle") -> str:
     """Formata índices como tabela markdown."""
 
-    lines = [
-        "| Nome | Tipo | Unique | Colunas | Distinct Keys | Clustering Factor | BLevel | Last Analyzed | Status |",
-        "|------|------|--------|---------|---------------|-------------------|--------|---------------|--------|",
-    ]
+    if db_type == "mariadb":
+        lines = [
+            "| Nome | Tipo | Unique | Colunas | Distinct Keys | Last Analyzed | Status |",
+            "|------|------|--------|---------|---------------|---------------|--------|",
+        ]
+    else:
+        lines = [
+            "| Nome | Tipo | Unique | Colunas | Distinct Keys | Clustering Factor | BLevel | Last Analyzed | Status |",
+            "|------|------|--------|---------|---------------|-------------------|--------|---------------|--------|",
+        ]
 
     for idx in idxs:
         name = idx.get("index_name", "?")
@@ -2099,20 +2165,25 @@ def _format_indexes(idxs: list[dict[str, Any]]) -> str:
 
         dk = idx.get("distinct_keys", "?")
 
-        cf = idx.get("clustering_factor", "?")
-
-        blevel = idx.get("blevel", "?")
-
         analyzed = idx.get("last_analyzed", "?")
 
         status = idx.get("status", "?")
 
-        # blevel > 3 é red flag
+        if db_type == "mariadb":
+            lines.append(f"| {name} | {itype} | {uniq} | {cols} | {dk} | {analyzed} | {status} |")
+        else:
+            cf = idx.get("clustering_factor", "?")
 
-        bl_str = f"{blevel} ⚠️" if isinstance(blevel, int | float) and blevel > 3 else str(blevel)
-        lines.append(
-            f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
-        )
+            blevel = idx.get("blevel", "?")
+
+            # blevel > 3 é red flag
+
+            bl_str = (
+                f"{blevel} ⚠️" if isinstance(blevel, int | float) and blevel > 3 else str(blevel)
+            )
+            lines.append(
+                f"| {name} | {itype} | {uniq} | {cols} | {dk} | {cf} | {bl_str} | {analyzed} | {status} |"
+            )
 
     return "\n".join(lines)
 
@@ -2213,28 +2284,42 @@ def _format_partitions(parts: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _format_runtime_stats(stats: dict[str, Any]) -> str:
-    """Formata métricas de execução de V$SQL com warnings de saúde."""
+def _format_runtime_stats(stats: dict[str, Any], db_type: str = "oracle") -> str:
+    """Formata métricas de execução com warnings de saúde.
+
+    Oracle: V$SQL mapping. MariaDB: performance_schema mapping.
+    """
 
     lines = []
 
-    mapping = [
-        ("sql_id", "SQL ID"),
-        ("child_number", "Child Number"),
-        ("plan_hash_value", "Plan Hash Value"),
-        ("executions", "Executions"),
-        ("avg_elapsed_ms", "Avg Elapsed (ms)"),
-        ("avg_cpu_ms", "Avg CPU (ms)"),
-        ("avg_buffer_gets", "Avg Buffer Gets"),
-        ("avg_rows_per_exec", "Avg Rows/Exec"),
-        ("disk_reads", "Disk Reads"),
-        ("rows_processed", "Rows Processed"),
-        ("sorts", "Sorts"),
-        ("parse_calls", "Parse Calls"),
-        ("loads", "Loads (hard parses)"),
-        ("invalidations", "Invalidations"),
-        ("version_count", "Version Count (children)"),
-    ]
+    if db_type == "mariadb":
+        mapping = [
+            ("sql_id", "Digest"),
+            ("executions", "Executions"),
+            ("avg_elapsed_ms", "Avg Elapsed (ms)"),
+            ("avg_rows_per_exec", "Avg Rows/Exec"),
+            ("rows_processed", "Rows Sent"),
+            ("disk_reads", "Sort Merge Passes"),
+            ("sorts", "Sort Rows"),
+        ]
+    else:
+        mapping = [
+            ("sql_id", "SQL ID"),
+            ("child_number", "Child Number"),
+            ("plan_hash_value", "Plan Hash Value"),
+            ("executions", "Executions"),
+            ("avg_elapsed_ms", "Avg Elapsed (ms)"),
+            ("avg_cpu_ms", "Avg CPU (ms)"),
+            ("avg_buffer_gets", "Avg Buffer Gets"),
+            ("avg_rows_per_exec", "Avg Rows/Exec"),
+            ("disk_reads", "Disk Reads"),
+            ("rows_processed", "Rows Processed"),
+            ("sorts", "Sorts"),
+            ("parse_calls", "Parse Calls"),
+            ("loads", "Loads (hard parses)"),
+            ("invalidations", "Invalidations"),
+            ("version_count", "Version Count (children)"),
+        ]
 
     for key, label in mapping:
         val = stats.get(key)
@@ -2246,40 +2331,43 @@ def _format_runtime_stats(stats: dict[str, Any]) -> str:
 
     warnings = []
 
-    loads = stats.get("loads", 0) or 0
+    # Oracle-specific warnings (hard parses, invalidations, version count, cursor reuse)
+    if db_type != "mariadb":
+        loads = stats.get("loads", 0) or 0
 
-    if loads > 1:
-        warnings.append(
-            f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente"
-        )
-
-    invalidations = stats.get("invalidations", 0) or 0
-
-    if invalidations > 0:
-        warnings.append(
-            f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas"
-        )
-
-    version_count = stats.get("version_count", 0) or 0
-
-    if version_count > 5:
-        warnings.append(
-            f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch"
-        )
-
-    parse_calls = stats.get("parse_calls", 0) or 0
-
-    executions = stats.get("executions", 0) or 0
-
-    if executions > 0 and parse_calls >= executions:
-        ratio = parse_calls / executions
-
-        if ratio >= 1.0:
+        if loads > 1:
             warnings.append(
-                f"⚠️ Parse calls ({parse_calls}) ≈ executions ({executions}) — "
-                "cursor não está sendo reutilizado entre execuções (soft parse a cada call)"
+                f"⚠️ {loads} hard parses — possível falta de bind variables ou invalidação frequente"
             )
 
+        invalidations = stats.get("invalidations", 0) or 0
+
+        if invalidations > 0:
+            warnings.append(
+                f"⚠️ {invalidations} invalidações — DDL recente ou stats regathered nas tabelas"
+            )
+
+        version_count = stats.get("version_count", 0) or 0
+
+        if version_count > 5:
+            warnings.append(
+                f"⚠️ {version_count} child cursors — possível instabilidade de plano ou bind mismatch"
+            )
+
+        parse_calls = stats.get("parse_calls", 0) or 0
+
+        executions = stats.get("executions", 0) or 0
+
+        if executions > 0 and parse_calls >= executions:
+            ratio = parse_calls / executions
+
+            if ratio >= 1.0:
+                warnings.append(
+                    f"⚠️ Parse calls ({parse_calls}) ≈ executions ({executions}) — "
+                    "cursor não está sendo reutilizado entre execuções (soft parse a cada call)"
+                )
+
+    # CPU-bound / IO-bound analysis (funciona para ambos)
     avg_elapsed = stats.get("avg_elapsed_ms", 0) or 0
 
     avg_cpu = stats.get("avg_cpu_ms", 0) or 0

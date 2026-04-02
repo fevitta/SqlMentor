@@ -28,6 +28,7 @@ connections.yaml
 
 # Worktrees e estado de workflow
 .worktrees/
+.worktrees-new/
 worktrees/
 .claude/tasks.json
 

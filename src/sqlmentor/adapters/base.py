@@ -18,16 +18,18 @@ class QueryBuilder(ABC):
     """Gera queries parametrizadas para um banco específico.
 
     Cada método retorna tuple[str, dict] (sql, params) pronta para cursor.execute(),
-    exceto explain_plan que retorna list[tuple[str, dict]] (múltiplos steps).
+    exceto explain_plan que retorna list[tuple[str, dict | None]] (múltiplos steps;
+    params pode ser None para evitar substituicao de % pelo driver, ex: MariaDB).
     """
 
     # ── Plano de execução ───────────────────────────────────────────
 
     @abstractmethod
-    def explain_plan(self, sql_text: str) -> list[tuple[str, dict]]:
+    def explain_plan(self, sql_text: str) -> list[tuple[str, dict | None]]:
         """Gera EXPLAIN PLAN e recupera o resultado.
 
         Retorna lista de steps (Oracle=3, PG=1, etc.).
+        params pode ser None para evitar substituicao de % pelo driver (MariaDB).
         """
 
     @abstractmethod
@@ -167,6 +169,15 @@ class DatabaseAdapter(ABC):
     @abstractmethod
     def db_type(self) -> str:
         """Identificador do tipo de banco (ex: 'oracle', 'postgresql', 'mariadb')."""
+
+    @property
+    def fold_case(self) -> bool:
+        """Se True, identifiers são normalizados para uppercase (Oracle).
+
+        Se False, preserva case original (MariaDB, PostgreSQL).
+        Usado pelo collector e query builder para decidir se aplica .upper().
+        """
+        return True
 
     @property
     @abstractmethod

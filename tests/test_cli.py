@@ -1,5 +1,6 @@
 """Testes para o CLI (Typer) do sqlmentor."""
 
+import re
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
@@ -9,6 +10,12 @@ from sqlmentor.collector import CollectedContext, TableContext
 from sqlmentor.parser import ParsedSQL
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
@@ -97,7 +104,7 @@ def _analyze_patches(
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
-        lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
     )
 
     mock_conn = MagicMock()
@@ -162,7 +169,7 @@ def _inspect_patches(
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
-        lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
     )
 
     # Build mock cursor with configurable behavior per execute call
@@ -370,6 +377,7 @@ class TestConfigCLI:
             [
                 "config",
                 "add",
+                "oracle",
                 "--name",
                 "test",
                 "--host",
@@ -405,7 +413,7 @@ class TestConfigListWithConnections:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -427,7 +435,7 @@ class TestConfigListWithConnections:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -504,6 +512,7 @@ class TestConfigAdd:
         cmd = [
             "config",
             "add",
+            "oracle",
             "--name",
             "t",
             "--host",
@@ -548,47 +557,15 @@ class TestConfigAdd:
         assert result.exit_code == 0  # connection saved, validation warning
         assert "validação falhou" in result.output.lower()
 
-    def test_db_type_default_oracle(self, monkeypatch):
-        """Sem --db-type → add_connection recebe db_type='oracle'."""
-        captured_kwargs = {}
-
-        def _capture(**kw):
-            captured_kwargs.update(kw)
-
-        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
-        monkeypatch.setattr(
-            "sqlmentor.connector.diagnose_connection",
-            lambda name: {
-                "version": "Oracle 19c",
-                "schema": "HR",
-                "mode": "thin",
-                "major_version": "19",
-            },
-        )
-        result = runner.invoke(
-            app,
-            [
-                "config",
-                "add",
-                "--name",
-                "t",
-                "--host",
-                "h",
-                "--port",
-                "1521",
-                "--service",
-                "s",
-                "--user",
-                "u",
-                "--password",
-                "p",
-            ],
-        )
+    def test_add_shows_subcommands(self):
+        """config add sem subcomando → mostra oracle e mariadb."""
+        result = runner.invoke(app, ["config", "add", "--help"])
         assert result.exit_code == 0
-        assert captured_kwargs.get("db_type") == "oracle"
+        assert "oracle" in result.output
+        assert "mariadb" in result.output
 
-    def test_db_type_explicit(self, monkeypatch):
-        """--db-type oracle → add_connection recebe db_type='oracle'."""
+    def test_db_type_explicit_oracle(self, monkeypatch):
+        """'config add oracle' → add_connection recebe db_type='oracle'."""
         captured_kwargs = {}
 
         def _capture(**kw):
@@ -609,36 +586,7 @@ class TestConfigAdd:
             [
                 "config",
                 "add",
-                "--name",
-                "t",
-                "--host",
-                "h",
-                "--port",
-                "1521",
-                "--service",
-                "s",
-                "--user",
-                "u",
-                "--password",
-                "p",
-                "--db-type",
                 "oracle",
-            ],
-        )
-        assert result.exit_code == 0
-        assert captured_kwargs.get("db_type") == "oracle"
-
-    def test_db_type_invalid_raises(self, monkeypatch):
-        """--db-type redis → add_connection raises ValueError → exit 1."""
-        monkeypatch.setattr(
-            "sqlmentor.connector.add_connection",
-            MagicMock(side_effect=ValueError("Tipo de banco não suportado: 'redis'")),
-        )
-        result = runner.invoke(
-            app,
-            [
-                "config",
-                "add",
                 "--name",
                 "t",
                 "--host",
@@ -651,12 +599,99 @@ class TestConfigAdd:
                 "u",
                 "--password",
                 "p",
-                "--db-type",
-                "redis",
             ],
         )
-        assert result.exit_code == 1
-        assert "não suportado" in result.output.lower()
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "oracle"
+
+    def test_db_type_mariadb(self, monkeypatch):
+        """'config add mariadb' → add_connection recebe db_type='mariadb', port 3306."""
+        captured_kwargs = {}
+
+        def _capture(**kw):
+            captured_kwargs.update(kw)
+
+        monkeypatch.setattr("sqlmentor.connector.add_connection", _capture)
+        monkeypatch.setattr(
+            "sqlmentor.connector.diagnose_connection",
+            lambda name: {
+                "version": "10.6.20-MariaDB",
+                "schema": "mydb",
+                "performance_schema": "1",
+            },
+        )
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "mariadb",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--database",
+                "mydb",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 0
+        assert captured_kwargs.get("db_type") == "mariadb"
+        assert captured_kwargs.get("database") == "mydb"
+        assert captured_kwargs.get("port") == 3306
+        assert "performance_schema: ON" in result.output
+
+    def test_mariadb_requires_database(self):
+        """'config add mariadb' sem --database → exit 2 (Typer missing required)."""
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "mariadb",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 2
+        plain = _strip_ansi(result.output)
+        assert "--database" in plain
+
+    def test_oracle_requires_service(self):
+        """'config add oracle' sem --service → exit 2 (Typer missing required)."""
+        result = runner.invoke(
+            app,
+            [
+                "config",
+                "add",
+                "oracle",
+                "--name",
+                "t",
+                "--host",
+                "h",
+                "--user",
+                "u",
+                "--password",
+                "p",
+            ],
+        )
+        assert result.exit_code == 2
+        plain = _strip_ansi(result.output)
+        assert "--service" in plain
+
+    def test_invalid_subcommand(self):
+        """'config add redis' → exit 2 (subcomando inexistente)."""
+        result = runner.invoke(app, ["config", "add", "redis"])
+        assert result.exit_code == 2
 
 
 class TestConfigListShowsType:
@@ -672,7 +707,7 @@ class TestConfigListShowsType:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -1158,13 +1193,9 @@ class TestValidateTimeout:
         with pytest.raises(typer.Exit):
             _validate_timeout(-5)
 
-    def test_too_large_timeout_exits(self):
-        """Timeout 9999 → typer.Exit(1)."""
-        import pytest
-        import typer
-
-        with pytest.raises(typer.Exit):
-            _validate_timeout(9999)
+    def test_large_timeout_passes(self):
+        """Timeout 9999 → ok (sem limite superior)."""
+        _validate_timeout(9999)
 
     def test_valid_timeout_passes(self):
         """Timeout 300 → no exception."""
@@ -1178,9 +1209,9 @@ class TestValidateTimeout:
         """Timeout 1 → ok."""
         _validate_timeout(1)
 
-    def test_boundary_3600_passes(self):
-        """Timeout 3600 → ok."""
-        _validate_timeout(3600)
+    def test_very_large_timeout_passes(self):
+        """Timeout 86400 (24h) → ok."""
+        _validate_timeout(86400)
 
     def test_analyze_rejects_invalid_timeout(self, monkeypatch, tmp_path):
         """analyze --timeout -5 → exit 1."""
@@ -1200,8 +1231,8 @@ class TestValidateTimeout:
         )
         assert result.exit_code == 1
 
-    def test_inspect_rejects_invalid_timeout(self, monkeypatch, tmp_path):
-        """inspect --timeout 9999 → exit 1."""
+    def test_inspect_rejects_negative_timeout(self, monkeypatch, tmp_path):
+        """inspect --timeout -1 → exit 1."""
         out_file, _mocks = _inspect_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app,
@@ -1211,7 +1242,7 @@ class TestValidateTimeout:
                 "--conn",
                 "test",
                 "--timeout",
-                "9999",
+                "-1",
                 "--output",
                 str(out_file),
             ],
@@ -1337,7 +1368,7 @@ class TestInspectConnectionError:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
         )
         monkeypatch.setattr(
             "sqlmentor.connector.connect_with_adapter",
@@ -1358,7 +1389,7 @@ class TestInspectSqlFetchError:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
         )
 
         mock_cursor = MagicMock()
