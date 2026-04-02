@@ -619,12 +619,9 @@ class TestMCPValidateTimeout:
         data = json.loads(result)
         assert "error" in data
 
-    def test_too_large_timeout_returns_error(self):
-        """timeout 5000 → JSON error."""
-        result = _validate_timeout_mcp(5000)
-        assert result is not None
-        data = json.loads(result)
-        assert "error" in data
+    def test_large_timeout_passes(self):
+        """timeout 5000 → None (sem limite superior)."""
+        assert _validate_timeout_mcp(5000) is None
 
     def test_zero_timeout_passes(self):
         """timeout 0 (default) → None."""
@@ -639,9 +636,9 @@ class TestMCPValidateTimeout:
         result = json.loads(analyze_sql("SELECT 1", timeout=-1))
         assert "error" in result
 
-    def test_inspect_sql_rejects_invalid_timeout(self, tmp_connections_file):
-        """inspect_sql with timeout=5000 → JSON error."""
-        result = json.loads(inspect_sql("abc123def456", timeout=5000))
+    def test_inspect_sql_rejects_negative_timeout(self, tmp_connections_file):
+        """inspect_sql with timeout=-5 → JSON error."""
+        result = json.loads(inspect_sql("abc123def456", timeout=-5))
         assert "error" in result
 
 

@@ -902,7 +902,7 @@ class MariaDBAdapter(DatabaseAdapter):
 
     def connect(self, config: dict[str, Any], timeout: int | None = None) -> pymysql.Connection:
         """Abre conexão MariaDB via PyMySQL."""
-        effective_timeout = timeout if timeout is not None else config.get("timeout", 180)
+        effective_timeout = timeout if timeout is not None else config.get("timeout", 600)
 
         conn = pymysql.connect(
             host=config["host"],

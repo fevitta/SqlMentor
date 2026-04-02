@@ -751,7 +751,7 @@ class OracleAdapter(DatabaseAdapter):
         """
         dsn = oracledb.makedsn(config["host"], config["port"], service_name=config["service"])
 
-        effective_timeout = timeout if timeout is not None else config.get("timeout", 180)
+        effective_timeout = timeout if timeout is not None else config.get("timeout", 600)
 
         try:
             conn = oracledb.connect(

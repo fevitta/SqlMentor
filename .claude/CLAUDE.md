@@ -1,15 +1,15 @@
 # SqlMentor
 
-CLI + MCP Server Python para Oracle 11g+ e MariaDB 10.6+. Extrai metadata de SQL (plano, DDLs, índices, stats, constraints, optimizer params) e gera relatórios Markdown/JSON otimizados para LLMs. Licença MIT.
+CLI Python para Oracle 11g+ e MariaDB 10.6+ **[BETA]**. Extrai metadata de SQL (plano, DDLs, índices, stats, constraints, optimizer params) e gera relatórios Markdown/JSON otimizados para LLMs. Licença MIT.
 
 Público-alvo: DBAs e desenvolvedores que querem contexto estruturado para tuning assistido por IA.
 
 ## Interfaces
 
-- **CLI** (`sqlmentor`): uso direto no terminal, relatórios salvos em `reports/`. Comandos: `analyze`, `inspect` (Oracle only), `get-sql`, `parse`, `config`, `doctor`
-- **MCP Server** (`sqlmentor-mcp`): integração com IDEs via Model Context Protocol (stdio). Tools: `analyze_sql`, `inspect_sql` (Oracle only), `get_sql_text`, `parse_sql`, `list_connections`, `test_connection`, `get_status`
+- **CLI** (`sqlmentor`): interface principal, relatórios salvos em `reports/`. Comandos: `analyze`, `inspect` (Oracle only), `get-sql`, `parse`, `config`, `doctor`
+- **Claude Code Agent** (`.claude/agents/sqlmentor.md`): agente DBA Oracle/MariaDB sênior que opera o CLI e produz análises de tuning
+- **MCP Server** (`sqlmentor-mcp`): alternativo, integração com IDEs via Model Context Protocol (stdio)
 - **Kiro Power** (`powers/sqlmentor/`): MCP + metodologia de análise para times que usam Kiro
-- **Claude Code Agent** (`.claude/agents/sqlmentor.md`): agente DBA Oracle sênior que opera o CLI e produz análises de tuning
 
 ## Estrutura
 
@@ -20,7 +20,7 @@ sqlmentor/
 ├── pyproject.toml                # Build, deps, entry points
 ├── .claude/
 │   ├── settings.json             # MCP server config + permissões
-│   ├── agents/sqlmentor.md       # Agente DBA Oracle sênior
+│   ├── agents/sqlmentor.md       # Agente DBA Oracle/MariaDB sênior
 │   └── rules/
 │       ├── architecture.md       # Pipeline compressão R1-R12, contratos de dados
 │       └── sync-checklist.md     # Checklists para alterações
@@ -91,7 +91,7 @@ O agente Claude Code descobre flags via `--help` — não requer atualização d
 ## Cache e Timeout
 
 - **Cache LRU**: TTL de 1 hora, máximo 500 entradas. `--no-cache` limpa tudo.
-- **Timeout de execução**: quando `--execute` excede o `call_timeout`, o collector detecta `DPY-4011` e orienta a usar `sqlmentor inspect <sql_id>` (Oracle) ou `sqlmentor get-sql <digest>` (MariaDB). Fallback automático para plano estimado.
+- **Timeout de execução**: default 600s (10 min), sem limite superior. Quando `--execute` excede o `call_timeout`, o collector detecta `DPY-4011` e orienta a usar `sqlmentor inspect <sql_id>` (Oracle) ou `sqlmentor get-sql <digest>` (MariaDB). Fallback automático para plano estimado.
 
 ## Detalhes Técnicos
 

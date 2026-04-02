@@ -52,7 +52,7 @@ class TestConnectionCRUD:
     def test_add_default_timeout(self, tmp_connections_file):
         add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
         cfg = get_connection_config("dev")
-        assert cfg["timeout"] == 180
+        assert cfg["timeout"] == 600
 
     def test_update_existing(self, tmp_connections_file):
         add_connection("dev", "localhost", 1521, "ORCL", "scott", "tiger")
@@ -171,7 +171,7 @@ class TestBackwardCompat:
                 "user": "scott",
                 "password": "tiger",
                 "schema": "SCOTT",
-                "timeout": 180,
+                "timeout": 600,
             }
         }
         with open(tmp_connections_file, "w") as f:
@@ -198,7 +198,7 @@ class TestBackwardCompat:
                 "user": "scott",
                 "password": "tiger",
                 "schema": "SCOTT",
-                "timeout": 180,
+                "timeout": 600,
             }
         }
         with open(tmp_connections_file, "w") as f:
@@ -424,7 +424,7 @@ class TestConnect:
                 "user": "admin",
                 "password": "secret",
                 "schema": "PUBLIC",
-                "timeout": 180,
+                "timeout": 600,
             }
         }
         with open(tmp_connections_file, "w") as f:
@@ -535,7 +535,7 @@ class TestTestConnection:
                 "user": "admin",
                 "password": "secret",
                 "schema": "PUBLIC",
-                "timeout": 180,
+                "timeout": 600,
             }
         }
         with open(tmp_connections_file, "w") as f:
@@ -633,7 +633,7 @@ class TestDiagnoseConnection:
                 "user": "admin",
                 "password": "secret",
                 "schema": "PUBLIC",
-                "timeout": 180,
+                "timeout": 600,
             }
         }
         with open(tmp_connections_file, "w") as f:

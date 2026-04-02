@@ -82,10 +82,10 @@ def _configure_debug(debug: bool) -> None:
 
 
 def _validate_timeout(timeout: int | None) -> None:
-    """Valida timeout explícito: deve estar entre 1 e 3600 segundos."""
-    if timeout is not None and (timeout < 1 or timeout > 3600):
+    """Valida timeout explícito: deve ser >= 1 segundo."""
+    if timeout is not None and timeout < 1:
         console.print(
-            f"[red]Erro:[/red] Timeout deve estar entre 1 e 3600 segundos (recebido: {timeout})."
+            f"[red]Erro:[/red] Timeout deve ser >= 1 segundo (recebido: {timeout})."
         )
         raise typer.Exit(1)
 
@@ -187,7 +187,7 @@ def analyze(
         None,
         "--timeout",
         "-t",
-        help="Timeout em segundos (sobrescreve o do profile, default: 180).",
+        help="Timeout em segundos (sobrescreve o do profile, default: 600).",
     ),
     normalized: bool = typer.Option(
         False,
@@ -917,7 +917,7 @@ def config_add_oracle(
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
     password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
     schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
-    timeout: int = typer.Option(180, "--timeout", "-t", help="Timeout em segundos (default: 180)."),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos (default: 600)."),
 ) -> None:
     """Adiciona um profile Oracle.
 
@@ -954,7 +954,7 @@ def config_add_mariadb(
     user: str = typer.Option(..., "--user", "-u", help="Usuário."),
     password: str = typer.Option(..., "--password", prompt=True, hide_input=True, help="Senha."),
     schema_name: str = typer.Option(None, "--schema", help="Schema padrão (default: user)."),
-    timeout: int = typer.Option(180, "--timeout", "-t", help="Timeout em segundos (default: 180)."),
+    timeout: int = typer.Option(600, "--timeout", "-t", help="Timeout em segundos (default: 600)."),
 ) -> None:
     """Adiciona um profile MariaDB.
 
@@ -1020,7 +1020,7 @@ def config_list() -> None:
             svc_or_db,
             cfg.get("user", "?"),
             cfg.get("schema", "?"),
-            f"{cfg.get('timeout', 180)}s",
+            f"{cfg.get('timeout', 600)}s",
             is_default,
         )
 

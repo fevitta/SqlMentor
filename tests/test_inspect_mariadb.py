@@ -61,7 +61,7 @@ def _inspect_oracle_patches(monkeypatch, tmp_path):
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
-        lambda name: {"schema": "MYDB", "user": "root", "timeout": 180},
+        lambda name: {"schema": "MYDB", "user": "root", "timeout": 600},
     )
 
     mock_cursor = MagicMock()
@@ -117,7 +117,7 @@ class TestInspectMariaDBBlocked:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 600},
         )
 
         result = runner.invoke(app, ["inspect", "abc123", "--conn", "test"])
@@ -129,7 +129,7 @@ class TestInspectMariaDBBlocked:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 600},
         )
 
         result = runner.invoke(app, ["inspect", "abc123", "--conn", "test"])
@@ -141,7 +141,7 @@ class TestInspectMariaDBBlocked:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 600},
         )
         mock_connect = MagicMock()
         monkeypatch.setattr("sqlmentor.connector.connect_with_adapter", mock_connect)
@@ -156,7 +156,7 @@ class TestInspectMariaDBBlocked:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"type": "mariadb", "user": "root", "timeout": 180},
+            lambda name: {"type": "mariadb", "user": "root", "timeout": 600},
         )
         mock_connect = MagicMock()
         monkeypatch.setattr("sqlmentor.connector.connect_with_adapter", mock_connect)

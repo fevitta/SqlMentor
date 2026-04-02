@@ -22,10 +22,10 @@ mcp = FastMCP(
 
 
 def _validate_timeout_mcp(timeout: int) -> str | None:
-    """Valida timeout MCP: deve ser 0 (default) ou entre 1 e 3600."""
-    if timeout != 0 and (timeout < 1 or timeout > 3600):
+    """Valida timeout MCP: deve ser 0 (default do profile) ou >= 1."""
+    if timeout != 0 and timeout < 1:
         return json.dumps(
-            {"error": f"Timeout inválido: {timeout}. Deve ser 0 (default) ou entre 1 e 3600."}
+            {"error": f"Timeout inválido: {timeout}. Deve ser 0 (default do profile) ou >= 1."}
         )
     return None
 
@@ -61,7 +61,7 @@ def list_connections() -> str:
                 "service": cfg.get("service", "?"),
                 "user": cfg.get("user", "?"),
                 "schema": cfg.get("schema", cfg.get("user", "?")),
-                "timeout": cfg.get("timeout", 180),
+                "timeout": cfg.get("timeout", 600),
                 "default": name == default_name,
             }
         )
@@ -162,7 +162,7 @@ def analyze_sql(
         execute: Se True, executa a query real e coleta plano com ALLSTATS LAST + métricas de runtime. Requer binds se o SQL tiver bind variables.
         binds: Bind variables no formato "nome=valor,nome2=valor2". Necessário com execute=True se o SQL usa :param.
         output_format: "markdown" (padrão, otimizado pra LLM) ou "json" (pra integração).
-        timeout: Timeout em segundos para operações no banco. 0 = usa o default do profile (180s).
+        timeout: Timeout em segundos para operações no banco. 0 = usa o default do profile (600s).
         normalized: Se True, trata o SQL como normalizado (Datadog, OEM, etc.). Auto-detectado se omitido. Incompatível com execute=True.
         denorm_mode: Estratégia de desnormalização: "literal" (default, '?' → '1') ou "bind" ('?' → :dn1, :dn2...). Bind gera plano com seletividade padrão do otimizador.
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
@@ -321,7 +321,7 @@ def inspect_sql(
         expand_views: Se True, coleta DDL e colunas de views.
         expand_functions: Se True, coleta DDL de funções PL/SQL.
         output_format: "markdown" (padrão) ou "json".
-        timeout: Timeout em segundos. 0 = usa default do profile (180s).
+        timeout: Timeout em segundos. 0 = usa default do profile (600s).
         verbosity: Nível de compressão do plano: "full" (sem compressão), "compact" (default, todas as podas), "minimal" (só hotspots+stats).
         no_cache: Se True, ignora cache e força re-coleta de metadata. Útil quando tabelas/índices foram alterados.
         show_sql: Se True, inclui texto SQL completo no relatório.
@@ -462,7 +462,7 @@ def get_sql_text(statement_id: str, conn: str = "", timeout: int = 0) -> str:
     Args:
         statement_id: Identificador do statement (sql_id Oracle, DIGEST MariaDB).
         conn: Nome do profile de conexão. Se omitido, usa a conexão padrão.
-        timeout: Timeout em segundos. 0 = usa default do profile (180s).
+        timeout: Timeout em segundos. 0 = usa default do profile (600s).
     """
     from sqlmentor.connector import connect_with_adapter, get_connection_config, resolve_connection
 

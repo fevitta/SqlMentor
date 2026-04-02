@@ -97,7 +97,7 @@ def _analyze_patches(
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
-        lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
     )
 
     mock_conn = MagicMock()
@@ -162,7 +162,7 @@ def _inspect_patches(
     monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
     monkeypatch.setattr(
         "sqlmentor.connector.get_connection_config",
-        lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+        lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
     )
 
     # Build mock cursor with configurable behavior per execute call
@@ -406,7 +406,7 @@ class TestConfigListWithConnections:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -428,7 +428,7 @@ class TestConfigListWithConnections:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -698,7 +698,7 @@ class TestConfigListShowsType:
                     "service": "ORCL",
                     "user": "app",
                     "schema": "APP",
-                    "timeout": 180,
+                    "timeout": 600,
                 }
             },
         )
@@ -1184,13 +1184,9 @@ class TestValidateTimeout:
         with pytest.raises(typer.Exit):
             _validate_timeout(-5)
 
-    def test_too_large_timeout_exits(self):
-        """Timeout 9999 → typer.Exit(1)."""
-        import pytest
-        import typer
-
-        with pytest.raises(typer.Exit):
-            _validate_timeout(9999)
+    def test_large_timeout_passes(self):
+        """Timeout 9999 → ok (sem limite superior)."""
+        _validate_timeout(9999)
 
     def test_valid_timeout_passes(self):
         """Timeout 300 → no exception."""
@@ -1204,9 +1200,9 @@ class TestValidateTimeout:
         """Timeout 1 → ok."""
         _validate_timeout(1)
 
-    def test_boundary_3600_passes(self):
-        """Timeout 3600 → ok."""
-        _validate_timeout(3600)
+    def test_very_large_timeout_passes(self):
+        """Timeout 86400 (24h) → ok."""
+        _validate_timeout(86400)
 
     def test_analyze_rejects_invalid_timeout(self, monkeypatch, tmp_path):
         """analyze --timeout -5 → exit 1."""
@@ -1226,8 +1222,8 @@ class TestValidateTimeout:
         )
         assert result.exit_code == 1
 
-    def test_inspect_rejects_invalid_timeout(self, monkeypatch, tmp_path):
-        """inspect --timeout 9999 → exit 1."""
+    def test_inspect_rejects_negative_timeout(self, monkeypatch, tmp_path):
+        """inspect --timeout -1 → exit 1."""
         out_file, _mocks = _inspect_patches(monkeypatch, tmp_path)
         result = runner.invoke(
             app,
@@ -1237,7 +1233,7 @@ class TestValidateTimeout:
                 "--conn",
                 "test",
                 "--timeout",
-                "9999",
+                "-1",
                 "--output",
                 str(out_file),
             ],
@@ -1363,7 +1359,7 @@ class TestInspectConnectionError:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
         )
         monkeypatch.setattr(
             "sqlmentor.connector.connect_with_adapter",
@@ -1384,7 +1380,7 @@ class TestInspectSqlFetchError:
         monkeypatch.setattr("sqlmentor.connector.resolve_connection", lambda name: name or "test")
         monkeypatch.setattr(
             "sqlmentor.connector.get_connection_config",
-            lambda name: {"schema": "HR", "user": "hr", "timeout": 180},
+            lambda name: {"schema": "HR", "user": "hr", "timeout": 600},
         )
 
         mock_cursor = MagicMock()

@@ -132,7 +132,7 @@ def add_connection(
         # MariaDB: schema vazio — o banco ativo (database) ja define o contexto.
         # Oracle: default schema = username uppercase.
         "schema": schema or ((user or "").upper() if validated_type != "mariadb" else ""),
-        "timeout": timeout if timeout is not None else 180,
+        "timeout": timeout if timeout is not None else 600,
     }
     if validated_type == "mariadb":
         cfg["database"] = database
