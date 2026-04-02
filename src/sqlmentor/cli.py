@@ -84,9 +84,7 @@ def _configure_debug(debug: bool) -> None:
 def _validate_timeout(timeout: int | None) -> None:
     """Valida timeout explícito: deve ser >= 1 segundo."""
     if timeout is not None and timeout < 1:
-        console.print(
-            f"[red]Erro:[/red] Timeout deve ser >= 1 segundo (recebido: {timeout})."
-        )
+        console.print(f"[red]Erro:[/red] Timeout deve ser >= 1 segundo (recebido: {timeout}).")
         raise typer.Exit(1)
 
 
