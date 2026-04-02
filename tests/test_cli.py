@@ -1,5 +1,6 @@
 """Testes para o CLI (Typer) do sqlmentor."""
 
+import re
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
@@ -9,6 +10,12 @@ from sqlmentor.collector import CollectedContext, TableContext
 from sqlmentor.parser import ParsedSQL
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
@@ -656,7 +663,8 @@ class TestConfigAdd:
             ],
         )
         assert result.exit_code == 2
-        assert "--database" in result.output
+        plain = _strip_ansi(result.output)
+        assert "--database" in plain
 
     def test_oracle_requires_service(self):
         """'config add oracle' sem --service → exit 2 (Typer missing required)."""
@@ -677,7 +685,8 @@ class TestConfigAdd:
             ],
         )
         assert result.exit_code == 2
-        assert "--service" in result.output
+        plain = _strip_ansi(result.output)
+        assert "--service" in plain
 
     def test_invalid_subcommand(self):
         """'config add redis' → exit 2 (subcomando inexistente)."""
